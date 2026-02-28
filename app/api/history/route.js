@@ -11,7 +11,6 @@ function resolveMarket(code) {
     const clean = code.replace(/^(sh|sz)/i, '');
     if (code.toLowerCase().startsWith('sh')) return { market: '1', code: clean };
     if (code.toLowerCase().startsWith('sz')) return { market: '0', code: clean };
-    // Default identification
     const prefix = (clean.startsWith('6') || clean.startsWith('5')) ? '1' : '0';
     return { market: prefix, code: clean };
 }
@@ -39,7 +38,6 @@ const BASE_HEADERS = {
 async function fetchHistoryEastMoney(code, days) {
     const { market, code: cleanCode } = resolveMarket(code);
     try {
-        // 东方财富 K 线 API (UTF-8 JSON)
         const url = `https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=${market}.${cleanCode}&fields1=f1,f2&fields2=f51,f53&klt=101&fqt=1&beg=0&end=20500101`;
         const res = await fetch(url, { headers: BASE_HEADERS });
         if (!res.ok) return null;
@@ -55,24 +53,27 @@ async function fetchHistoryEastMoney(code, days) {
             .filter(i => !isNaN(i.value))
             .slice(-days);
     } catch (e) {
-        console.error(`[History] EastMoney failed for ${code}:`, e.message);
+        console.error(`[History] EastMoney kline failed for ${code}:`, e.message);
         return null;
     }
 }
 
 async function fetchFundHistoryEastMoney(code, days) {
-    // 场内基金使用 K 线 API，场外基金使用 lsjz API
+    // 场内基金优先 K 线
     const isListed = code.startsWith('5') || code.startsWith('15') || code.startsWith('16') || code.startsWith('58');
     if (isListed) {
         const d = await fetchHistoryEastMoney(code, days);
         if (d) return d;
     }
 
+    // 场外基金：东财 lsjz API
     try {
         const url = `https://api.fund.eastmoney.com/f10/lsjz?fundCode=${code}&pageIndex=1&pageSize=${days}&_=${Date.now()}`;
         const res = await fetch(url, { headers: { ...BASE_HEADERS, 'Referer': `https://fundf10.eastmoney.com/jjjz_${code}.html` } });
+        if (!res.ok) return null;
         const json = await res.json();
         const list = json.Data?.LSJZList || [];
+        if (list.length === 0) return null;
         return list
             .map(item => ({ date: item.FSRQ, value: parseFloat(item.DWJZ) }))
             .filter(i => !isNaN(i.value))
@@ -117,7 +118,7 @@ export async function GET(request) {
 
     await writeDoc(storageKey, { date: today, history });
     return NextResponse.json({
-        history: history,
+        history,
         summary: calcStats(history)
     });
 }

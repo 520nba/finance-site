@@ -19,56 +19,35 @@ function resolveMarket(code) {
     return { market: prefix, code: clean };
 }
 
-async function fetchNamesEastMoney(items) {
-    if (items.length === 0) return {};
-
-    // 东方财富 UList API 支持批量获取名称 (UTF-8 JSON)
-    const secids = items.map(item => {
-        const { market, code } = resolveMarket(item.code);
-        return `${market}.${code}`;
-    }).join(',');
-
+/**
+ * 获取股票名称 — 使用 stock/get (f58)
+ */
+async function fetchStockName(code) {
+    const { market, code: clean } = resolveMarket(code);
     try {
-        const url = `https://push2.eastmoney.com/api/qt/ulist/get?secids=${secids}&fields=f12,f14`;
+        const url = `https://push2.eastmoney.com/api/qt/stock/get?secid=${market}.${clean}&fields=f58`;
         const res = await fetch(url, { headers: BASE_HEADERS });
-        if (!res.ok) return {};
+        if (!res.ok) return null;
         const json = await res.json();
-        const list = json.data?.diff || [];
-        const result = {};
-
-        // 映射结果
-        list.forEach(node => {
-            const code = node.f12;
-            const name = node.f14;
-            // 找到原始请求中的 key
-            const matched = items.find(i => i.code.includes(code));
-            if (matched) {
-                result[`${matched.type}:${matched.code}`] = name;
-            }
-        });
-
-        // 处理场外基金 (上述 API 主要针对场内)
-        const fundsToFetch = items.filter(i => i.type === 'fund' && !result[`${i.type}:${i.code}`]);
-        if (fundsToFetch.length > 0) {
-            const fundNames = await Promise.all(fundsToFetch.map(async (f) => {
-                try {
-                    const fRes = await fetch(`https://fundgz.1234567.com.cn/js/${f.code}.js?_=${Date.now()}`, { headers: BASE_HEADERS });
-                    const text = await fRes.text();
-                    const match = text.match(/jsonpgz\((.+)\)/);
-                    if (match) return JSON.parse(match[1]).name;
-                } catch { }
-                return null;
-            }));
-            fundNames.forEach((name, i) => {
-                if (name) result[`fund:${fundsToFetch[i].code}`] = name;
-            });
-        }
-
-        return result;
+        return json.data?.f58 || null;
     } catch (e) {
-        console.error('[Names] EastMoney bulk failed:', e.message);
-        return {};
+        return null;
     }
+}
+
+/**
+ * 获取场外基金名称 — 使用天天基金 JSONP
+ */
+async function fetchFundName(code) {
+    try {
+        const url = `https://fundgz.1234567.com.cn/js/${code}.js?_=${Date.now()}`;
+        const res = await fetch(url, { headers: BASE_HEADERS });
+        if (!res.ok) return null;
+        const text = await res.text();
+        const match = text.match(/jsonpgz\((.+)\)/);
+        if (match) return JSON.parse(match[1]).name;
+    } catch (e) { }
+    return null;
 }
 
 export async function POST(request) {
@@ -89,17 +68,35 @@ export async function POST(request) {
     }
 
     if (toFetch.length > 0) {
-        const newNames = await fetchNamesEastMoney(toFetch);
+        const fetched = await Promise.all(toFetch.map(async (item) => {
+            const key = `${item.type}:${item.code}`;
+            let name = null;
+
+            if (item.type === 'fund') {
+                // 先试天天基金
+                name = await fetchFundName(item.code);
+                // 回退到 stock/get（场内 ETF）
+                if (!name) name = await fetchStockName(item.code);
+            } else {
+                // 股票：直接 stock/get
+                name = await fetchStockName(item.code);
+            }
+
+            return { key, name };
+        }));
+
         let cacheUpdated = false;
-        for (const [key, name] of Object.entries(newNames)) {
-            result[key] = name;
-            cache[key] = name;
-            cacheUpdated = true;
+        for (const { key, name } of fetched) {
+            if (name) {
+                result[key] = name;
+                cache[key] = name;
+                cacheUpdated = true;
+            }
         }
         if (cacheUpdated) await writeDoc(STORAGE_KEY, cache);
     }
 
-    // 补全兜底：如果还是没找到名称，返回原始代码
+    // 兜底：未找到名称的返回代码本身
     for (const item of items) {
         const key = `${item.type}:${item.code}`;
         if (!result[key]) result[key] = item.code;
