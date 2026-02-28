@@ -1,25 +1,10 @@
 import { NextResponse } from 'next/server';
-import fs from 'fs/promises';
-import path from 'path';
+import { readDoc, writeDoc } from '@/lib/storage';
 
-const CACHE_PATH = path.join(process.cwd(), 'data', 'history_cache.json');
+export const runtime = 'edge';
 
 function todayStr() {
     return new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' });
-}
-
-async function readCache() {
-    try {
-        const raw = await fs.readFile(CACHE_PATH, 'utf8');
-        return JSON.parse(raw);
-    } catch {
-        return {};
-    }
-}
-
-async function writeCache(cache) {
-    await fs.mkdir(path.dirname(CACHE_PATH), { recursive: true });
-    await fs.writeFile(CACHE_PATH, JSON.stringify(cache, null, 2));
 }
 
 // ── 外部数据获取（服务端直连）──────────────────────────────────────
@@ -154,8 +139,6 @@ async function fetchFundHistoryServer(code, days) {
 
 /**
  * POST /api/history/bulk
- * Body: { items: [{code, type}], days?: number }
- * Response: { "stock:600036": [...], "fund:012831": [...], ... }
  */
 export async function POST(request) {
     const { items, days = 250 } = await request.json();
@@ -164,14 +147,18 @@ export async function POST(request) {
     }
 
     const today = todayStr();
-    const cache = await readCache();
     const result = {};
     const toFetch = [];
 
-    // 分离缓存命中 vs 需要爬取
-    for (const { code, type } of items) {
+    // 并行读取缓存
+    const cacheResults = await Promise.all(items.map(async ({ code, type }) => {
         const key = `${type}:${code}`;
-        const entry = cache[key];
+        const storageKey = `hist:${type}:${code}`;
+        const entry = await readDoc(storageKey, null);
+        return { key, code, type, entry };
+    }));
+
+    for (const { key, code, type, entry } of cacheResults) {
         if (entry && entry.date === today && Array.isArray(entry.history) && entry.history.length >= days * 0.7) {
             result[key] = {
                 history: entry.history,
@@ -183,9 +170,7 @@ export async function POST(request) {
     }
 
     if (toFetch.length > 0) {
-        console.log(`[History/Bulk] Cache miss for ${toFetch.length} assets, fetching…`);
-
-        // 全量并发爬取缓存未命中的资产
+        // 并发爬取未命中的资产
         const fetched = await Promise.all(
             toFetch.map(async ({ code, type, key }) => {
                 let history = null;
@@ -202,28 +187,18 @@ export async function POST(request) {
             })
         );
 
-        // 写回缓存，汇入结果
-        let cacheUpdated = false;
-        for (const { key, history } of fetched) {
+        // 并行写回缓存并汇总结果
+        await Promise.all(fetched.map(async ({ key, history, type, code }) => {
             if (history && history.length > 0) {
                 const stats = calcStats(history);
-                cache[key] = { date: today, history };
+                const storageKey = `hist:${type}:${code}`;
+                await writeDoc(storageKey, { date: today, history });
                 result[key] = { history, summary: stats };
-                cacheUpdated = true;
             } else {
                 result[key] = { history: [], summary: { perf5d: 0, perf22d: 0, perf250d: 0 } };
             }
-        }
-
-        if (cacheUpdated) {
-            try {
-                await writeCache(cache);
-            } catch (e) {
-                console.error('[Bulk] Write cache failed:', e.message);
-            }
-        }
+        }));
     }
 
-    console.log(`[History/Bulk] Served ${items.length} items (${items.length - toFetch.length} cached, ${toFetch.length} fresh)`);
     return NextResponse.json(result);
 }

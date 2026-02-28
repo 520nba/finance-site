@@ -1,26 +1,14 @@
 import { NextResponse } from 'next/server';
-import fs from 'fs/promises';
-import path from 'path';
+import { readDoc, writeDoc } from '@/lib/storage';
 
-const CACHE_PATH = path.join(process.cwd(), 'data', 'names_cache.json');
+export const runtime = 'edge';
+
+const STORAGE_KEY = 'names_config';
 
 const BASE_HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
     'Accept': '*/*',
 };
-
-async function readCache() {
-    try {
-        return JSON.parse(await fs.readFile(CACHE_PATH, 'utf8'));
-    } catch {
-        return {};
-    }
-}
-
-async function writeCache(cache) {
-    await fs.mkdir(path.dirname(CACHE_PATH), { recursive: true });
-    await fs.writeFile(CACHE_PATH, JSON.stringify(cache, null, 2));
-}
 
 function resolveMarket(code) {
     const lower = code.toLowerCase();
@@ -91,9 +79,6 @@ async function fetchFundName(code) {
 
 /**
  * POST /api/names/bulk
- * Body: { items: [{code, type}] }
- * Response: { "600036": "招商银行", "012831": "南方中证新能源ETF联接A", ... }
- * 名称缓存永久有效（名称几乎不变），只有未命中时才重新请求
  */
 export async function POST(request) {
     const { items } = await request.json();
@@ -101,7 +86,7 @@ export async function POST(request) {
         return NextResponse.json({});
     }
 
-    const cache = await readCache();
+    const cache = await readDoc(STORAGE_KEY, {});
     const result = {};
     const stocksToFetch = [];
     const fundsToFetch = [];
@@ -148,14 +133,8 @@ export async function POST(request) {
     }
 
     if (cacheUpdated) {
-        try {
-            await writeCache(cache);
-            console.log(`[Names] Cached ${Object.keys(cache).length} names total`);
-        } catch (e) {
-            console.error('[Names] Write cache failed:', e.message);
-        }
+        await writeDoc(STORAGE_KEY, cache);
     }
 
-    console.log(`[Names] Served ${items.length} items (${items.length - stocksToFetch.length - fundsToFetch.length} cached)`);
     return NextResponse.json(result);
 }

@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
 
+export const runtime = 'edge';
+
 // 按域名注入合适的 Referer
 function buildHeaders(urlObj) {
     const headers = {
@@ -8,7 +10,6 @@ function buildHeaders(urlObj) {
     };
     const host = urlObj.hostname;
     if (host.includes('push2his.eastmoney.com')) {
-        // secid 格式: "1.600000" 或 "0.000001"，转换为 sh600000 / sz000001
         const secid = urlObj.searchParams.get('secid') || '';
         const [market, code] = secid.split('.');
         const prefix = market === '1' ? 'sh' : 'sz';
@@ -47,22 +48,20 @@ export async function GET(request) {
         const headers = buildHeaders(urlObj);
         const needsGbk = urlObj.hostname.includes('gtimg.cn') || urlObj.hostname.includes('sina.com.cn');
 
-        // 所有域名均直连，不使用系统代理
         const res = await fetch(targetUrl, { headers });
         const contentTypeHeader = res.headers.get('content-type') || 'text/plain';
-        const buffer = Buffer.from(await res.arrayBuffer());
+        const arrayBuffer = await res.arrayBuffer();
         const status = res.status;
 
         const text = needsGbk
-            ? new TextDecoder('gbk').decode(buffer)
-            : buffer.toString('utf-8');
+            ? new TextDecoder('gbk').decode(arrayBuffer)
+            : new TextDecoder('utf-8').decode(arrayBuffer);
 
         if (status < 200 || status >= 300) {
             console.warn(`[Proxy] ${status} for ${targetUrl} | Body: ${text.substring(0, 100)}`);
             return new NextResponse(text, { status, headers: { 'Content-Type': contentTypeHeader } });
         }
 
-        // 智能解析：BOM 清洗 + JSON 探测
         const cleanText = text.replace(/^\uFEFF/, '').trim();
         if (
             contentTypeHeader.includes('application/json') ||
@@ -72,7 +71,7 @@ export async function GET(request) {
             try {
                 return NextResponse.json(JSON.parse(cleanText));
             } catch {
-                // 不是合法 JSON，降级为纯文本
+                // Ignore parsing errors
             }
         }
 

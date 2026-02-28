@@ -1,27 +1,11 @@
 import { NextResponse } from 'next/server';
-import fs from 'fs/promises';
-import path from 'path';
+import { readDoc, writeDoc } from '@/lib/storage';
 
-const CACHE_PATH = path.join(process.cwd(), 'data', 'history_cache.json');
+export const runtime = 'edge';
 
 // 今日日期（北京时间），用于缓存失效判断
 function todayStr() {
     return new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' });
-}
-
-// ── 缓存读写 ──────────────────────────────────────────
-async function readCache() {
-    try {
-        const raw = await fs.readFile(CACHE_PATH, 'utf8');
-        return JSON.parse(raw);
-    } catch {
-        return {};
-    }
-}
-
-async function writeCache(cache) {
-    await fs.mkdir(path.dirname(CACHE_PATH), { recursive: true });
-    await fs.writeFile(CACHE_PATH, JSON.stringify(cache, null, 2));
 }
 
 // ── 市场前缀解析 ─────────────────────────────────────
@@ -172,14 +156,13 @@ export async function GET(request) {
         return NextResponse.json({ error: 'Missing code or type' }, { status: 400 });
     }
 
-    const cacheKey = `${type}:${code}`;
+    const storageKey = `hist:${type}:${code}`;
     const today = todayStr();
 
-    // 读缓存
-    const cache = await readCache();
-    const entry = cache[cacheKey];
+    // 读缓存 (从 KV 的独立 Key)
+    const entry = await readDoc(storageKey, null);
     if (entry && entry.date === today && Array.isArray(entry.history) && entry.history.length >= days * 0.7) {
-        console.log(`[History] Cache hit for ${cacheKey} (${entry.history.length} records)`);
+        console.log(`[History] Cache hit for ${storageKey} (${entry.history.length} records)`);
         return NextResponse.json({
             history: entry.history,
             summary: calcStats(entry.history)
@@ -187,7 +170,7 @@ export async function GET(request) {
     }
 
     // 缓存未命中，重新爬取
-    console.log(`[History] Cache miss for ${cacheKey}, fetching from API…`);
+    console.log(`[History] Cache miss for ${storageKey}, fetching from API…`);
     let history = null;
     if (type === 'stock') {
         history = await fetchStockHistoryServer(code, days);
@@ -200,13 +183,8 @@ export async function GET(request) {
     }
 
     // 写缓存
-    cache[cacheKey] = { date: today, history };
-    try {
-        await writeCache(cache);
-        console.log(`[History] Cached ${cacheKey}: ${history.length} records`);
-    } catch (e) {
-        console.error('[History] Write cache failed:', e.message);
-    }
+    await writeDoc(storageKey, { date: today, history });
+    console.log(`[History] Cached ${storageKey}: ${history.length} records`);
 
     return NextResponse.json({
         history: history,
