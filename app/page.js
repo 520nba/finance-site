@@ -88,28 +88,38 @@ export default function Home() {
     if (activeTab !== 'watchlist' || !isLogged || assets.length === 0) return;
 
     const tick = async () => {
-      // 仅在自选标签页且未在手动同步时刷新实时行情
       if (isSyncing) return;
 
       const stockItems = assets.filter(a => a.type === 'stock');
-      const [quoteMap, intraday] = await Promise.all([
+
+      // 并发执行：批量同步行情 + 全量分时拉取
+      const [quoteMap, allIntraday] = await Promise.all([
         fetchBulkStockData(stockItems),
-        selectedCode ? fetchIntradayData(selectedCode, assets.find(a => a.code === selectedCode)?.type) : Promise.resolve(null)
+        Promise.all(assets.map(async a => ({
+          code: a.code,
+          data: await fetchIntradayData(a.code, a.type)
+        })))
       ]);
+
+      const intradayMap = Object.fromEntries(allIntraday.map(i => [i.code, i.data]));
 
       setAssets(prev => prev.map(a => {
         const q = quoteMap[a.code];
-        const isSelected = a.code === selectedCode;
+        const intra = intradayMap[a.code];
         const newAsset = { ...a };
+
         if (q) {
           newAsset.price = q.price;
           newAsset.changePercent = q.changePercent;
         }
-        if (isSelected && intraday) {
-          newAsset.intraday = intraday;
-          newAsset.price = intraday.price;
-          newAsset.changePercent = intraday.changePercent;
+
+        if (intra) {
+          newAsset.intraday = intra;
+          // 以分时价格为准（通常比快照更准/更实时）
+          newAsset.price = intra.price;
+          newAsset.changePercent = intra.changePercent;
         }
+
         return newAsset;
       }));
     };
@@ -117,7 +127,7 @@ export default function Home() {
     const timer = setInterval(tick, 30000);
     tick(); // 立即执行一次
     return () => clearInterval(timer);
-  }, [activeTab, isLogged, assets.length, selectedCode, isSyncing]);
+  }, [activeTab, isLogged, assets.length, isSyncing]);
 
   const handleLogin = () => {
     const id = loginInput.trim();
@@ -156,7 +166,6 @@ export default function Home() {
         const historyData = historyRes || { history: [], summary: { perf5d: 0, perf22d: 0, perf250d: 0 } };
         const history = historyData.history || [];
         const summary = historyData.summary;
-        // nameMap 已经在 fetchStockData 逻辑中或者通过 fetchBulkNames 获取更好
         const nameMap = await fetchBulkNames([{ code, type }]);
         const name = assetInfo?.name || nameMap[`${type}:${code}`];
         if (name) {
@@ -172,7 +181,6 @@ export default function Home() {
   const addAsset = async (code, typeHint) => {
     setIsSyncing(true);
     try {
-      // typeHint 来自当前 Tab，优先级最高；fallback 保守默认为 stock
       const type = (typeHint === 'fund') ? 'fund' : 'stock';
       const asset = await getAssetDetails(code, type);
       if (asset) {
@@ -203,17 +211,12 @@ export default function Home() {
 
     const stockItems = list.filter(a => a.type === 'stock');
 
-    // ① ~ ③ 全部并发执行，互不依赖
     const [bulkHistoryMap, stockQuoteMap, nameMap] = await Promise.all([
-      // ① 历史数据（服务端缓存，当日有效）
       fetchBulkHistory(list.map(a => ({ code: a.code, type: a.type }))),
-      // ② 股票实时行情（qtimg 多码单请求）
       fetchBulkStockData(stockItems),
-      // ③ 全部资产名称（服务端永久缓存，首次后不再请求）
       fetchBulkNames(list.map(a => ({ code: a.code, type: a.type }))),
     ]);
 
-    // ④ 组装最终数据
     const results = list.map(({ code, type }) => {
       const histKey = `${type}:${code}`;
       const historyData = bulkHistoryMap[histKey] || { history: [], summary: { perf5d: 0, perf22d: 0, perf250d: 0 } };
@@ -222,7 +225,6 @@ export default function Home() {
       const name = nameMap[histKey];
       if (type === 'stock') {
         const q = stockQuoteMap[code];
-        // API 失败时保留资产（用名称缓存或 code 作临时名称），避免丢失自选列表
         const resolvedName = (q?.name || name) ?? code;
         if (!q) return { name: resolvedName, price: 0, code, type, history, summary };
         return { ...q, name: q.name || resolvedName, code, type, history, summary };
@@ -239,20 +241,14 @@ export default function Home() {
 
   const filteredAssets = assets.filter(a => activeTab === 'watchlist' ? true : a.type === activeTab);
 
-  // 当选中某个资产时，立即触发一次分时抓取
   const handleSelectAsset = async (code) => {
+    if (activeTab === 'watchlist') return; // 实时模式下全量展示，无需单选
     setSelectedCode(code);
     const asset = assets.find(a => a.code === code);
     if (!asset) return;
 
-    // 立即拉取一次分时数据
-    const intraday = await fetchIntradayData(code, asset.type);
-    if (intraday) {
-      setAssets(prev => prev.map(a => a.code === code ? { ...a, intraday } : a));
-    }
+    // 非实时模式切换侧边栏时，加载分时作为参考（可选，目前主要是波动率视图）
   };
-
-  const currentAsset = assets.find(a => a.code === selectedCode);
 
   return (
     <main className="container mx-auto px-4 py-12 max-w-[1400px] min-h-screen">
@@ -291,7 +287,6 @@ export default function Home() {
           <button
             onClick={() => {
               setActiveTab('watchlist');
-              if (!selectedCode && assets.length > 0) handleSelectAsset(assets[0].code);
             }}
             className={`flex-1 lg:px-8 py-2.5 rounded-lg transition-all flex items-center justify-center lg:justify-start gap-2 font-bold text-sm ${activeTab === 'watchlist' ? 'bg-indigo-600 shadow-lg text-white' : 'hover:bg-white/5 opacity-50'}`}
           >
@@ -329,13 +324,13 @@ export default function Home() {
         </div>
       </div>
 
-      {/* Tab 内容区：侧边清单 + 详情卡片 */}
+      {/* Tab 内容区: 实时模式下为全量展示，其它为 侧边清单+详情 */}
       <div className="flex flex-col lg:flex-row gap-6 lg:gap-8 items-start">
-        {/* 自选清单侧边栏（仅登录且有资产时显示） */}
-        {isLogged && assets.length > 0 && (
+        {/* 自选清单侧边栏 (实时模式下隐藏) */}
+        {isLogged && assets.length > 0 && activeTab !== 'watchlist' && (
           <WatchlistSidebar
             assets={filteredAssets}
-            mode={activeTab === 'watchlist' ? 'realtime' : 'volatility'}
+            mode="volatility"
             selectedCode={selectedCode}
             onSelect={handleSelectAsset}
           />
@@ -372,26 +367,31 @@ export default function Home() {
               </motion.div>
             ) : filteredAssets.length > 0 ? (
               activeTab === 'watchlist' ? (
-                currentAsset ? (
-                  <AssetCard
-                    key={currentAsset.code}
-                    asset={currentAsset}
-                    onRemove={removeAsset}
-                    mode="realtime"
-                  />
-                ) : (
-                  <div className="text-center py-24 glass-effect border-dashed border-white/5">
-                    <p className="text-white/20 italic tracking-widest">请在左侧选择一个资产</p>
-                  </div>
-                )
+                <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+                  {filteredAssets.map(asset => (
+                    <AssetCard
+                      key={asset.code}
+                      asset={asset}
+                      onRemove={removeAsset}
+                      mode="realtime"
+                    />
+                  ))}
+                </div>
               ) : (
-                filteredAssets.map(asset => (
-                  <AssetCard
-                    key={asset.code}
-                    asset={asset}
-                    onRemove={removeAsset}
-                  />
-                ))
+                <div className="space-y-4">
+                  {assets.find(a => a.code === selectedCode) ? (
+                    <AssetCard
+                      key={selectedCode}
+                      asset={assets.find(a => a.code === selectedCode)}
+                      onRemove={removeAsset}
+                      mode="volatility"
+                    />
+                  ) : (
+                    <div className="text-center py-24 glass-effect border-dashed border-white/5">
+                      <p className="text-white/20 italic tracking-widest">请在左侧选择一个资产</p>
+                    </div>
+                  )}
+                </div>
               )
             ) : (
               <motion.div

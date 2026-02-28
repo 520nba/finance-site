@@ -54,7 +54,7 @@ export default function AssetCard({ asset, onRemove, mode = 'volatility' }) {
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.9 }}
-            className="glass-effect p-6 mb-4 group"
+            className="glass-effect p-6 group"
         >
             <div className="flex justify-between items-start mb-6">
                 <div className="flex-1">
