@@ -36,14 +36,16 @@ export async function GET(request) {
     try { urlObj = new URL(targetUrl); } catch { return NextResponse.json({ error: 'Invalid url' }, { status: 400 }); }
     try {
         const headers = buildHeaders(urlObj);
-        const needsGbk = urlObj.hostname.includes('gtimg.cn') || urlObj.hostname.includes('sina.com.cn');
         const res = await fetch(targetUrl, { headers });
         const contentTypeHeader = res.headers.get('content-type') || 'text/plain';
-        const arrayBuffer = await res.arrayBuffer();
         const status = res.status;
-        const text = needsGbk ? new TextDecoder('gbk').decode(arrayBuffer) : new TextDecoder('utf-8').decode(arrayBuffer);
+
+        // 移除 GBK 解码，全面拥抱东方财富 UTF-8 原生 JSON
+        const text = await res.text();
+
         if (status < 200 || status >= 300) return new NextResponse(text, { status, headers: { 'Content-Type': contentTypeHeader } });
         const cleanText = text.replace(/^\uFEFF/, '').trim();
+
         if (contentTypeHeader.includes('application/json') || (cleanText.startsWith('{') && cleanText.endsWith('}')) || (cleanText.startsWith('[') && cleanText.endsWith(']'))) {
             try { return NextResponse.json(JSON.parse(cleanText)); } catch { }
         }
