@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { readDoc, writeDoc, insertDailyPrice } from '@/lib/storage';
+import { readDoc, writeDoc, insertDailyPrice, insertDailyPricesBatch } from '@/lib/storage';
 
 function todayStr() {
     return new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' });
@@ -144,29 +144,43 @@ export async function POST(request) {
     }
 
     if (toFetch.length > 0) {
-        const fetched = await Promise.all(
-            toFetch.map(async ({ code, type, key }) => {
-                let history = null;
-                if (type === 'stock') history = await fetchStockHistoryServer(code, days);
-                else history = await fetchFundHistoryServer(code, days);
-                return { key, code, type, history };
-            })
-        );
+        // 在服务端并发拉取历史数据，加入 Chunk 防并发洪峰
+        const fetched = [];
+        const CHUNK_SIZE = 15;
+        for (let i = 0; i < toFetch.length; i += CHUNK_SIZE) {
+            const chunk = toFetch.slice(i, i + CHUNK_SIZE);
+            const chunkResults = await Promise.all(
+                chunk.map(async ({ code, type, key }) => {
+                    let history = null;
+                    if (type === 'stock') history = await fetchStockHistoryServer(code, days);
+                    else history = await fetchFundHistoryServer(code, days);
+                    return { key, code, type, history };
+                })
+            );
+            fetched.push(...chunkResults);
+        }
+
+        const dbRecords = [];
+
         await Promise.all(fetched.map(async ({ key, history, type, code }) => {
             if (history && history.length > 0) {
                 const storageKey = `hist:${type}:${code}`;
                 await writeDoc(storageKey, { date: today, history });
                 result[key] = { history, summary: calcStats(history) };
 
-                // 将最新的一条记录（当天数据）写入数据库
+                // 将最新的一条记录（当天数据）加入待写入数组
                 const lastItem = history[history.length - 1];
                 if (lastItem && lastItem.date && lastItem.value) {
-                    await insertDailyPrice(code, type, lastItem.value, lastItem.date);
+                    dbRecords.push({ code, type, price: lastItem.value, date: lastItem.date });
                 }
             } else {
                 result[key] = { history: [], summary: { perf5d: 0, perf22d: 0, perf250d: 0 } };
             }
         }));
+
+        if (dbRecords.length > 0) {
+            await insertDailyPricesBatch(dbRecords);
+        }
     }
     return NextResponse.json(result);
 }

@@ -37,7 +37,9 @@ function MetricPanel({ label, value, history, days }) {
     );
 }
 
-export default function AssetCard({ asset, onRemove, mode = 'volatility' }) {
+import { memo } from 'react';
+
+function AssetCardComponent({ asset, onRemove, mode = 'volatility' }) {
     const history = asset.history ?? [];
     const summary = asset.summary ?? { perf5d: 0, perf22d: 0, perf250d: 0 };
 
@@ -123,3 +125,15 @@ export default function AssetCard({ asset, onRemove, mode = 'volatility' }) {
         </motion.div>
     );
 }
+
+// 深度优化：防止每 60 秒轮询无脑推平整个卡片组件的 DOM
+export default memo(AssetCardComponent, (prev, next) => {
+    return (
+        prev.mode === next.mode &&
+        prev.asset.code === next.asset.code &&
+        prev.asset.price === next.asset.price &&
+        prev.asset.changePercent === next.asset.changePercent &&
+        // 如果分时最后一个点的 price 相同，大概率无需重载图表
+        prev.asset.intraday?.price === next.asset.intraday?.price
+    );
+});

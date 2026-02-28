@@ -64,22 +64,27 @@ export default function Home() {
     localStorage.setItem('tracker_user_id', userId);
   }, [userId]);
 
+  // 使用 code 拼接的字符串作为依赖，避免轮询引发价格变动导致持续的高频 KV 覆写
+  const assetCodesStr = assets.map(a => `${a.type}:${a.code}`).sort().join(',');
+
   // 数据变化后同步到服务端（禁止初始化阶段覆盖）
   useEffect(() => {
     if (!isLogged || !userId || !initialLoadDone.current) return;
     const sync = async () => {
+      // 提取轻量化的骨架结构供后端 KV 存储，不保存庞大的历史和大图表节点数据
+      const skeleton = assets.map(a => ({ code: a.code, type: a.type }));
       try {
         await fetch('/api/user/assets', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ userId, assets }),
+          body: JSON.stringify({ userId, assets: skeleton }),
         });
       } catch (e) {
         console.error('Sync failed:', e);
       }
     };
     sync();
-  }, [assets, userId, isLogged]);
+  }, [assetCodesStr, userId, isLogged]); // Only run when asset codes actually change
 
   // ---------------------------------------------------------
   // 实时数据自动轮询 (30秒)
