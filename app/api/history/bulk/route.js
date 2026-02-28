@@ -7,7 +7,6 @@ function todayStr() {
     return new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' });
 }
 
-// ── 外部数据获取（服务端直连）──────────────────────────────────────
 const BASE_HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     'Accept': '*/*',
@@ -63,9 +62,7 @@ async function fetchStockHistoryServer(code, days) {
 }
 
 async function fetchFundHistoryServer(code, days) {
-    // 识别场内基金 (ETF/LOF) 典型号段
     const isListed = code.startsWith('5') || code.startsWith('15') || code.startsWith('16') || code.startsWith('58');
-
     const getSina = async () => {
         for (const sinaCode of [`sz${code}`, `sh${code}`]) {
             try {
@@ -83,7 +80,6 @@ async function fetchFundHistoryServer(code, days) {
         }
         return null;
     };
-
     const getEastMoney = async () => {
         try {
             const probeRes = await fetch(
@@ -94,11 +90,9 @@ async function fetchFundHistoryServer(code, days) {
             const probeData = await probeRes.json();
             const totalCount = probeData.TotalCount || 0;
             if (totalCount === 0) return null;
-
             const firstPage = probeData.Data?.LSJZList || [];
             const targetCount = Math.min(days, totalCount);
             const pagesNeeded = Math.ceil(targetCount / 20);
-
             const pagePromises = [];
             for (let page = 2; page <= pagesNeeded; page++) {
                 pagePromises.push(
@@ -125,7 +119,6 @@ async function fetchFundHistoryServer(code, days) {
         }
         return null;
     };
-
     if (isListed) {
         const d = await getSina();
         if (d) return d;
@@ -137,68 +130,45 @@ async function fetchFundHistoryServer(code, days) {
     }
 }
 
-/**
- * POST /api/history/bulk
- */
 export async function POST(request) {
     const { items, days = 250 } = await request.json();
-    if (!Array.isArray(items) || items.length === 0) {
-        return NextResponse.json({});
-    }
-
+    if (!Array.isArray(items) || items.length === 0) return NextResponse.json({});
     const today = todayStr();
     const result = {};
     const toFetch = [];
-
-    // 并行读取缓存
     const cacheResults = await Promise.all(items.map(async ({ code, type }) => {
         const key = `${type}:${code}`;
         const storageKey = `hist:${type}:${code}`;
         const entry = await readDoc(storageKey, null);
         return { key, code, type, entry };
     }));
-
     for (const { key, code, type, entry } of cacheResults) {
         if (entry && entry.date === today && Array.isArray(entry.history) && entry.history.length >= days * 0.7) {
-            result[key] = {
-                history: entry.history,
-                summary: calcStats(entry.history)
-            };
+            result[key] = { history: entry.history, summary: calcStats(entry.history) };
         } else {
             toFetch.push({ code, type, key });
         }
     }
-
     if (toFetch.length > 0) {
-        // 并发爬取未命中的资产
         const fetched = await Promise.all(
             toFetch.map(async ({ code, type, key }) => {
                 let history = null;
                 try {
-                    if (type === 'stock') {
-                        history = await fetchStockHistoryServer(code, days);
-                    } else {
-                        history = await fetchFundHistoryServer(code, days);
-                    }
-                } catch (e) {
-                    console.error(`[Bulk] fetch ${key} failed:`, e.message);
-                }
+                    if (type === 'stock') history = await fetchStockHistoryServer(code, days);
+                    else history = await fetchFundHistoryServer(code, days);
+                } catch (e) { }
                 return { key, code, type, history };
             })
         );
-
-        // 并行写回缓存并汇总结果
         await Promise.all(fetched.map(async ({ key, history, type, code }) => {
             if (history && history.length > 0) {
-                const stats = calcStats(history);
                 const storageKey = `hist:${type}:${code}`;
                 await writeDoc(storageKey, { date: today, history });
-                result[key] = { history, summary: stats };
+                result[key] = { history, summary: calcStats(history) };
             } else {
                 result[key] = { history: [], summary: { perf5d: 0, perf22d: 0, perf250d: 0 } };
             }
         }));
     }
-
     return NextResponse.json(result);
 }
