@@ -37,6 +37,10 @@ export async function GET(request) {
         }
         return new NextResponse(text, { headers: { 'Content-Type': contentTypeHeader } });
     } catch (error) {
-        return NextResponse.json({ error: error.message }, { status: 500 });
+        return NextResponse.json({
+            error: error.message,
+            stack: error.stack,
+            context: 'proxy_catch'
+        }, { status: 500 });
     }
 }
