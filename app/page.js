@@ -1,0 +1,417 @@
+'use client';
+
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { TrendingUp, PieChart, RefreshCw, X, Eye, Activity } from 'lucide-react';
+import SearchBar from '@/components/SearchBar';
+import AssetCard from '@/components/AssetCard';
+import WatchlistSidebar from '@/components/WatchlistSidebar';
+import { fetchStockData, fetchStockHistory, fetchFundHistory, fetchFundInfo, fetchBulkHistory, fetchBulkStockData, fetchBulkNames, fetchIntradayData } from '@/lib/api';
+
+// 简单 Toast 状态，避免 alert() 阻断 UI
+function useToast() {
+  const [toast, setToast] = useState(null);
+  const show = useCallback((msg, type = 'error') => {
+    setToast({ msg, type });
+    setTimeout(() => setToast(null), 3500);
+  }, []);
+  return { toast, show };
+}
+
+export default function Home() {
+  const [activeTab, setActiveTab] = useState('stock');
+  const [assets, setAssets] = useState([]);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [userId, setUserId] = useState('');
+  const [loginInput, setLoginInput] = useState('');
+  const [isLogged, setIsLogged] = useState(false);
+  const [selectedCode, setSelectedCode] = useState(null);
+  const { toast, show: showToast } = useToast();
+
+  // 初始化加载完成标志，防止空数组覆盖服务端数据
+  const initialLoadDone = useRef(false);
+
+  // 自动恢复登录状态
+  useEffect(() => {
+    const savedId = localStorage.getItem('tracker_user_id');
+    if (savedId) {
+      setUserId(savedId);
+      setIsLogged(true);
+    }
+  }, []);
+
+  // 登录后加载服务端数据
+  useEffect(() => {
+    if (!userId) return;
+    const load = async () => {
+      setIsSyncing(true);
+      initialLoadDone.current = false;
+      try {
+        const res = await fetch(`/api/user/assets?userId=${userId}`);
+        const list = await res.json();
+        if (Array.isArray(list) && list.length > 0) {
+          await refreshAssets(list);
+        } else {
+          setAssets([]);
+        }
+      } catch (e) {
+        console.error('Failed to load user assets:', e);
+      }
+      initialLoadDone.current = true;
+      setIsSyncing(false);
+    };
+    load();
+    localStorage.setItem('tracker_user_id', userId);
+  }, [userId]);
+
+  // 数据变化后同步到服务端（禁止初始化阶段覆盖）
+  useEffect(() => {
+    if (!isLogged || !userId || !initialLoadDone.current) return;
+    const sync = async () => {
+      try {
+        await fetch('/api/user/assets', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userId, assets }),
+        });
+      } catch (e) {
+        console.error('Sync failed:', e);
+      }
+    };
+    sync();
+  }, [assets, userId, isLogged]);
+
+  // ---------------------------------------------------------
+  // 实时数据自动轮询 (30秒)
+  // ---------------------------------------------------------
+  useEffect(() => {
+    if (activeTab !== 'watchlist' || !isLogged || assets.length === 0) return;
+
+    const tick = async () => {
+      // 仅在自选标签页且未在手动同步时刷新实时行情
+      if (isSyncing) return;
+
+      const stockItems = assets.filter(a => a.type === 'stock');
+      const [quoteMap, intraday] = await Promise.all([
+        fetchBulkStockData(stockItems),
+        selectedCode ? fetchIntradayData(selectedCode, assets.find(a => a.code === selectedCode)?.type) : Promise.resolve(null)
+      ]);
+
+      setAssets(prev => prev.map(a => {
+        const q = quoteMap[a.code];
+        const isSelected = a.code === selectedCode;
+        const newAsset = { ...a };
+        if (q) {
+          newAsset.price = q.price;
+          newAsset.changePercent = q.changePercent;
+        }
+        if (isSelected && intraday) {
+          newAsset.intraday = intraday;
+          newAsset.price = intraday.price;
+          newAsset.changePercent = intraday.changePercent;
+        }
+        return newAsset;
+      }));
+    };
+
+    const timer = setInterval(tick, 30000);
+    tick(); // 立即执行一次
+    return () => clearInterval(timer);
+  }, [activeTab, isLogged, assets.length, selectedCode, isSyncing]);
+
+  const handleLogin = () => {
+    const id = loginInput.trim();
+    if (id) {
+      setUserId(id);
+      setIsLogged(true);
+    }
+  };
+
+  const handleLogout = () => {
+    setIsLogged(false);
+    setUserId('');
+    setAssets([]);
+    initialLoadDone.current = false;
+    localStorage.removeItem('tracker_user_id');
+  };
+
+  const getAssetDetails = async (code, type) => {
+    try {
+      if (type === 'fund') {
+        const [nameMap, historyRes] = await Promise.all([
+          fetchBulkNames([{ code, type }]),
+          fetchFundHistory(code, 250),
+        ]);
+        const name = nameMap[`${type}:${code}`] ?? `基金 ${code}`;
+        const historyData = historyRes || { history: [], summary: { perf5d: 0, perf22d: 0, perf250d: 0 } };
+        const history = historyData.history || [];
+        const summary = historyData.summary;
+        const price = history.length > 0 ? history[history.length - 1].value : 0;
+        return { name, price, code, type, history, summary };
+      } else {
+        const [assetInfo, historyRes] = await Promise.all([
+          fetchStockData(code),
+          fetchStockHistory(code, 250),
+        ]);
+        const historyData = historyRes || { history: [], summary: { perf5d: 0, perf22d: 0, perf250d: 0 } };
+        const history = historyData.history || [];
+        const summary = historyData.summary;
+        // nameMap 已经在 fetchStockData 逻辑中或者通过 fetchBulkNames 获取更好
+        const nameMap = await fetchBulkNames([{ code, type }]);
+        const name = assetInfo?.name || nameMap[`${type}:${code}`];
+        if (name) {
+          return { ...assetInfo, name, code, type, history, summary };
+        }
+      }
+    } catch (e) {
+      console.error(`Failed to fetch details for ${code} (${type}):`, e);
+    }
+    return null;
+  };
+
+  const addAsset = async (code, typeHint) => {
+    setIsSyncing(true);
+    try {
+      // typeHint 来自当前 Tab，优先级最高；fallback 保守默认为 stock
+      const type = (typeHint === 'fund') ? 'fund' : 'stock';
+      const asset = await getAssetDetails(code, type);
+      if (asset) {
+        setAssets(prev => {
+          const list = Array.isArray(prev) ? prev : [];
+          if (list.find(a => a.code === code)) return list;
+          return [...list, asset];
+        });
+      } else {
+        showToast('加载失败，该代码可能不存在或数据暂时不可用');
+      }
+    } catch (e) {
+      console.error(`[Frontend] Error adding asset ${code}:`, e);
+      showToast('添加资产时发生错误');
+    }
+    setIsSyncing(false);
+  };
+
+  const removeAsset = (code) => {
+    setAssets(prev => prev.filter(a => a.code !== code));
+    if (selectedCode === code) setSelectedCode(null);
+  };
+
+  // 高性能批量刷新：历史 + 名称 + 实时行情全走批量端点
+  const refreshAssets = async (list) => {
+    if (!list || list.length === 0) return;
+    setIsSyncing(true);
+
+    const stockItems = list.filter(a => a.type === 'stock');
+
+    // ① ~ ③ 全部并发执行，互不依赖
+    const [bulkHistoryMap, stockQuoteMap, nameMap] = await Promise.all([
+      // ① 历史数据（服务端缓存，当日有效）
+      fetchBulkHistory(list.map(a => ({ code: a.code, type: a.type }))),
+      // ② 股票实时行情（qtimg 多码单请求）
+      fetchBulkStockData(stockItems),
+      // ③ 全部资产名称（服务端永久缓存，首次后不再请求）
+      fetchBulkNames(list.map(a => ({ code: a.code, type: a.type }))),
+    ]);
+
+    // ④ 组装最终数据
+    const results = list.map(({ code, type }) => {
+      const histKey = `${type}:${code}`;
+      const historyData = bulkHistoryMap[histKey] || { history: [], summary: { perf5d: 0, perf22d: 0, perf250d: 0 } };
+      const history = historyData.history;
+      const summary = historyData.summary;
+      const name = nameMap[histKey];
+      if (type === 'stock') {
+        const q = stockQuoteMap[code];
+        // API 失败时保留资产（用名称缓存或 code 作临时名称），避免丢失自选列表
+        const resolvedName = (q?.name || name) ?? code;
+        if (!q) return { name: resolvedName, price: 0, code, type, history, summary };
+        return { ...q, name: q.name || resolvedName, code, type, history, summary };
+      } else {
+        const resolvedName = name ?? `基金 ${code}`;
+        const price = history.length > 0 ? history[history.length - 1].value : 0;
+        return { name: resolvedName, price, code, type, history, summary };
+      }
+    });
+
+    setAssets(results);
+    setIsSyncing(false);
+  };
+
+  const filteredAssets = assets.filter(a => activeTab === 'watchlist' ? true : a.type === activeTab);
+
+  // 当选中某个资产时，立即触发一次分时抓取
+  const handleSelectAsset = async (code) => {
+    setSelectedCode(code);
+    const asset = assets.find(a => a.code === code);
+    if (!asset) return;
+
+    // 立即拉取一次分时数据
+    const intraday = await fetchIntradayData(code, asset.type);
+    if (intraday) {
+      setAssets(prev => prev.map(a => a.code === code ? { ...a, intraday } : a));
+    }
+  };
+
+  const currentAsset = assets.find(a => a.code === selectedCode);
+
+  return (
+    <main className="container mx-auto px-4 py-12 max-w-[1400px] min-h-screen">
+      {/* Toast 通知 */}
+      <AnimatePresence>
+        {toast && (
+          <motion.div
+            initial={{ opacity: 0, y: -20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -20 }}
+            className={`fixed top-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 px-5 py-3 rounded-xl shadow-2xl text-sm font-bold
+              ${toast.type === 'error' ? 'bg-red-500/90 text-white' : 'bg-green-500/90 text-white'}`}
+          >
+            {toast.msg}
+            <button onClick={() => { }} className="opacity-60 hover:opacity-100"><X size={14} /></button>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+
+      <div className="flex flex-col lg:flex-row items-center lg:items-start justify-between mb-8 lg:mb-12 gap-6 lg:gap-8">
+        {/* 左侧：标签页切换 */}
+        <div className="flex w-full lg:w-auto glass-effect p-1 bg-white/5 border-white/5 flex-shrink-0">
+          <button
+            onClick={() => setActiveTab('stock')}
+            className={`flex-1 lg:px-8 py-2.5 rounded-lg transition-all flex items-center justify-center lg:justify-start gap-2 font-bold text-sm ${activeTab === 'stock' ? 'bg-blue-600 shadow-lg text-white' : 'hover:bg-white/5 opacity-50'}`}
+          >
+            <PieChart size={18} /> 股票
+          </button>
+          <button
+            onClick={() => setActiveTab('fund')}
+            className={`flex-1 lg:px-8 py-2.5 rounded-lg transition-all flex items-center justify-center lg:justify-start gap-2 font-bold text-sm ${activeTab === 'fund' ? 'bg-cyan-600 shadow-lg text-white' : 'hover:bg-white/5 opacity-50'}`}
+          >
+            <TrendingUp size={18} /> 基金
+          </button>
+          <button
+            onClick={() => {
+              setActiveTab('watchlist');
+              if (!selectedCode && assets.length > 0) handleSelectAsset(assets[0].code);
+            }}
+            className={`flex-1 lg:px-8 py-2.5 rounded-lg transition-all flex items-center justify-center lg:justify-start gap-2 font-bold text-sm ${activeTab === 'watchlist' ? 'bg-indigo-600 shadow-lg text-white' : 'hover:bg-white/5 opacity-50'}`}
+          >
+            <Activity size={18} /> 实时
+          </button>
+        </div>
+
+        {/* 中间：搜索栏 */}
+        <div className="flex-1 w-full lg:max-w-xl">
+          <SearchBar onAdd={(code) => addAsset(code, activeTab === 'watchlist' ? 'stock' : activeTab)} />
+        </div>
+
+        {/* 右侧：用户状态与同步按钮 */}
+        <div className="flex items-center justify-between w-full lg:w-auto gap-4 flex-shrink-0 pt-1">
+          <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-white/5 border border-white/5">
+              <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
+              <span className="text-[10px] font-mono opacity-40 uppercase tracking-widest">{userId}</span>
+            </div>
+            <button
+              onClick={handleLogout}
+              className="text-[10px] font-bold opacity-20 hover:opacity-100 hover:text-red-400 uppercase tracking-widest transition-all"
+            >
+              退出
+            </button>
+          </div>
+          <button
+            onClick={() => refreshAssets(assets.map(a => ({ code: a.code, type: a.type })))}
+            disabled={isSyncing}
+            className={`flex items-center gap-2 px-4 py-2 rounded-full border border-white/10 opacity-40 hover:opacity-100 transition-all disabled:cursor-not-allowed ${isSyncing ? 'animate-pulse' : ''}`}
+          >
+            <RefreshCw size={14} className={isSyncing ? 'animate-spin' : ''} />
+            <span className="text-xs font-bold uppercase tracking-widest hidden sm:inline">同步数据</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Tab 内容区：侧边清单 + 详情卡片 */}
+      <div className="flex flex-col lg:flex-row gap-6 lg:gap-8 items-start">
+        {/* 自选清单侧边栏（仅登录且有资产时显示） */}
+        {isLogged && assets.length > 0 && (
+          <WatchlistSidebar
+            assets={filteredAssets}
+            mode={activeTab === 'watchlist' ? 'realtime' : 'volatility'}
+            selectedCode={selectedCode}
+            onSelect={handleSelectAsset}
+          />
+        )}
+
+        {/* 右侧主内容 */}
+        <div className="flex-1 min-w-0 min-h-[400px]">
+          <AnimatePresence mode="popLayout">
+            {!isLogged ? (
+              <motion.div
+                key="login"
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="max-w-md mx-auto py-24 text-center"
+              >
+                <h2 className="text-2xl font-black italic mb-2 tracking-tighter">账户登录</h2>
+                <p className="text-white/30 text-sm mb-8">输入您的 ID 以保存和同步自选列表</p>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    placeholder="Enter User ID"
+                    value={loginInput}
+                    onChange={(e) => setLoginInput(e.target.value)}
+                    className="flex-1 bg-white/5 border border-white/10 rounded-xl px-4 py-3 outline-none focus:border-blue-500/50 transition-all text-sm font-mono"
+                    onKeyDown={(e) => e.key === 'Enter' && handleLogin()}
+                  />
+                  <button
+                    onClick={handleLogin}
+                    className="bg-blue-600 hover:bg-blue-500 text-white px-8 py-3 rounded-xl font-bold text-sm transition-all"
+                  >
+                    进入
+                  </button>
+                </div>
+              </motion.div>
+            ) : filteredAssets.length > 0 ? (
+              activeTab === 'watchlist' ? (
+                currentAsset ? (
+                  <AssetCard
+                    key={currentAsset.code}
+                    asset={currentAsset}
+                    onRemove={removeAsset}
+                    mode="realtime"
+                  />
+                ) : (
+                  <div className="text-center py-24 glass-effect border-dashed border-white/5">
+                    <p className="text-white/20 italic tracking-widest">请在左侧选择一个资产</p>
+                  </div>
+                )
+              ) : (
+                filteredAssets.map(asset => (
+                  <AssetCard
+                    key={asset.code}
+                    asset={asset}
+                    onRemove={removeAsset}
+                  />
+                ))
+              )
+            ) : (
+              <motion.div
+                key="empty"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                className="text-center py-24 glass-effect border-dashed border-white/5"
+              >
+                <p className="text-white/20 italic tracking-widest">
+                  暂无相关数据，输入代码开启追踪
+                </p>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+      </div>
+
+      <footer className="mt-24 pt-12 border-t border-white/5 text-center text-white/20 text-sm">
+        <p>&copy; 2026 Antigravity Financial Labs. Data provided by Tencent &amp; EastMoney.</p>
+      </footer>
+    </main>
+  );
+}
