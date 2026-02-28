@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { readDoc, writeDoc } from '@/lib/storage';
+import { readDoc, writeDoc, insertDailyPrice } from '@/lib/storage';
 
 function todayStr() {
     return new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' });
@@ -157,6 +157,12 @@ export async function POST(request) {
                 const storageKey = `hist:${type}:${code}`;
                 await writeDoc(storageKey, { date: today, history });
                 result[key] = { history, summary: calcStats(history) };
+
+                // 将最新的一条记录（当天数据）写入数据库
+                const lastItem = history[history.length - 1];
+                if (lastItem && lastItem.date && lastItem.value) {
+                    await insertDailyPrice(code, type, lastItem.value, lastItem.date);
+                }
             } else {
                 result[key] = { history: [], summary: { perf5d: 0, perf22d: 0, perf250d: 0 } };
             }

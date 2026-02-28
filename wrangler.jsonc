@@ -22,5 +22,12 @@
             "binding": "STOCK_DATA",
             "id": "f7845bb8f6c048f0b658ac01797ced0b"
         }
+    ],
+    "d1_databases": [
+        {
+            "binding": "DB",
+            "database_name": "stock",
+            "database_id": "1a5054bb-e46e-438f-bdd3-77ad67ae8998"
+        }
     ]
 }

@@ -92,16 +92,16 @@ export default function Home() {
 
       const stockItems = assets.filter(a => a.type === 'stock');
 
-      // 并发执行：批量同步行情 + 全量分时拉取
-      const [quoteMap, allIntraday] = await Promise.all([
-        fetchBulkStockData(stockItems),
-        Promise.all(assets.map(async a => ({
-          code: a.code,
-          data: await fetchIntradayData(a.code, a.type)
-        })))
-      ]);
+      // 批量获取股票实时价格
+      const quoteMap = await fetchBulkStockData(stockItems);
 
-      const intradayMap = Object.fromEntries(allIntraday.map(i => [i.code, i.data]));
+      // 分时暂时依然依顺序获取，后续如果有批量分时接口再优化
+      const intradayMap = {};
+      for (const a of assets) {
+        const data = await fetchIntradayData(a.code, a.type);
+        if (data) intradayMap[a.code] = data;
+        await new Promise(r => setTimeout(r, 100)); // 小幅限流
+      }
 
       setAssets(prev => prev.map(a => {
         const q = quoteMap[a.code];
@@ -115,7 +115,6 @@ export default function Home() {
 
         if (intra) {
           newAsset.intraday = intra;
-          // 以分时价格为准（通常比快照更准/更实时）
           newAsset.price = intra.price;
           newAsset.changePercent = intra.changePercent;
         }
@@ -124,7 +123,7 @@ export default function Home() {
       }));
     };
 
-    const timer = setInterval(tick, 30000);
+    const timer = setInterval(tick, 60000); // 延长到 60 秒轮询
     tick(); // 立即执行一次
     return () => clearInterval(timer);
   }, [activeTab, isLogged, assets.length, isSyncing]);
