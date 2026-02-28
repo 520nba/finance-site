@@ -324,13 +324,13 @@ export default function Home() {
         </div>
       </div>
 
-      {/* Tab 内容区: 实时模式下为全量展示，其它为 侧边清单+详情 */}
+      {/* Tab 内容区: 所有模式下均显示侧边清单 + 网格聚合视图 */}
       <div className="flex flex-col lg:flex-row gap-6 lg:gap-8 items-start">
-        {/* 自选清单侧边栏 (实时模式下隐藏) */}
-        {isLogged && assets.length > 0 && activeTab !== 'watchlist' && (
+        {/* 自选清单侧边栏 */}
+        {isLogged && assets.length > 0 && (
           <WatchlistSidebar
             assets={filteredAssets}
-            mode="volatility"
+            mode={activeTab === 'watchlist' ? 'realtime' : 'volatility'}
             selectedCode={selectedCode}
             onSelect={handleSelectAsset}
           />
@@ -366,33 +366,16 @@ export default function Home() {
                 </div>
               </motion.div>
             ) : filteredAssets.length > 0 ? (
-              activeTab === 'watchlist' ? (
-                <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-                  {filteredAssets.map(asset => (
-                    <AssetCard
-                      key={asset.code}
-                      asset={asset}
-                      onRemove={removeAsset}
-                      mode="realtime"
-                    />
-                  ))}
-                </div>
-              ) : (
-                <div className="space-y-4">
-                  {assets.find(a => a.code === selectedCode) ? (
-                    <AssetCard
-                      key={selectedCode}
-                      asset={assets.find(a => a.code === selectedCode)}
-                      onRemove={removeAsset}
-                      mode="volatility"
-                    />
-                  ) : (
-                    <div className="text-center py-24 glass-effect border-dashed border-white/5">
-                      <p className="text-white/20 italic tracking-widest">请在左侧选择一个资产</p>
-                    </div>
-                  )}
-                </div>
-              )
+              <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+                {filteredAssets.map(asset => (
+                  <AssetCard
+                    key={asset.code}
+                    asset={asset}
+                    onRemove={removeAsset}
+                    mode={activeTab === 'watchlist' ? 'realtime' : 'volatility'}
+                  />
+                ))}
+              </div>
             ) : (
               <motion.div
                 key="empty"
