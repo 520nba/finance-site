@@ -21,14 +21,28 @@ export async function GET(request) {
     try { urlObj = new URL(targetUrl); } catch { return NextResponse.json({ error: 'Invalid url' }, { status: 400 }); }
     try {
         const headers = buildHeaders(urlObj);
-        const res = await fetch(targetUrl, { headers });
+        // 增加信号超时处理，防止 Node.js fetch 无响应挂起
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 10000);
+
+        const res = await fetch(targetUrl, {
+            headers,
+            signal: controller.signal
+        }).finally(() => clearTimeout(timeout));
+
         const contentTypeHeader = res.headers.get('content-type') || 'text/plain';
         const status = res.status;
 
-        // 移除 GBK 解码，全面拥抱东方财富 UTF-8 原生 JSON
+        // 记录响应头，辅助调试
+        console.log(`[Proxy] Response status: ${status}, Type: ${contentTypeHeader} for ${targetUrl}`);
+
         const text = await res.text();
 
-        if (status < 200 || status >= 300) return new NextResponse(text, { status, headers: { 'Content-Type': contentTypeHeader } });
+        if (status < 200 || status >= 300) {
+            console.error(`[Proxy] Error status ${status}:`, text.slice(0, 200));
+            return new NextResponse(text, { status, headers: { 'Content-Type': contentTypeHeader } });
+        }
+
         const cleanText = text.replace(/^\uFEFF/, '').trim();
 
         if (contentTypeHeader.includes('application/json') || (cleanText.startsWith('{') && cleanText.endsWith('}')) || (cleanText.startsWith('[') && cleanText.endsWith(']'))) {
@@ -36,10 +50,12 @@ export async function GET(request) {
         }
         return new NextResponse(text, { headers: { 'Content-Type': contentTypeHeader } });
     } catch (error) {
+        console.error(`[Proxy] Critical error for ${targetUrl}:`, error.message);
         return NextResponse.json({
             error: error.message,
             stack: error.stack,
-            context: 'proxy_catch'
+            context: 'proxy_catch',
+            url: targetUrl
         }, { status: 500 });
     }
 }

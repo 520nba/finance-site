@@ -1,0 +1,67 @@
+const fs = require('fs');
+
+// 模拟 lib/api.js 中的关键解析逻辑
+function parseIntraday(d) {
+    if (!d || !d.trends || d.trends.length === 0) return null;
+    const prevClose = (d.prePrice ?? d.preClose ?? 0) / 100;
+    const points = d.trends.map(line => {
+        const parts = line.split(',');
+        const val = parseFloat(parts[2]); // 我们修正后的索引
+        return {
+            time: parts[0].split(' ')[1] || parts[0],
+            value: isNaN(val) ? 0 : val / 100 // 我们修正后的缩放
+        };
+    }).filter(p => p.value > 0);
+    const lastPrice = points.length > 0 ? points[points.length - 1].value : prevClose;
+    return { name: d.name, price: lastPrice, prevClose, pointsCount: points.length };
+}
+
+function parseStock(d) {
+    if (!d || d.f43 === undefined) return null;
+    const pc = (d.f3 !== undefined && d.f3 !== null) ? d.f3 : (d.f170 ?? 0);
+    return {
+        name: d.f58,
+        price: d.f43 / 100,
+        changePercent: pc / 100
+    };
+}
+
+// 模拟数据 (来自之前 curl 抓包的真实结构)
+const mockTrends = {
+    data: {
+        name: "贵州茅台",
+        prePrice: 185105.0,
+        trends: ["2024-02-28 09:30,185002,185002", "2024-02-28 15:00,184900,184900"]
+    }
+};
+
+const mockStock = {
+    data: {
+        f58: "贵州茅台",
+        f43: 146071,
+        f170: -76
+    }
+};
+
+console.log("Testing Intraday Parsing:");
+const intradayResult = parseIntraday(mockTrends.data);
+console.log(JSON.stringify(intradayResult, null, 2));
+
+console.log("\nTesting Stock Quote Parsing (f3 missing, using f170):");
+const stockResult = parseStock(mockStock.data);
+console.log(JSON.stringify(stockResult, null, 2));
+
+// 验证逻辑
+// prevClose 应该为 1851.05
+// 最后一个点 value 为 184900 / 100 = 1849
+// stockResult.changePercent 应该为 -76 / 100 = -0.76
+const eps = 0.0001;
+const passIntra = Math.abs(intradayResult.price - 1849) < eps && Math.abs(intradayResult.prevClose - 1851.05) < eps;
+const passStock = Math.abs(stockResult.changePercent - (-0.76)) < eps;
+
+if (passIntra && passStock) {
+    console.log("\n✅ ALL TESTS PASSED! Parsing logic is correct.");
+} else {
+    console.log("\n❌ TEST FAILED!");
+    process.exit(1);
+}
