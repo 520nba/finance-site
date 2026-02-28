@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server';
 import { readDoc, writeDoc } from '@/lib/storage';
 
-export const runtime = 'edge';
 
 function todayStr() {
     return new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' });

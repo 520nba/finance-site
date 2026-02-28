@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server';
 import { readDoc, writeDoc } from '@/lib/storage';
 
-export const runtime = 'edge';
 
 const STORAGE_KEY = 'users_config';
 
