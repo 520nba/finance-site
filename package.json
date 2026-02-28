@@ -11,7 +11,6 @@
     "lint": "eslint"
   },
   "dependencies": {
-    "@cloudflare/workerd-windows-64": "^1.20260305.0",
     "@opennextjs/cloudflare": "^1.17.1",
     "clsx": "^2.1.1",
     "echarts": "^6.0.0",
