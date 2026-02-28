@@ -8,6 +8,7 @@
     "preview": "opennextjs-cloudflare build && opennextjs-cloudflare preview",
     "deploy": "opennextjs-cloudflare build && opennextjs-cloudflare deploy",
     "start": "next start",
+    "pages:build": "npx @opennextjs/cloudflare@latest build",
     "lint": "eslint"
   },
   "dependencies": {
