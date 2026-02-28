@@ -6,7 +6,7 @@ import { TrendingUp, PieChart, RefreshCw, X, Eye, Activity } from 'lucide-react'
 import SearchBar from '@/components/SearchBar';
 import AssetCard from '@/components/AssetCard';
 import WatchlistSidebar from '@/components/WatchlistSidebar';
-import { fetchStockData, fetchStockHistory, fetchFundHistory, fetchFundInfo, fetchBulkHistory, fetchBulkStockData, fetchBulkNames, fetchIntradayData } from '@/lib/api';
+import { fetchStockData, fetchStockHistory, fetchFundHistory, fetchFundInfo, fetchBulkHistory, fetchBulkStockData, fetchBulkNames, fetchIntradayData, fetchBulkIntradayData } from '@/lib/api';
 
 // 简单 Toast 状态，避免 alert() 阻断 UI
 function useToast() {
@@ -95,13 +95,8 @@ export default function Home() {
       // 批量获取股票实时价格
       const quoteMap = await fetchBulkStockData(stockItems);
 
-      // 分时暂时依然依顺序获取，后续如果有批量分时接口再优化
-      const intradayMap = {};
-      for (const a of assets) {
-        const data = await fetchIntradayData(a.code, a.type);
-        if (data) intradayMap[a.code] = data;
-        await new Promise(r => setTimeout(r, 100)); // 小幅限流
-      }
+      // 单次请求批量获取所有资产分时数据
+      const intradayMap = await fetchBulkIntradayData(assets);
 
       setAssets(prev => prev.map(a => {
         const q = quoteMap[a.code];
