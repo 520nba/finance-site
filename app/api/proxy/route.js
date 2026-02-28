@@ -8,22 +8,8 @@ function buildHeaders(urlObj) {
         'Accept': '*/*',
     };
     const host = urlObj.hostname;
-    if (host.includes('push2his.eastmoney.com')) {
-        const secid = urlObj.searchParams.get('secid') || '';
-        const [market, code] = secid.split('.');
-        const prefix = market === '1' ? 'sh' : 'sz';
-        const stockPath = code ? `${prefix}${code}` : 'sz000001';
-        headers['Host'] = 'push2his.eastmoney.com';
-        headers['Referer'] = `https://quote.eastmoney.com/${stockPath}.html`;
-    } else if (host.includes('api.fund.eastmoney.com')) {
-        const fundCode = urlObj.searchParams.get('fundCode') || '000001';
-        headers['Referer'] = `https://fundf10.eastmoney.com/jjjz_${fundCode}.html`;
-    } else if (host.includes('eastmoney.com')) {
-        headers['Referer'] = 'https://fund.eastmoney.com/';
-    } else if (host.includes('gtimg.cn')) {
-        headers['Referer'] = 'https://finance.qq.com/';
-    } else if (host.includes('sina.com.cn') || host.includes('1234567.com.cn')) {
-        headers['Referer'] = 'https://finance.sina.com.cn/';
+    if (host.includes('eastmoney.com') || host.includes('1234567.com.cn')) {
+        headers['Referer'] = 'https://quote.eastmoney.com/';
     }
     return headers;
 }
