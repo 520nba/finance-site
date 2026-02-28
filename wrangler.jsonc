@@ -19,8 +19,8 @@
     ],
     "kv_namespaces": [
         {
-            "binding": "STOCK_KV",
-            "id": "e2f75a07c6f043818e6e58f000000000"
+            "binding": "STOCK_DATA",
+            "id": "f7845bb8f6c048f0b658ac01797ced0b"
         }
     ]
 }
