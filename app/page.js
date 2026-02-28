@@ -239,7 +239,7 @@ export default function Home() {
     setIsSyncing(false);
   };
 
-  const filteredAssets = assets.filter(a => activeTab === 'watchlist' ? true : a.type === activeTab);
+  const filteredAssets = assets.filter(a => activeTab === 'watchlist' ? a.type === 'stock' : a.type === activeTab);
 
   const handleSelectAsset = async (code) => {
     if (activeTab === 'watchlist') return; // 实时模式下全量展示，无需单选
