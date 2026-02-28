@@ -7,6 +7,4 @@ pages_build_output_dir = ".vercel/output/static"
 [vars]
 # Add other environment variables here
 
-[[kv_namespaces]]
-binding = "STOCK_KV"
-id = "YOUR_KV_NAMESPACE_ID_HERE"
+
