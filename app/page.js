@@ -192,12 +192,28 @@ export default function Home() {
   const refreshAssets = async (list) => {
     if (!list || list.length === 0) return;
     setIsSyncing(true);
+    // 分段获取历史数据，防止单个超长 Bulk 请求导致 Cloudflare/Vercel 超时
+    const HISTORY_CHUNK_SIZE = 8;
+    const historyChunks = [];
+    for (let i = 0; i < list.length; i += HISTORY_CHUNK_SIZE) {
+      historyChunks.push(list.slice(i, i + HISTORY_CHUNK_SIZE));
+    }
+
     const stockItems = list.filter(a => a.type === 'stock');
-    const [bulkHistoryMap, stockQuoteMap, nameMap] = await Promise.all([
-      fetchBulkHistory(list.map(a => ({ code: a.code, type: a.type }))),
+    const [stockQuoteMap, nameMap] = await Promise.all([
       fetchBulkStockData(stockItems),
       fetchBulkNames(list.map(a => ({ code: a.code, type: a.type }))),
     ]);
+
+    const bulkHistoryMap = {};
+    for (const chunk of historyChunks) {
+      try {
+        const chunkMap = await fetchBulkHistory(chunk.map(a => ({ code: a.code, type: a.type })));
+        Object.assign(bulkHistoryMap, chunkMap);
+      } catch (e) {
+        console.error('[Frontend] History chunk load failed:', e);
+      }
+    }
 
     const results = list.map(({ code, type }) => {
       const histKey = `${type}:${code}`;

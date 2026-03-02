@@ -159,7 +159,7 @@ export async function POST(request) {
     if (toFetch.length > 0) {
         // 在服务端并发拉取历史数据，加入 Chunk 防并发洪峰
         const fetched = [];
-        const CHUNK_SIZE = 6; // 降低批次大小，防止瞬时并发过高导致 500 错误
+        const CHUNK_SIZE = 10;
         for (let i = 0; i < toFetch.length; i += CHUNK_SIZE) {
             const chunk = toFetch.slice(i, i + CHUNK_SIZE);
             const chunkResults = await Promise.all(
