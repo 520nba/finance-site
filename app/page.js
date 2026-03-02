@@ -206,48 +206,57 @@ export default function Home() {
   const refreshAssets = async (list) => {
     if (!list || list.length === 0) return;
     setIsSyncing(true);
-    // 分段获取历史数据，防止单个超长 Bulk 请求导致 Cloudflare/Vercel 超时
-    const HISTORY_CHUNK_SIZE = 8;
-    const historyChunks = [];
-    for (let i = 0; i < list.length; i += HISTORY_CHUNK_SIZE) {
-      historyChunks.push(list.slice(i, i + HISTORY_CHUNK_SIZE));
-    }
 
+    // 1. 获取基础名称与股票实时信息
     const stockItems = list.filter(a => a.type === 'stock');
     const [stockQuoteMap, nameMap] = await Promise.all([
       fetchBulkStockData(stockItems),
       fetchBulkNames(list.map(a => ({ code: a.code, type: a.type }))),
     ]);
 
-    const bulkHistoryMap = {};
+    // 立刻渲染初始无历史的资产卡片 (UI 不会卡死)
+    const initialAssets = list.map(({ code, type }) => {
+      const histKey = `${type}:${code}`;
+      const name = nameMap[histKey];
+      if (type === 'stock') {
+        const q = stockQuoteMap[code];
+        const resolvedName = (q?.name || name) ?? code;
+        return q ? { ...q, name: q.name || resolvedName, code, type, history: [], summary: null }
+          : { name: resolvedName, price: 0, code, type, history: [], summary: null };
+      } else {
+        const resolvedName = name ?? `基金 ${code}`;
+        return { name: resolvedName, price: 0, code, type, history: [], summary: null };
+      }
+    });
+
+    setAssets(initialAssets);
+
+    // 2. 分段获取历史数据，成功一组就更新一组，实现“流式”加载效果
+    const HISTORY_CHUNK_SIZE = 8;
+    const historyChunks = [];
+    for (let i = 0; i < list.length; i += HISTORY_CHUNK_SIZE) {
+      historyChunks.push(list.slice(i, i + HISTORY_CHUNK_SIZE));
+    }
+
     for (const chunk of historyChunks) {
       try {
         const chunkMap = await fetchBulkHistory(chunk.map(a => ({ code: a.code, type: a.type })));
-        Object.assign(bulkHistoryMap, chunkMap);
+        setAssets(prev => prev.map(a => {
+          const histKey = `${a.type}:${a.code}`;
+          if (chunkMap[histKey]) {
+            const histData = chunkMap[histKey];
+            const price = a.type === 'fund' && histData.history && histData.history.length > 0
+              ? histData.history[histData.history.length - 1].value
+              : a.price;
+            return { ...a, history: histData.history, summary: histData.summary, price };
+          }
+          return a;
+        }));
       } catch (e) {
         console.error('[Frontend] History chunk load failed:', e);
       }
     }
 
-    const results = list.map(({ code, type }) => {
-      const histKey = `${type}:${code}`;
-      const historyData = bulkHistoryMap[histKey] || { history: [], summary: { perf5d: 0, perf22d: 0, perf250d: 0 } };
-      const history = historyData.history;
-      const summary = historyData.summary;
-      const name = nameMap[histKey];
-      if (type === 'stock') {
-        const q = stockQuoteMap[code];
-        const resolvedName = (q?.name || name) ?? code;
-        if (!q) return { name: resolvedName, price: 0, code, type, history, summary };
-        return { ...q, name: q.name || resolvedName, code, type, history, summary };
-      } else {
-        const resolvedName = name ?? `基金 ${code}`;
-        const price = history.length > 0 ? history[history.length - 1].value : 0;
-        return { name: resolvedName, price, code, type, history, summary };
-      }
-    });
-
-    setAssets(results);
     setIsSyncing(false);
   };
 
