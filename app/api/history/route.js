@@ -128,6 +128,7 @@ export async function GET(request) {
     const entry = await readDoc(storageKey, null);
 
     if (entry && entry.date === today && Array.isArray(entry.history) && entry.history.length >= days * 0.7) {
+        await addSystemLog('INFO', 'History', `KV Cache Hit: ${code} (${type})`);
         return NextResponse.json({
             history: entry.history,
             summary: calcStats(entry.history)

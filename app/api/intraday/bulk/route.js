@@ -37,6 +37,7 @@ async function fetchSingleIntradayServer(code) {
         // 1. 检查内存缓存 (30秒)
         const cached = INTRADAY_CACHE.get(code);
         if (cached && (now - cached.timestamp < CACHE_TTL)) {
+            await addSystemLog('INFO', 'Intraday', `Memory Cache Hit: ${code}`);
             return cached.data;
         }
 
@@ -47,7 +48,11 @@ async function fetchSingleIntradayServer(code) {
             const isToday = dbData.points[0]?.time?.includes(':') && !dbData.points[0]?.time?.includes('-');
             const updatedAt = dbData.updated_at ? new Date(dbData.updated_at).getTime() : 0;
             if (now - updatedAt < 60000 || !isToday) {
-                if (!isToday) await addSystemLog('INFO', 'Intraday', `Using non-trading day fallback for ${code}`);
+                if (isToday) {
+                    await addSystemLog('INFO', 'Intraday', `DB Cache Hit: ${code} (Fresh)`);
+                } else {
+                    await addSystemLog('INFO', 'Intraday', `Using non-trading day fallback for ${code}`);
+                }
                 return dbData;
             }
         }
@@ -106,6 +111,7 @@ async function fetchSingleIntradayServer(code) {
         };
 
         INTRADAY_CACHE.set(code, { timestamp: now, data: result });
+        await addSystemLog('INFO', 'Intraday', `External Fetch: ${code}`);
 
         // 4. 异步写入 D1 数据库进行持久化缓存
         saveIntradayToDB(code, today, { ...result, updated_at: new Date().toISOString() });

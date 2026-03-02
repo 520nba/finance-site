@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { readDoc, writeDoc } from '@/lib/storage';
+import { readDoc, writeDoc, cleanupOldData, addSystemLog } from '@/lib/storage';
 
 
 const STORAGE_KEY = 'users_config';
@@ -32,6 +32,7 @@ export async function POST(request) {
 
         data[userId] = assets.map(a => ({ code: a.code, type: a.type }));
         await writeDoc(STORAGE_KEY, data);
+        await addSystemLog('INFO', 'Assets', `User ${userId} updated assets (${assets.length} items)`);
 
         // 如果更新后某些代码彻底消失在所有用户的列表中，触发清理
         const newActiveCodes = new Set();
