@@ -1,0 +1,86 @@
+import { NextResponse } from 'next/server';
+import { readDoc, addSystemLog } from '@/lib/storage';
+
+const STORAGE_KEY = 'users_config';
+
+export async function GET(request) {
+    const { searchParams } = new URL(request.url);
+    const token = searchParams.get('token');
+
+    // 简单的安全校验，生产上可通过环境变量提供密钥
+    if (token !== (process.env.CRON_SECRET || 'antigravity_sync')) {
+        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const task = searchParams.get('task') || 'all'; // 'daily', 'intraday', 'all'
+    const protocol = request.headers.get('x-forwarded-proto') || 'http';
+    const host = request.headers.get('host');
+    const baseUrl = `${protocol}://${host}`;
+
+    try {
+        const data = await readDoc(STORAGE_KEY, {});
+        const allItemsMap = new Map();
+
+        // 收集所有用户正在追踪的分时/历史资产
+        Object.values(data).forEach(list => {
+            if (Array.isArray(list)) {
+                list.forEach(a => {
+                    if (a && a.code && a.type) {
+                        const key = `${a.type}:${a.code}`;
+                        if (!allItemsMap.has(key)) {
+                            allItemsMap.set(key, { code: a.code, type: a.type });
+                        }
+                    }
+                });
+            }
+        });
+
+        const itemsToSync = Array.from(allItemsMap.values());
+        if (itemsToSync.length === 0) {
+            return NextResponse.json({ success: true, message: 'No assets to sync' });
+        }
+
+        const runFetch = async (endpoint, payload) => {
+            try {
+                // 向自身的 API 接口发起带 allowExternal: true 的同步请求
+                const res = await fetch(`${baseUrl}${endpoint}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                if (!res.ok) {
+                    throw new Error(`Endpoint returned status ${res.status}`);
+                }
+            } catch (e) {
+                console.error(`Cron sync failed for ${endpoint}:`, e.message);
+            }
+        };
+
+        const promises = [];
+
+        // 每天早上 7 点触发的全局数据同步 (基础信息 + 日K历史)
+        if (task === 'daily' || task === 'all') {
+            await addSystemLog('INFO', 'Cron', `Starting DAILY sync for ${itemsToSync.length} items`);
+            promises.push(runFetch('/api/names/bulk', { items: itemsToSync, allowExternal: true }));
+            promises.push(runFetch('/api/history/bulk', { items: itemsToSync, allowExternal: true, days: 250 }));
+        }
+
+        // 交易日正常交易时间触发的高频同步 (实时股价 + 当日分时)
+        if (task === 'intraday' || task === 'all') {
+            await addSystemLog('INFO', 'Cron', `Starting INTRADAY sync for ${itemsToSync.length} items`);
+            const stocksOnly = itemsToSync.filter(i => i.type === 'stock');
+            if (stocksOnly.length > 0) {
+                promises.push(runFetch('/api/quotes/bulk', { items: stocksOnly, allowExternal: true }));
+            }
+            promises.push(runFetch('/api/intraday/bulk', { items: itemsToSync, allowExternal: true }));
+        }
+
+        // Edge 运行时需阻塞等待并发请求完毕，不能脱机后台执行
+        await Promise.all(promises);
+
+        return NextResponse.json({ success: true, count: itemsToSync.length, task });
+
+    } catch (e) {
+        return NextResponse.json({ error: e.message }, { status: 500 });
+    }
+}

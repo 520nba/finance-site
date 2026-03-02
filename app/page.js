@@ -137,7 +137,7 @@ export default function Home() {
     try {
       if (type === 'fund') {
         const [nameMap, historyRes] = await Promise.all([
-          fetchBulkNames([{ code, type }]),
+          fetchBulkNames([{ code, type }], true),
           fetchFundHistory(code, 250),
         ]);
         const name = nameMap[`${type}:${code}`] ?? `基金 ${code}`;
@@ -154,7 +154,7 @@ export default function Home() {
         const historyData = historyRes || { history: [], summary: { perf5d: 0, perf22d: 0, perf250d: 0 } };
         const history = historyData.history || [];
         const summary = historyData.summary;
-        const nameMap = await fetchBulkNames([{ code, type }]);
+        const nameMap = await fetchBulkNames([{ code, type }], true);
         const name = assetInfo?.name || nameMap[`${type}:${code}`];
         if (name) {
           return { ...assetInfo, name, code, type, history, summary };
@@ -210,6 +210,12 @@ export default function Home() {
     if (!list || list.length === 0) return;
     setIsSyncing(true);
 
+    // 0. 立刻用传入的 list 渲染骨架或占位数据，让用户马上看到列表结构，消除白屏/无数据时的阻塞感。
+    const skeletonAssets = list.map(({ code, type }) => ({
+      name: `加载中...`, price: 0, code, type, history: [], summary: null, changePercent: 0
+    }));
+    setAssets(skeletonAssets);
+
     // 1. 获取基础名称与股票实时信息
     const stockItems = list.filter(a => a.type === 'stock');
     const [stockQuoteMap, nameMap] = await Promise.all([
@@ -217,7 +223,7 @@ export default function Home() {
       fetchBulkNames(list.map(a => ({ code: a.code, type: a.type }))),
     ]);
 
-    // 立刻渲染初始无历史的资产卡片 (UI 不会卡死)
+    // 获取到名称和实时报价后更新 UI
     const initialAssets = list.map(({ code, type }) => {
       const histKey = `${type}:${code}`;
       const name = nameMap[histKey];

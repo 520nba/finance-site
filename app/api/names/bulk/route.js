@@ -19,15 +19,28 @@ function resolveMarket(code) {
 }
 
 /**
+ * 带有超时控制的 fetch 包装
+ */
+async function fetchWithTimeout(url, options = {}, timeoutMs = 5000) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+        const res = await fetch(url, { ...options, signal: controller.signal });
+        return res;
+    } finally {
+        clearTimeout(timeout);
+    }
+}
+
+/**
  * 获取股票名称 — 使用 stock/get (f58)
  */
 async function fetchStockName(code) {
     const clean = code.replace(/^(sh|sz)/i, '');
-    // 尝试两个市场标识符，确保覆盖全
     for (const market of ['0', '1']) {
         try {
             const url = `https://push2.eastmoney.com/api/qt/stock/get?secid=${market}.${clean}&fields=f58`;
-            const res = await fetch(url, { headers: BASE_HEADERS });
+            const res = await fetchWithTimeout(url, { headers: BASE_HEADERS });
             if (!res.ok) continue;
             const json = await res.json();
             if (json.data?.f58) return json.data.f58;
@@ -42,10 +55,9 @@ async function fetchStockName(code) {
 async function fetchFundName(code) {
     try {
         const url = `https://fundgz.1234567.com.cn/js/${code}.js?_=${Date.now()}`;
-        const res = await fetch(url, { headers: BASE_HEADERS });
+        const res = await fetchWithTimeout(url, { headers: BASE_HEADERS });
         if (!res.ok) return null;
 
-        // 天天基金返回的是 GBK 编码，需手动解码
         const arrayBuffer = await res.arrayBuffer();
         const text = new TextDecoder('gbk').decode(arrayBuffer);
 
@@ -55,7 +67,6 @@ async function fetchFundName(code) {
                 const data = JSON.parse(match[1]);
                 return data.name;
             } catch (e) {
-                // 如果 JSON.parse 失败，尝试正则提取
                 const nameMatch = match[1].match(/"name":"([^"]+)"/);
                 if (nameMatch) return nameMatch[1];
             }
@@ -65,7 +76,7 @@ async function fetchFundName(code) {
 }
 
 export async function POST(request) {
-    const { items } = await request.json();
+    const { items, allowExternal = false } = await request.json();
     if (!Array.isArray(items) || items.length === 0) return NextResponse.json({});
 
     const { getCloudflareContext } = await import('@opennextjs/cloudflare');
@@ -93,25 +104,31 @@ export async function POST(request) {
         }
     }
 
-    if (toFetch.length > 0) {
-        const fetched = await Promise.all(toFetch.map(async (item) => {
-            const key = `${item.type}:${item.code}`;
-            let name = null;
+    if (toFetch.length > 0 && allowExternal) {
+        const fetched = [];
+        const CHUNK_SIZE = 10;
+        for (let i = 0; i < toFetch.length; i += CHUNK_SIZE) {
+            const chunk = toFetch.slice(i, i + CHUNK_SIZE);
+            const chunkFetched = await Promise.all(chunk.map(async (item) => {
+                const key = `${item.type}:${item.code}`;
+                let name = null;
 
-            if (item.type === 'fund') {
-                name = await fetchFundName(item.code);
-                if (!name) {
-                    name = await fetchStockName(item.code);
-                }
-            } else {
-                name = await fetchStockName(item.code);
-                if (!name) {
+                if (item.type === 'fund') {
                     name = await fetchFundName(item.code);
+                    if (!name) {
+                        name = await fetchStockName(item.code);
+                    }
+                } else {
+                    name = await fetchStockName(item.code);
+                    if (!name) {
+                        name = await fetchFundName(item.code);
+                    }
                 }
-            }
 
-            return { key, name };
-        }));
+                return { key, name };
+            }));
+            fetched.push(...chunkFetched);
+        }
 
         let newNames = {};
         for (const { key, name } of fetched) {

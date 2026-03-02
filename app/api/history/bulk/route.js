@@ -117,49 +117,66 @@ async function fetchFundHistoryServer(code, days) {
 }
 
 export async function POST(request) {
-    const { items, days = 250 } = await request.json();
-    if (!Array.isArray(items) || items.length === 0) return NextResponse.json({});
+    try {
+        const { items, days = 250, allowExternal = false } = await request.json();
+        if (!Array.isArray(items) || items.length === 0) return NextResponse.json({});
 
-    const today = todayStr();
-    const result = {};
-    const toFetch = [];
-
-    // 并行读取缓存
-    const cacheResults = await Promise.all(items.map(async ({ code, type }) => {
-        const key = `${type}:${code}`;
-        const storageKey = `hist:${type}:${code}`;
-        const entry = await readDoc(storageKey, null);
-        return { key, code, type, entry };
-    }));
-
-    for (const { key, code, type, entry } of cacheResults) {
-        if (entry && Array.isArray(entry.history) && entry.history.length >= days * 0.7) {
-            result[key] = { history: entry.history, summary: calcStats(entry.history) };
-        } else {
-            toFetch.push({ code, type, key });
+        // 初始化
+        const { env } = await getCloudflareContext();
+        if (env?.DB) {
+            await env.DB.prepare(`
+                CREATE TABLE IF NOT EXISTS asset_history (
+                    code TEXT NOT NULL,
+                    type TEXT NOT NULL,
+                    record_date TEXT NOT NULL,
+                    price REAL NOT NULL,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY(code, type, record_date)
+                );
+            `).run();
         }
-    }
 
-    if (toFetch.length > 0) {
-        // 先从 DB 批量尝试获取
-        const dbHistoryMap = await getBulkHistoryFromDB(toFetch, days);
-        const externalFetchList = [];
+        const result = {};
+        const toFetchExternally = [];
 
-        for (const item of toFetch) {
-            const hist = dbHistoryMap[item.key];
-            if (hist && hist.length >= days * 0.7) {
-                result[item.key] = { history: hist, summary: calcStats(hist) };
-            } else {
-                externalFetchList.push(item);
+        // 1. 并发从 D1 获取 DB 数据
+        const dbPromises = items.map(async (item) => {
+            const dbHistory = await getHistoryFromDB(item.code, item.type, days);
+            const key = `${item.type}:${item.code}`;
+
+            if (dbHistory && dbHistory.length > 0) {
+                // 判断 D1 里的数据是否过期 (比如最后一条数据的日期是不是今天/昨天)
+                // 为简便起见，如果 D1 里有足量数据或最近的数据，我们直接使用
+                const latestDateStr = dbHistory[0].date;
+                const latestDate = new Date(latestDateStr);
+                const today = new Date();
+                today.setHours(today.getHours() + 8); // Asia/Shanghai
+                const timeDiff = today.getTime() - latestDate.getTime();
+                const daysDiff = timeDiff / (1000 * 3600 * 24);
+
+                // 如果 allowExternal=false，我们强制使用 DB 数据（不进行过期判断）
+                if (!allowExternal || daysDiff < 2) {
+                    const sortedHistory = [...dbHistory].reverse();
+                    result[key] = {
+                        history: sortedHistory,
+                        summary: calcStats(sortedHistory)
+                    };
+                    return;
+                }
             }
-        }
+            if (allowExternal) {
+                toFetchExternally.push(item);
+            }
+        });
 
-        if (externalFetchList.length > 0) {
-            // 最后才去拉网络，分片保护
+        await Promise.all(dbPromises);
+
+        // 2. 对于 D1 中没有足够数据或数据过期的，尝试从外部 API 获取 (如果 allowExternal 为 true)
+        if (toFetchExternally.length > 0) {
             const CHUNK_SIZE = 4;
             const fetchedList = [];
-            for (let i = 0; i < externalFetchList.length; i += CHUNK_SIZE) {
-                const chunk = externalFetchList.slice(i, i + CHUNK_SIZE);
+            for (let i = 0; i < toFetchExternally.length; i += CHUNK_SIZE) {
+                const chunk = toFetchExternally.slice(i, i + CHUNK_SIZE);
                 const chunkRes = await Promise.all(chunk.map(async (it) => {
                     let history = null;
                     if (it.type === 'stock') history = await fetchStockHistoryServer(it.code, days);
@@ -167,19 +184,20 @@ export async function POST(request) {
                     return { ...it, history, fetchedFromAPI: true };
                 }));
                 fetchedList.push(...chunkRes);
-                if (i + CHUNK_SIZE < externalFetchList.length) await new Promise(r => setTimeout(r, 400));
+                if (i + CHUNK_SIZE < toFetchExternally.length) await new Promise(r => setTimeout(r, 400));
             }
 
             const dbRecords = [];
             for (const item of fetchedList) {
+                const key = `${item.type}:${item.code}`;
                 if (item.history && item.history.length > 0) {
-                    await writeDoc(`hist:${item.type}:${item.code}`, { date: today, history: item.history });
-                    result[item.key] = { history: item.history, summary: calcStats(item.history) };
+                    await writeDoc(`hist:${item.type}:${item.code}`, { date: new Date().toISOString(), history: item.history });
+                    result[key] = { history: item.history, summary: calcStats(item.history) };
                     for (const h of item.history) {
                         dbRecords.push({ code: item.code, type: item.type, price: h.value, date: h.date });
                     }
                 } else {
-                    result[item.key] = { history: [], summary: { perf5d: 0, perf22d: 0, perf250d: 0 } };
+                    result[key] = { history: [], summary: { perf5d: 0, perf22d: 0, perf250d: 0 } };
                 }
             }
 
@@ -187,6 +205,8 @@ export async function POST(request) {
                 await insertDailyPricesBatch(dbRecords);
             }
         }
+        return NextResponse.json(result);
+    } catch (e) {
+        return NextResponse.json({ error: e.message }, { status: 500 });
     }
-    return NextResponse.json(result);
 }

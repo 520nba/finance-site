@@ -125,7 +125,7 @@ async function fetchSingleIntradayServer(code) {
 
 export async function POST(request) {
     try {
-        const { items } = await request.json();
+        const { items, allowExternal = false } = await request.json();
         if (!Array.isArray(items) || items.length === 0) return NextResponse.json({});
 
         const today = todayStr();
@@ -161,7 +161,7 @@ export async function POST(request) {
                 externalFetchList.push(item);
             }
 
-            if (externalFetchList.length > 0) {
+            if (externalFetchList.length > 0 && allowExternal) {
                 // 3. 最后才去拉网络，分片串行以保护 Edge
                 const CHUNK_SIZE = 10;
                 for (let i = 0; i < externalFetchList.length; i += CHUNK_SIZE) {
