@@ -26,7 +26,6 @@ async function fetchSingleIntradayServer(code) {
     try {
         const url = `https://push2.eastmoney.com/api/qt/stock/trends/get?secid=${market}.${clean}&fields1=f1,f2&fields2=f51,f52,f53`;
 
-        // 增加信号超时处理，防止 Node.js fetch 无响应挂起
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), 8000);
 
@@ -46,7 +45,6 @@ async function fetchSingleIntradayServer(code) {
         let points = [];
         let prePrice = (d.prePrice ?? d.preClose ?? 0) / 100;
 
-        // 格式 1: d.trends 是字符串数组 (常规返回)
         if (d.trends && Array.isArray(d.trends)) {
             points = d.trends.map(line => {
                 const parts = line.split(',');
@@ -58,9 +56,7 @@ async function fetchSingleIntradayServer(code) {
                     value: isNaN(val) ? 0 : val / 100
                 };
             }).filter(p => p.value > 0);
-        }
-        // 格式 2: d 本身是对象数组 (部分环境变体)
-        else if (Array.isArray(d)) {
+        } else if (Array.isArray(d)) {
             points = d.map(item => {
                 const val = parseFloat(item.f3);
                 let timeStr = String(item.f2);
@@ -69,10 +65,7 @@ async function fetchSingleIntradayServer(code) {
                     const mm = timeStr.slice(-2);
                     timeStr = `${hh}:${mm}`;
                 }
-                return {
-                    time: timeStr,
-                    value: isNaN(val) ? 0 : val / 100
-                };
+                return { time: timeStr, value: isNaN(val) ? 0 : val / 100 };
             }).filter(p => p.value > 0);
         }
 
@@ -90,7 +83,6 @@ async function fetchSingleIntradayServer(code) {
             points
         };
 
-        // 写入缓存
         INTRADAY_CACHE.set(code, { timestamp: now, data: result });
         return result;
     } catch (e) {
@@ -104,7 +96,23 @@ export async function POST(request) {
         const { items } = await request.json();
         if (!Array.isArray(items) || items.length === 0) return NextResponse.json({});
 
+        const result = {};
+        const CHUNK_SIZE = 15;
 
+        // 分批次并发请求，规避 Workers 子请求并发限制
+        for (let i = 0; i < items.length; i += CHUNK_SIZE) {
+            const chunk = items.slice(i, i + CHUNK_SIZE);
+            const chunkResults = await Promise.all(
+                chunk.map(async (item) => {
+                    const data = await fetchSingleIntradayServer(item.code);
+                    return { code: item.code, data };
+                })
+            );
+
+            for (const { code, data } of chunkResults) {
+                if (data) result[code] = data;
+            }
+        }
 
         return NextResponse.json(result);
     } catch (e) {
