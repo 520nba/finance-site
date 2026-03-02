@@ -26,8 +26,23 @@ export async function POST(request) {
         }
 
         const data = await readDoc(STORAGE_KEY, {});
+        // 记录更新前的所有活跃资产，用于判定是否有人删除了自选
+        const oldActiveCodes = new Set();
+        Object.values(data).forEach(list => list.forEach(a => oldActiveCodes.add(a.code)));
+
         data[userId] = assets.map(a => ({ code: a.code, type: a.type }));
         await writeDoc(STORAGE_KEY, data);
+
+        // 如果更新后某些代码彻底消失在所有用户的列表中，触发清理
+        const newActiveCodes = new Set();
+        Object.values(data).forEach(list => list.forEach(a => newActiveCodes.add(a.code)));
+
+        for (const code of oldActiveCodes) {
+            if (!newActiveCodes.has(code)) {
+                // 该资产已不再被任何人关注，异步执行物理删除
+                import('@/lib/storage').then(m => m.deleteAssetData(code)).catch(() => { });
+            }
+        }
 
         return NextResponse.json({ success: true });
     } catch (e) {

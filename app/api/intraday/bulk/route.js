@@ -1,4 +1,9 @@
 import { NextResponse } from 'next/server';
+import { getIntradayFromDB, saveIntradayToDB } from '@/lib/storage';
+
+function todayStr() {
+    return new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' });
+}
 
 // 全局内存缓存，用于合并高频重复请求 (有效期 30 秒)
 const INTRADAY_CACHE = new Map();
@@ -23,24 +28,40 @@ function resolveMarket(code) {
 
 async function fetchSingleIntradayServer(code) {
     const { market, clean } = resolveMarket(code);
+    const today = todayStr();
+    const now = Date.now();
+
     try {
         const url = `https://push2.eastmoney.com/api/qt/stock/trends/get?secid=${market}.${clean}&fields1=f1,f2&fields2=f51,f52,f53`;
 
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 8000);
-
-        // 检查缓存
-        const now = Date.now();
+        // 1. 检查内存缓存 (30秒)
         const cached = INTRADAY_CACHE.get(code);
         if (cached && (now - cached.timestamp < CACHE_TTL)) {
             return cached.data;
         }
 
+        // 2. 优先尝试从 D1 数据库获取 (有效期 1 分钟)
+        const dbData = await getIntradayFromDB(code, today, true); // 开启 fallbackToLatest
+        if (dbData && dbData.points && dbData.points.length > 0) {
+            // 如果是今天的数据，检查 1 分钟新鲜度
+            const isToday = dbData.points[0]?.time?.includes(':') && !dbData.points[0]?.time?.includes('-');
+            const updatedAt = dbData.updated_at ? new Date(dbData.updated_at).getTime() : 0;
+            if (now - updatedAt < 60000 || !isToday) {
+                return dbData;
+            }
+        }
+
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 8000);
+
         const res = await fetch(url, { headers: BASE_HEADERS, signal: controller.signal }).finally(() => clearTimeout(timeout));
-        if (!res.ok) return null;
+        if (!res.ok) return dbData; // 失败时返回 DB 里的（可能是昨天的）数据
         const json = await res.json();
         const d = json.data;
-        if (!d) return null;
+        if (!d || !d.trends || d.trends.length === 0) {
+            // 如果远程返回空（非交易日），则彻底信任并返回 DB 中的上一个交易日数据
+            return dbData;
+        }
 
         let points = [];
         let prePrice = (d.prePrice ?? d.preClose ?? 0) / 100;
@@ -84,6 +105,10 @@ async function fetchSingleIntradayServer(code) {
         };
 
         INTRADAY_CACHE.set(code, { timestamp: now, data: result });
+
+        // 4. 异步写入 D1 数据库进行持久化缓存
+        saveIntradayToDB(code, today, { ...result, updated_at: new Date().toISOString() });
+
         return result;
     } catch (e) {
         console.error(`[Intraday Bulk] Failed for ${code}:`, e.message);

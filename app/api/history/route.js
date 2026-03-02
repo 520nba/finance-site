@@ -1,5 +1,4 @@
-import { NextResponse } from 'next/server';
-import { readDoc, writeDoc } from '@/lib/storage';
+import { readDoc, writeDoc, getHistoryFromDB, insertDailyPricesBatch } from '@/lib/storage';
 
 function todayStr() {
     return new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' });
@@ -62,23 +61,7 @@ async function fetchStockHistoryServer(code, days) {
 }
 
 async function fetchFundHistoryServer(code, days) {
-    // 方案 A：新浪 K 线（上市 ETF）
-    for (const sinaCode of [`sz${code}`, `sh${code}`]) {
-        try {
-            const url = `https://money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData?symbol=${sinaCode}&scale=240&ma=no&datalen=${days + 10}`;
-            const res = await fetch(url, { headers: { ...BASE_HEADERS, 'Referer': 'https://finance.sina.com.cn/' } });
-            if (!res.ok) continue;
-            const text = await res.text();
-            const cleaned = text.replace(/^\uFEFF/, '').trim();
-            if (!cleaned || cleaned === 'null') continue;
-            const data = parseSinaKlines(JSON.parse(cleaned), days);
-            if (data) return data;
-        } catch (e) {
-            console.warn(`[History] Sina fund ${code} failed:`, e.message);
-        }
-    }
-
-    // 方案 B：东财 lsjz（非上市开放式基金）
+    // 仅抓取东财 lsjz（场外开放式基金历史净值）
     try {
         const probeRes = await fetch(
             `https://api.fund.eastmoney.com/f10/lsjz?fundCode=${code}&pageIndex=1&pageSize=20&_=${Date.now()}`,
@@ -151,10 +134,18 @@ export async function GET(request) {
     }
 
     let history = null;
-    if (type === 'stock') {
-        history = await fetchStockHistoryServer(code, days);
-    } else if (type === 'fund') {
-        history = await fetchFundHistoryServer(code, days);
+    let fetchedFromEastMoney = false;
+
+    // 优先从 DB 获取 (股票和基金通用)
+    history = await getHistoryFromDB(code, type, days);
+
+    if (!history || history.length < days * 0.7) {
+        if (type === 'stock') {
+            history = await fetchStockHistoryServer(code, days);
+        } else if (type === 'fund') {
+            history = await fetchFundHistoryServer(code, days);
+        }
+        fetchedFromEastMoney = true;
     }
 
     if (!history || history.length === 0) {
@@ -162,6 +153,13 @@ export async function GET(request) {
     }
 
     await writeDoc(storageKey, { date: today, history });
+
+    if (fetchedFromEastMoney && history.length > 0) {
+        // 请求回来的数据全量入库 (不再区分股票或基金)
+        const records = history.map(h => ({ code, type, price: h.value, date: h.date }));
+        await insertDailyPricesBatch(records);
+    }
+
     return NextResponse.json({
         history,
         summary: calcStats(history)

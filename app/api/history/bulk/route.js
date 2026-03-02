@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { readDoc, writeDoc, insertDailyPrice, insertDailyPricesBatch } from '@/lib/storage';
+import { readDoc, writeDoc, insertDailyPrice, insertDailyPricesBatch, getHistoryFromDB } from '@/lib/storage';
 
 function todayStr() {
     return new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' });
@@ -62,23 +62,7 @@ async function fetchStockHistoryServer(code, days) {
 }
 
 async function fetchFundHistoryServer(code, days) {
-    // 方案 A：新浪 K 线（上市 ETF）
-    for (const sinaCode of [`sz${code}`, `sh${code}`]) {
-        try {
-            const url = `https://money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData?symbol=${sinaCode}&scale=240&ma=no&datalen=${days + 10}`;
-            const res = await fetch(url, { headers: { ...BASE_HEADERS, 'Referer': 'https://finance.sina.com.cn/' } });
-            if (!res.ok) continue;
-            const text = await res.text();
-            const cleaned = text.replace(/^\uFEFF/, '').trim();
-            if (!cleaned || cleaned === 'null') continue;
-            const data = parseSinaKlines(JSON.parse(cleaned), days);
-            if (data) return data;
-        } catch (e) {
-            console.warn(`[Bulk] Sina fund ${code} failed:`, e.message);
-        }
-    }
-
-    // 方案 B：东财 lsjz（非上市开放式基金）
+    // 仅抓取东财 lsjz（场外开放式基金历史净值）
     try {
         const probeRes = await fetch(
             `https://api.fund.eastmoney.com/f10/lsjz?fundCode=${code}&pageIndex=1&pageSize=20&_=${Date.now()}`,
@@ -170,9 +154,18 @@ export async function POST(request) {
             const chunkResults = await Promise.all(
                 chunk.map(async ({ code, type, key }) => {
                     let history = null;
-                    if (type === 'stock') history = await fetchStockHistoryServer(code, days);
-                    else history = await fetchFundHistoryServer(code, days);
-                    return { key, code, type, history };
+                    let fetchedFromEastMoney = false;
+
+                    // 优先从 DB 获取
+                    history = await getHistoryFromDB(code, type, days);
+
+                    if (!history || history.length < days * 0.7) {
+                        if (type === 'stock') history = await fetchStockHistoryServer(code, days);
+                        else history = await fetchFundHistoryServer(code, days);
+                        fetchedFromEastMoney = true;
+                    }
+
+                    return { key, code, type, history, fetchedFromEastMoney };
                 })
             );
             fetched.push(...chunkResults);
@@ -184,16 +177,19 @@ export async function POST(request) {
 
         const dbRecords = [];
 
-        await Promise.all(fetched.map(async ({ key, history, type, code }) => {
+        await Promise.all(fetched.map(async ({ key, history, type, code, fetchedFromEastMoney }) => {
             if (history && history.length > 0) {
                 const storageKey = `hist:${type}:${code}`;
                 await writeDoc(storageKey, { date: today, history });
                 result[key] = { history, summary: calcStats(history) };
 
-                // 将最新的一条记录（当天数据）加入待写入数组
-                const lastItem = history[history.length - 1];
-                if (lastItem && lastItem.date && lastItem.value) {
-                    dbRecords.push({ code, type, price: lastItem.value, date: lastItem.date });
+                if (fetchedFromEastMoney) {
+                    // 只要是从 API 拉回来的，一律全量入库以便后续 DB-first 命中
+                    for (const h of history) {
+                        if (h.date && h.value) {
+                            dbRecords.push({ code, type, price: h.value, date: h.date });
+                        }
+                    }
                 }
             } else {
                 result[key] = { history: [], summary: { perf5d: 0, perf22d: 0, perf250d: 0 } };
