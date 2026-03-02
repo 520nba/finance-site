@@ -107,18 +107,21 @@ export async function POST(request) {
         const result = {};
 
         // 在服务端并发拉取所需的分时数据，加入 Chunk 防并发洪峰
-        const fetched = [];
         const CHUNK_SIZE = 15;
+        const allChunkPromises = [];
         for (let i = 0; i < items.length; i += CHUNK_SIZE) {
             const chunk = items.slice(i, i + CHUNK_SIZE);
-            const chunkResults = await Promise.all(
-                chunk.map(async (item) => {
-                    const data = await fetchSingleIntradayServer(item.code);
-                    return { code: item.code, data };
-                })
+            allChunkPromises.push(
+                Promise.all(
+                    chunk.map(async (item) => {
+                        const data = await fetchSingleIntradayServer(item.code);
+                        return { code: item.code, data };
+                    })
+                )
             );
-            fetched.push(...chunkResults);
         }
+        const fetchedChunks = await Promise.all(allChunkPromises);
+        const fetched = fetchedChunks.flat();
 
         // 整理返回结果
         for (const { code, data } of fetched) {

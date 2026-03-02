@@ -101,7 +101,7 @@ export default function Home() {
       const quoteMap = await fetchBulkStockData(stockItems);
 
       // 单次请求批量获取所有资产分时数据
-      const intradayMap = await fetchBulkIntradayData(assets);
+      const intradayMap = await fetchBulkIntradayData(assets.map(a => ({ code: a.code, type: a.type })));
 
       setAssets(prev => prev.map(a => {
         const q = quoteMap[a.code];
