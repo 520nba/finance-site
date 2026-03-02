@@ -26,10 +26,9 @@ export default function Home() {
   const [loginInput, setLoginInput] = useState('');
   const [isLogged, setIsLogged] = useState(false);
   const [selectedCode, setSelectedCode] = useState(null);
+  const [isSessionReady, setIsSessionReady] = useState(false);
+  const [loadedUserId, setLoadedUserId] = useState('');
   const { toast, show: showToast } = useToast();
-
-  // 初始化加载完成标志，防止空数组覆盖服务端数据
-  const initialLoadDone = useRef(false);
 
   // 自动恢复登录状态
   useEffect(() => {
@@ -45,7 +44,7 @@ export default function Home() {
     if (!userId) return;
     const load = async () => {
       setIsSyncing(true);
-      initialLoadDone.current = false;
+      setIsSessionReady(false);
       try {
         const res = await fetch(`/api/user/assets?userId=${userId}`);
         const list = await res.json();
@@ -57,7 +56,8 @@ export default function Home() {
       } catch (e) {
         console.error('Failed to load user assets:', e);
       }
-      initialLoadDone.current = true;
+      setIsSessionReady(true);
+      setLoadedUserId(userId);
       setIsSyncing(false);
     };
     load();
@@ -69,9 +69,8 @@ export default function Home() {
 
   // 数据变化后同步到服务端（禁止初始化阶段覆盖）
   useEffect(() => {
-    if (!isLogged || !userId || !initialLoadDone.current) return;
+    if (!isLogged || !userId || !isSessionReady || userId !== loadedUserId) return;
     const sync = async () => {
-      // 提取轻量化的骨架结构供后端 KV 存储，不保存庞大的历史和大图表节点数据
       const skeleton = assets.map(a => ({ code: a.code, type: a.type }));
       try {
         await fetch('/api/user/assets', {
@@ -84,47 +83,37 @@ export default function Home() {
       }
     };
     sync();
-  }, [assetCodesStr, userId, isLogged]); // Only run when asset codes actually change
+  }, [assetCodesStr, userId, isLogged, isSessionReady, loadedUserId]);
 
-  // ---------------------------------------------------------
-  // 实时数据自动轮询 (30秒)
-  // ---------------------------------------------------------
+  // 实时数据自动轮询 (60秒)
   useEffect(() => {
     if (activeTab !== 'watchlist' || !isLogged || assets.length === 0) return;
 
     const tick = async () => {
       if (isSyncing) return;
-
       const stockItems = assets.filter(a => a.type === 'stock');
-
-      // 批量获取股票实时价格
       const quoteMap = await fetchBulkStockData(stockItems);
-
-      // 单次请求批量获取所有资产分时数据
       const intradayMap = await fetchBulkIntradayData(assets.map(a => ({ code: a.code, type: a.type })));
 
       setAssets(prev => prev.map(a => {
         const q = quoteMap[a.code];
         const intra = intradayMap[a.code];
         const newAsset = { ...a };
-
         if (q) {
           newAsset.price = q.price;
           newAsset.changePercent = q.changePercent;
         }
-
         if (intra) {
           newAsset.intraday = intra;
           newAsset.price = intra.price;
           newAsset.changePercent = intra.changePercent;
         }
-
         return newAsset;
       }));
     };
 
-    const timer = setInterval(tick, 60000); // 延长到 60 秒轮询
-    tick(); // 立即执行一次
+    const timer = setInterval(tick, 60000);
+    tick();
     return () => clearInterval(timer);
   }, [activeTab, isLogged, assets.length, isSyncing]);
 
@@ -137,11 +126,8 @@ export default function Home() {
   };
 
   const handleLogout = () => {
-    setIsLogged(false);
-    setUserId('');
-    setAssets([]);
-    initialLoadDone.current = false;
     localStorage.removeItem('tracker_user_id');
+    window.location.reload(); // 强制刷新以彻底清理所有状态
   };
 
   const getAssetDetails = async (code, type) => {
@@ -203,13 +189,10 @@ export default function Home() {
     if (selectedCode === code) setSelectedCode(null);
   };
 
-  // 高性能批量刷新：历史 + 名称 + 实时行情全走批量端点
   const refreshAssets = async (list) => {
     if (!list || list.length === 0) return;
     setIsSyncing(true);
-
     const stockItems = list.filter(a => a.type === 'stock');
-
     const [bulkHistoryMap, stockQuoteMap, nameMap] = await Promise.all([
       fetchBulkHistory(list.map(a => ({ code: a.code, type: a.type }))),
       fetchBulkStockData(stockItems),
@@ -241,17 +224,12 @@ export default function Home() {
   const filteredAssets = assets.filter(a => activeTab === 'watchlist' ? a.type === 'stock' : a.type === activeTab);
 
   const handleSelectAsset = async (code) => {
-    if (activeTab === 'watchlist') return; // 实时模式下全量展示，无需单选
+    if (activeTab === 'watchlist') return;
     setSelectedCode(code);
-    const asset = assets.find(a => a.code === code);
-    if (!asset) return;
-
-    // 非实时模式切换侧边栏时，加载分时作为参考（可选，目前主要是波动率视图）
   };
 
   return (
     <main className="container mx-auto px-4 py-12 max-w-[1400px] min-h-screen">
-      {/* Toast 通知 */}
       <AnimatePresence>
         {toast && (
           <motion.div
@@ -267,9 +245,7 @@ export default function Home() {
         )}
       </AnimatePresence>
 
-
       <div className="flex flex-col lg:flex-row items-center lg:items-start justify-between mb-8 lg:mb-12 gap-6 lg:gap-8">
-        {/* 左侧：标签页切换 */}
         <div className="flex w-full lg:w-auto glass-effect p-1 bg-white/5 border-white/5 flex-shrink-0">
           <button
             onClick={() => setActiveTab('stock')}
@@ -284,21 +260,17 @@ export default function Home() {
             <TrendingUp size={18} /> 基金
           </button>
           <button
-            onClick={() => {
-              setActiveTab('watchlist');
-            }}
+            onClick={() => setActiveTab('watchlist')}
             className={`flex-1 lg:px-8 py-2.5 rounded-lg transition-all flex items-center justify-center lg:justify-start gap-2 font-bold text-sm ${activeTab === 'watchlist' ? 'bg-indigo-600 shadow-lg text-white' : 'hover:bg-white/5 opacity-50'}`}
           >
             <Activity size={18} /> 实时
           </button>
         </div>
 
-        {/* 中间：搜索栏 */}
         <div className="flex-1 w-full lg:max-w-xl">
           <SearchBar onAdd={(code) => addAsset(code, activeTab === 'watchlist' ? 'stock' : activeTab)} />
         </div>
 
-        {/* 右侧：用户状态与同步按钮 */}
         <div className="flex items-center justify-between w-full lg:w-auto gap-4 flex-shrink-0 pt-1">
           <div className="flex items-center gap-4">
             <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-white/5 border border-white/5">
@@ -323,11 +295,10 @@ export default function Home() {
         </div>
       </div>
 
-      {/* Tab 内容区: 所有模式下均显示侧边清单 + 网格聚合视图 */}
       <div className="flex flex-col lg:flex-row gap-6 lg:gap-8 items-start">
-        {/* 自选清单侧边栏 */}
         {isLogged && assets.length > 0 && (
           <WatchlistSidebar
+            key={userId}
             assets={filteredAssets}
             mode={activeTab === 'watchlist' ? 'realtime' : 'volatility'}
             selectedCode={selectedCode}
@@ -335,7 +306,6 @@ export default function Home() {
           />
         )}
 
-        {/* 右侧主内容 */}
         <div className="flex-1 min-w-0 min-h-[400px]">
           <AnimatePresence mode="popLayout">
             {!isLogged ? (
@@ -364,28 +334,30 @@ export default function Home() {
                   </button>
                 </div>
               </motion.div>
-            ) : filteredAssets.length > 0 ? (
-              <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-                {filteredAssets.map(asset => (
-                  <AssetCard
-                    key={asset.code}
-                    asset={asset}
-                    onRemove={removeAsset}
-                    mode={activeTab === 'watchlist' ? 'realtime' : 'volatility'}
-                  />
-                ))}
-              </div>
             ) : (
-              <motion.div
-                key="empty"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                className="text-center py-24 glass-effect border-dashed border-white/5"
-              >
-                <p className="text-white/20 italic tracking-widest">
-                  暂无相关数据，输入代码开启追踪
-                </p>
-              </motion.div>
+              <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+                {filteredAssets.length > 0 ? (
+                  filteredAssets.map(asset => (
+                    <AssetCard
+                      key={asset.code}
+                      asset={asset}
+                      onRemove={removeAsset}
+                      mode={activeTab === 'watchlist' ? 'realtime' : 'volatility'}
+                    />
+                  ))
+                ) : (
+                  <motion.div
+                    key="empty"
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    className="col-span-full text-center py-24 glass-effect border-dashed border-white/5"
+                  >
+                    <p className="text-white/20 italic tracking-widest">
+                      暂无相关数据，输入代码开启追踪
+                    </p>
+                  </motion.div>
+                )}
+              </div>
             )}
           </AnimatePresence>
         </div>
