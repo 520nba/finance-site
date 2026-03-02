@@ -241,7 +241,7 @@ export default function Home() {
     setAssets(initialAssets);
 
     // 2. 分段获取历史数据，成功一组就更新一组，实现“流式”加载效果
-    const HISTORY_CHUNK_SIZE = 12;
+    const HISTORY_CHUNK_SIZE = 30; // 既然纯读数据库，可以将 Chunk 加大以减少往返时间
     const historyChunks = [];
     for (let i = 0; i < list.length; i += HISTORY_CHUNK_SIZE) {
       historyChunks.push(list.slice(i, i + HISTORY_CHUNK_SIZE));
@@ -261,9 +261,8 @@ export default function Home() {
           }
           return a;
         }));
-        // === 核心优化：流式加载节奏控制 ===
-        // 降低延迟，因为后端已经 D1 Batch 优化过，返回极快
-        await new Promise(r => setTimeout(r, 300));
+        // 由于后端全走 D1 Batch 读取，不再有外部阻塞限流问题，不需要人为引入长延迟
+        await new Promise(r => setTimeout(r, 50));
       } catch (e) {
         console.error('[Frontend] History chunk load failed:', e);
       }

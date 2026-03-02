@@ -139,37 +139,36 @@ export async function POST(request) {
         const result = {};
         const toFetchExternally = [];
 
-        // 1. 并发从 D1 获取 DB 数据
-        const dbPromises = items.map(async (item) => {
-            const dbHistory = await getHistoryFromDB(item.code, item.type, days);
+        // 1. 并发从 D1 获取 DB 数据 (使用 Batch)
+        const dbHistoryMap = await getBulkHistoryFromDB(items, days);
+
+        for (const item of items) {
             const key = `${item.type}:${item.code}`;
+            const dbHistory = dbHistoryMap[key];
 
             if (dbHistory && dbHistory.length > 0) {
-                // 判断 D1 里的数据是否过期 (比如最后一条数据的日期是不是今天/昨天)
-                // 为简便起见，如果 D1 里有足量数据或最近的数据，我们直接使用
-                const latestDateStr = dbHistory[0].date;
+                // 判断 D1 里的数据是否过期
+                const latestDateStr = dbHistory[dbHistory.length - 1].date; // 注意 getBulkHistoryFromDB 已经 reverse 返回了，所以最新的是最后一个 (或你需要检查返回的数据格式，假设已经是按日期正序)
+                // 实际上 getBulkHistoryFromDB 返回的是 reverse 后的结果，即正序（最早到最新）。
                 const latestDate = new Date(latestDateStr);
                 const today = new Date();
                 today.setHours(today.getHours() + 8); // Asia/Shanghai
                 const timeDiff = today.getTime() - latestDate.getTime();
                 const daysDiff = timeDiff / (1000 * 3600 * 24);
 
-                // 如果 allowExternal=false，我们强制使用 DB 数据（不进行过期判断）
+                // 如果 allowExternal=false，我们强制使用 DB 数据
                 if (!allowExternal || daysDiff < 2) {
-                    const sortedHistory = [...dbHistory].reverse();
                     result[key] = {
-                        history: sortedHistory,
-                        summary: calcStats(sortedHistory)
+                        history: dbHistory,
+                        summary: calcStats(dbHistory)
                     };
-                    return;
+                    continue;
                 }
             }
             if (allowExternal) {
                 toFetchExternally.push(item);
             }
-        });
-
-        await Promise.all(dbPromises);
+        }
 
         // 2. 对于 D1 中没有足够数据或数据过期的，尝试从外部 API 获取 (如果 allowExternal 为 true)
         if (toFetchExternally.length > 0) {
