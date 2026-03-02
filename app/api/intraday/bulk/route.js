@@ -104,19 +104,7 @@ export async function POST(request) {
         const { items } = await request.json();
         if (!Array.isArray(items) || items.length === 0) return NextResponse.json({});
 
-        const results = await Promise.all(
-            items.map(async (item) => {
-                const data = await fetchSingleIntradayServer(item.code);
-                return { code: item.code, data };
-            })
-        );
 
-        const result = results.reduce((acc, { code, data }) => {
-            if (data) {
-                acc[code] = data;
-            }
-            return acc;
-        }, {});
 
         return NextResponse.json(result);
     } catch (e) {
