@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { readDoc, writeDoc } from '@/lib/storage';
+import { readDoc, writeDoc, getAssetNamesFromDB, saveAssetNamesToDB, addSystemLog } from '@/lib/storage';
 
 
 const STORAGE_KEY = 'names_config';
@@ -68,15 +68,27 @@ export async function POST(request) {
     const { items } = await request.json();
     if (!Array.isArray(items) || items.length === 0) return NextResponse.json({});
 
-    const cache = await readDoc(STORAGE_KEY, {});
-    const result = {};
+    const { getCloudflareContext } = await import('@opennextjs/cloudflare');
+    const { env } = await getCloudflareContext();
+    if (env?.DB) {
+        await env.DB.prepare(`
+            CREATE TABLE IF NOT EXISTS asset_names (
+                code TEXT NOT NULL,
+                type TEXT NOT NULL,
+                name TEXT NOT NULL,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY(code, type)
+            );
+        `).run();
+    }
+
+    // 优先从 DB (D1) 获取
+    const result = await getAssetNamesFromDB(items);
     const toFetch = [];
 
     for (const item of items) {
         const key = `${item.type}:${item.code}`;
-        if (cache[key]) {
-            result[key] = cache[key];
-        } else {
+        if (!result[key]) {
             toFetch.push(item);
         }
     }
@@ -101,15 +113,17 @@ export async function POST(request) {
             return { key, name };
         }));
 
-        let cacheUpdated = false;
+        let newNames = {};
         for (const { key, name } of fetched) {
             if (name) {
                 result[key] = name;
-                cache[key] = name;
-                cacheUpdated = true;
+                newNames[key] = name;
             }
         }
-        if (cacheUpdated) await writeDoc(STORAGE_KEY, cache);
+        if (Object.keys(newNames).length > 0) {
+            await saveAssetNamesToDB(newNames);
+            await addSystemLog('INFO', 'Names', `Cached ${Object.keys(newNames).length} new asset names to DB`);
+        }
     }
 
     // 兜底：未找到名称的返回代码本身

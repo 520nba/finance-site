@@ -25,3 +25,11 @@ CREATE TABLE IF NOT EXISTS system_logs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_logs_timestamp ON system_logs(timestamp);
+
+CREATE TABLE IF NOT EXISTS asset_names (
+    code TEXT NOT NULL,
+    type TEXT NOT NULL,
+    name TEXT NOT NULL,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY(code, type)
+);
