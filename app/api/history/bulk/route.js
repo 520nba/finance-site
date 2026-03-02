@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { readDoc, writeDoc, insertDailyPrice, insertDailyPricesBatch, getHistoryFromDB } from '@/lib/storage';
+import { readDoc, writeDoc, insertDailyPricesBatch, getBulkHistoryFromDB, getHistoryFromDB, addSystemLog } from '@/lib/storage';
 
 function todayStr() {
     return new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' });
@@ -133,10 +133,6 @@ export async function POST(request) {
     }));
 
     for (const { key, code, type, entry } of cacheResults) {
-        // 核心优化：Smart Delta Caching
-        // 如果缓存存在，且数据量及格（>= 70% 的 target days），直接复用！
-        // 哪怕 entry.date 是昨天或者前天，我们也保留这庞大的骨架曲线，不再去 250 天全量并发拉取。
-        // 第 251 个点（今天的实时价格）前端会通过 refreshAssets 里的 fetchBulkStockData 自己补齐，无需后端操心。
         if (entry && Array.isArray(entry.history) && entry.history.length >= days * 0.7) {
             result[key] = { history: entry.history, summary: calcStats(entry.history) };
         } else {
@@ -145,59 +141,51 @@ export async function POST(request) {
     }
 
     if (toFetch.length > 0) {
-        // 在服务端并发拉取历史数据，加入 Chunk 防并发洪峰
-        // 降低并发到 4，增加延迟到 400ms，极大地保护 Edge 与外网的连接池
-        const fetched = [];
-        const CHUNK_SIZE = 4;
-        for (let i = 0; i < toFetch.length; i += CHUNK_SIZE) {
-            const chunk = toFetch.slice(i, i + CHUNK_SIZE);
-            const chunkResults = await Promise.all(
-                chunk.map(async ({ code, type, key }) => {
-                    let history = null;
-                    let fetchedFromEastMoney = false;
+        // 先从 DB 批量尝试获取
+        const dbHistoryMap = await getBulkHistoryFromDB(toFetch, days);
+        const externalFetchList = [];
 
-                    // 优先从 DB 获取
-                    history = await getHistoryFromDB(code, type, days);
-
-                    if (!history || history.length < days * 0.7) {
-                        if (type === 'stock') history = await fetchStockHistoryServer(code, days);
-                        else history = await fetchFundHistoryServer(code, days);
-                        fetchedFromEastMoney = true;
-                    }
-
-                    return { key, code, type, history, fetchedFromEastMoney };
-                })
-            );
-            fetched.push(...chunkResults);
-            // 增加更彻底的处理间隔，保护第三方 API 频率
-            if (i + CHUNK_SIZE < toFetch.length) {
-                await new Promise(r => setTimeout(r, 400));
+        for (const item of toFetch) {
+            const hist = dbHistoryMap[item.key];
+            if (hist && hist.length >= days * 0.7) {
+                result[item.key] = { history: hist, summary: calcStats(hist) };
+            } else {
+                externalFetchList.push(item);
             }
         }
 
-        const dbRecords = [];
-
-        await Promise.all(fetched.map(async ({ key, history, type, code, fetchedFromEastMoney }) => {
-            if (history && history.length > 0) {
-                const storageKey = `hist:${type}:${code}`;
-                await writeDoc(storageKey, { date: today, history });
-                result[key] = { history, summary: calcStats(history) };
-
-                if (fetchedFromEastMoney) {
-                    // 只要是从 API 拉回来的，一律全量入库以便后续 DB-first 命中
-                    for (const h of history) {
-                        if (h.date && h.value) {
-                            dbRecords.push({ code, type, price: h.value, date: h.date });
-                        }
-                    }
-                }
-            } else {
-                result[key] = { history: [], summary: { perf5d: 0, perf22d: 0, perf250d: 0 } };
+        if (externalFetchList.length > 0) {
+            // 最后才去拉网络，分片保护
+            const CHUNK_SIZE = 4;
+            const fetchedList = [];
+            for (let i = 0; i < externalFetchList.length; i += CHUNK_SIZE) {
+                const chunk = externalFetchList.slice(i, i + CHUNK_SIZE);
+                const chunkRes = await Promise.all(chunk.map(async (it) => {
+                    let history = null;
+                    if (it.type === 'stock') history = await fetchStockHistoryServer(it.code, days);
+                    else history = await fetchFundHistoryServer(it.code, days);
+                    return { ...it, history, fetchedFromAPI: true };
+                }));
+                fetchedList.push(...chunkRes);
+                if (i + CHUNK_SIZE < externalFetchList.length) await new Promise(r => setTimeout(r, 400));
             }
-        }));
 
-        if (dbRecords.length > 0) {
-            await insertDailyPricesBatch(dbRecords);
+            const dbRecords = [];
+            for (const item of fetchedList) {
+                if (item.history && item.history.length > 0) {
+                    await writeDoc(`hist:${item.type}:${item.code}`, { date: today, history: item.history });
+                    result[item.key] = { history: item.history, summary: calcStats(item.history) };
+                    for (const h of item.history) {
+                        dbRecords.push({ code: item.code, type: item.type, price: h.value, date: h.date });
+                    }
+                } else {
+                    result[item.key] = { history: [], summary: { perf5d: 0, perf22d: 0, perf250d: 0 } };
+                }
+            }
+
+            if (dbRecords.length > 0) {
+                await insertDailyPricesBatch(dbRecords);
+            }
         }
     }
     return NextResponse.json(result);

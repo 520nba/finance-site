@@ -235,7 +235,7 @@ export default function Home() {
     setAssets(initialAssets);
 
     // 2. 分段获取历史数据，成功一组就更新一组，实现“流式”加载效果
-    const HISTORY_CHUNK_SIZE = 8;
+    const HISTORY_CHUNK_SIZE = 12;
     const historyChunks = [];
     for (let i = 0; i < list.length; i += HISTORY_CHUNK_SIZE) {
       historyChunks.push(list.slice(i, i + HISTORY_CHUNK_SIZE));
@@ -256,9 +256,8 @@ export default function Home() {
           return a;
         }));
         // === 核心优化：流式加载节奏控制 ===
-        // 故意在此处注入微小延迟，等待上一批卡片在 DOM 中成功“解冻”并渲染曲线
-        // 也能极大缓解发往后端的 TCP 并发连接数，避免在 Cloudflare 被限流
-        await new Promise(r => setTimeout(r, 600));
+        // 降低延迟，因为后端已经 D1 Batch 优化过，返回极快
+        await new Promise(r => setTimeout(r, 300));
       } catch (e) {
         console.error('[Frontend] History chunk load failed:', e);
       }

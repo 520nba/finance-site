@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getIntradayFromDB, saveIntradayToDB, addSystemLog } from '@/lib/storage';
+import { getIntradayFromDB, saveIntradayToDB, getBulkIntradayFromDB, addSystemLog } from '@/lib/storage';
 
 function todayStr() {
     return new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' });
@@ -128,27 +128,60 @@ export async function POST(request) {
         const { items } = await request.json();
         if (!Array.isArray(items) || items.length === 0) return NextResponse.json({});
 
+        const today = todayStr();
+        const now = Date.now();
         const result = {};
-        const CHUNK_SIZE = 15;
 
-        // 分批次并发请求，规避 Workers 子请求并发限制
-        for (let i = 0; i < items.length; i += CHUNK_SIZE) {
-            const chunk = items.slice(i, i + CHUNK_SIZE);
-            const chunkResults = await Promise.all(
-                chunk.map(async (item) => {
-                    const data = await fetchSingleIntradayServer(item.code);
-                    return { code: item.code, data };
-                })
-            );
+        // 1. 先过一层内存缓存
+        const toFetchFromPersist = [];
+        for (const item of items) {
+            const cached = INTRADAY_CACHE.get(item.code);
+            if (cached && (now - cached.timestamp < CACHE_TTL)) {
+                result[item.code] = cached.data;
+            } else {
+                toFetchFromPersist.push(item);
+            }
+        }
 
-            for (const { code, data } of chunkResults) {
-                if (data) result[code] = data;
+        if (toFetchFromPersist.length > 0) {
+            // 2. 批量从 D1 获取
+            const dbDataMap = await getBulkIntradayFromDB(toFetchFromPersist, today);
+            const externalFetchList = [];
+
+            for (const item of toFetchFromPersist) {
+                const dbData = dbDataMap[item.code];
+                if (dbData && dbData.points && dbData.points.length > 0) {
+                    const isToday = dbData.points[0]?.time?.includes(':') && !dbData.points[0]?.time?.includes('-');
+                    const updatedAt = dbData.updated_at ? new Date(dbData.updated_at).getTime() : 0;
+                    if (now - updatedAt < 60000 || !isToday) {
+                        result[item.code] = dbData;
+                        continue;
+                    }
+                }
+                externalFetchList.push(item);
+            }
+
+            if (externalFetchList.length > 0) {
+                // 3. 最后才去拉网络，分片串行以保护 Edge
+                const CHUNK_SIZE = 10;
+                for (let i = 0; i < externalFetchList.length; i += CHUNK_SIZE) {
+                    const chunk = externalFetchList.slice(i, i + CHUNK_SIZE);
+                    const chunkResults = await Promise.all(
+                        chunk.map(async (item) => {
+                            const data = await fetchSingleIntradayServer(item.code);
+                            return { code: item.code, data };
+                        })
+                    );
+                    for (const { code, data } of chunkResults) {
+                        if (data) result[code] = data;
+                    }
+                }
             }
         }
 
         return NextResponse.json(result);
     } catch (e) {
-        console.error(`[Intraday Bulk] Error:`, e.message);
         return NextResponse.json({ error: e.message }, { status: 500 });
     }
 }
+
