@@ -166,8 +166,22 @@ export default function Home() {
   const addAsset = async (code, typeHint) => {
     setIsSyncing(true);
     try {
-      const type = (typeHint === 'fund') ? 'fund' : 'stock';
-      const asset = await getAssetDetails(code, type);
+      // 优先根据 typeHint，否则先试 stock 再试 fund
+      let asset = null;
+      if (typeHint) {
+        asset = await getAssetDetails(code, typeHint);
+      } else {
+        // 先假设为股票/ETF
+        asset = await getAssetDetails(code, 'stock');
+        // 如果股票没抓到有效的名称，尝试作为基金抓取
+        if (!asset || !asset.name || asset.name === code) {
+          const fundAsset = await getAssetDetails(code, 'fund');
+          if (fundAsset && fundAsset.name && fundAsset.name !== code) {
+            asset = fundAsset;
+          }
+        }
+      }
+
       if (asset) {
         setAssets(prev => {
           const list = Array.isArray(prev) ? prev : [];

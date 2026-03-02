@@ -22,16 +22,18 @@ function resolveMarket(code) {
  * 获取股票名称 — 使用 stock/get (f58)
  */
 async function fetchStockName(code) {
-    const { market, code: clean } = resolveMarket(code);
-    try {
-        const url = `https://push2.eastmoney.com/api/qt/stock/get?secid=${market}.${clean}&fields=f58`;
-        const res = await fetch(url, { headers: BASE_HEADERS });
-        if (!res.ok) return null;
-        const json = await res.json();
-        return json.data?.f58 || null;
-    } catch (e) {
-        return null;
+    const clean = code.replace(/^(sh|sz)/i, '');
+    // 尝试两个市场标识符，确保覆盖全
+    for (const market of ['0', '1']) {
+        try {
+            const url = `https://push2.eastmoney.com/api/qt/stock/get?secid=${market}.${clean}&fields=f58`;
+            const res = await fetch(url, { headers: BASE_HEADERS });
+            if (!res.ok) continue;
+            const json = await res.json();
+            if (json.data?.f58) return json.data.f58;
+        } catch (e) { }
     }
+    return null;
 }
 
 /**
@@ -42,9 +44,22 @@ async function fetchFundName(code) {
         const url = `https://fundgz.1234567.com.cn/js/${code}.js?_=${Date.now()}`;
         const res = await fetch(url, { headers: BASE_HEADERS });
         if (!res.ok) return null;
-        const text = await res.text();
+
+        // 天天基金返回的是 GBK 编码，需手动解码
+        const arrayBuffer = await res.arrayBuffer();
+        const text = new TextDecoder('gbk').decode(arrayBuffer);
+
         const match = text.match(/jsonpgz\((.+)\)/);
-        if (match) return JSON.parse(match[1]).name;
+        if (match) {
+            try {
+                const data = JSON.parse(match[1]);
+                return data.name;
+            } catch (e) {
+                // 如果 JSON.parse 失败，尝试正则提取
+                const nameMatch = match[1].match(/"name":"([^"]+)"/);
+                if (nameMatch) return nameMatch[1];
+            }
+        }
     } catch (e) { }
     return null;
 }
@@ -72,13 +87,15 @@ export async function POST(request) {
             let name = null;
 
             if (item.type === 'fund') {
-                // 先试天天基金
                 name = await fetchFundName(item.code);
-                // 回退到 stock/get（场内 ETF）
-                if (!name) name = await fetchStockName(item.code);
+                if (!name) {
+                    name = await fetchStockName(item.code);
+                }
             } else {
-                // 股票：直接 stock/get
                 name = await fetchStockName(item.code);
+                if (!name) {
+                    name = await fetchFundName(item.code);
+                }
             }
 
             return { key, name };
