@@ -7,6 +7,7 @@ import SearchBar from '@/components/SearchBar';
 import AssetCard from '@/components/AssetCard';
 import AdminPanel from '@/components/AdminPanel';
 import WatchlistSidebar from '@/components/WatchlistSidebar';
+import LogsModal from '@/components/LogsModal';
 import { fetchStockData, fetchStockHistory, fetchFundHistory, fetchFundInfo, fetchBulkHistory, fetchBulkStockData, fetchBulkNames, fetchIntradayData, fetchBulkIntradayData } from '@/lib/api';
 
 // 简单 Toast 状态，避免 alert() 阻断 UI
@@ -29,6 +30,7 @@ export default function Home() {
   const [selectedCode, setSelectedCode] = useState(null);
   const [isSessionReady, setIsSessionReady] = useState(false);
   const [loadedUserId, setLoadedUserId] = useState('');
+  const [showLogs, setShowLogs] = useState(false);
   const { toast, show: showToast } = useToast();
 
   // 自动恢复登录状态
@@ -328,16 +330,27 @@ export default function Home() {
               退出
             </button>
           </div>
-          <button
-            onClick={() => refreshAssets(assets.map(a => ({ code: a.code, type: a.type })))}
-            disabled={isSyncing}
-            className={`flex items-center gap-2 px-4 py-2 rounded-full border border-white/10 opacity-40 hover:opacity-100 transition-all disabled:cursor-not-allowed ${isSyncing ? 'animate-pulse' : ''}`}
-          >
-            <RefreshCw size={14} className={isSyncing ? 'animate-spin' : ''} />
-            <span className="text-xs font-bold uppercase tracking-widest hidden sm:inline">同步数据</span>
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowLogs(true)}
+              className="flex items-center gap-2 px-4 py-2 rounded-full border border-white/10 opacity-40 hover:opacity-100 transition-all"
+            >
+              <Activity size={14} />
+              <span className="text-xs font-bold uppercase tracking-widest hidden sm:inline">日志</span>
+            </button>
+            <button
+              onClick={() => refreshAssets(assets.map(a => ({ code: a.code, type: a.type })))}
+              disabled={isSyncing}
+              className={`flex items-center gap-2 px-4 py-2 rounded-full border border-white/10 opacity-40 hover:opacity-100 transition-all disabled:cursor-not-allowed ${isSyncing ? 'animate-pulse' : ''}`}
+            >
+              <RefreshCw size={14} className={isSyncing ? 'animate-spin' : ''} />
+              <span className="text-xs font-bold uppercase tracking-widest hidden sm:inline">同步数据</span>
+            </button>
+          </div>
         </div>
       </div>
+
+      <LogsModal isOpen={showLogs} onClose={() => setShowLogs(false)} />
 
       <div className="flex flex-col lg:flex-row gap-6 lg:gap-8 items-start">
         {isLogged && assets.length > 0 && (

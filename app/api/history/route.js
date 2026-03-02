@@ -1,4 +1,5 @@
-import { readDoc, writeDoc, getHistoryFromDB, insertDailyPricesBatch } from '@/lib/storage';
+import { NextResponse } from 'next/server';
+import { readDoc, writeDoc, getHistoryFromDB, insertDailyPricesBatch, addSystemLog } from '@/lib/storage';
 
 function todayStr() {
     return new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' });
@@ -139,13 +140,16 @@ export async function GET(request) {
     // 优先从 DB 获取 (股票和基金通用)
     history = await getHistoryFromDB(code, type, days);
 
-    if (!history || history.length < days * 0.7) {
+    if (history && history.length >= days * 0.7) {
+        addSystemLog('INFO', 'History', `DB Cache Hit: ${code} (${type}), returned ${history.length} points`);
+    } else {
         if (type === 'stock') {
             history = await fetchStockHistoryServer(code, days);
         } else if (type === 'fund') {
             history = await fetchFundHistoryServer(code, days);
         }
         fetchedFromEastMoney = true;
+        addSystemLog('INFO', 'History', `External Fetch: ${code} (${type}) because DB had insufficient data`);
     }
 
     if (!history || history.length === 0) {

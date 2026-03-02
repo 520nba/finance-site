@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getIntradayFromDB, saveIntradayToDB } from '@/lib/storage';
+import { getIntradayFromDB, saveIntradayToDB, addSystemLog } from '@/lib/storage';
 
 function todayStr() {
     return new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' });
@@ -47,6 +47,7 @@ async function fetchSingleIntradayServer(code) {
             const isToday = dbData.points[0]?.time?.includes(':') && !dbData.points[0]?.time?.includes('-');
             const updatedAt = dbData.updated_at ? new Date(dbData.updated_at).getTime() : 0;
             if (now - updatedAt < 60000 || !isToday) {
+                if (!isToday) addSystemLog('INFO', 'Intraday', `Using non-trading day fallback for ${code}`);
                 return dbData;
             }
         }
