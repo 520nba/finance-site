@@ -117,6 +117,8 @@ export default memo(AssetCardComponent, (prev, next) => {
         prev.asset.code === next.asset.code &&
         prev.asset.price === next.asset.price &&
         prev.asset.changePercent === next.asset.changePercent &&
+        // 确保历史数据由无到有时能触发重新渲染
+        prev.asset.history?.length === next.asset.history?.length &&
         // 如果分时最后一个点的 price 相同，大概率无需重载图表
         prev.asset.intraday?.price === next.asset.intraday?.price
     );
