@@ -22,8 +22,9 @@ function calcStats(history) {
     if (!history || history.length < 2) return { perf5d: 0, perf22d: 0, perf250d: 0 };
     const getPerf = (days) => {
         const data = history.slice(-(days + 1));
-        if (data.length < 2) return 0;
-        return ((data[data.length - 1].value / data[0].value) - 1) * 100;
+        if (data.length < 2 || !data[0].value || data[0].value === 0) return 0;
+        const perf = ((data[data.length - 1].value / data[0].value) - 1) * 100;
+        return isNaN(perf) || !isFinite(perf) ? 0 : perf;
     };
     return {
         perf5d: getPerf(5),
@@ -101,7 +102,19 @@ async function fetchFundHistoryServer(code, days) {
                 ).then(r => r.ok ? r.json() : null)
             );
         }
-        const pageResults = await Promise.all(pagePromises);
+        const pageResults = [];
+        // 每 3 个分页一组串行执行，减少瞬时并发
+        const PAGE_BATCH_SIZE = 3;
+        for (let i = 0; i < pagePromises.length; i += PAGE_BATCH_SIZE) {
+            const batch = pagePromises.slice(i, i + PAGE_BATCH_SIZE);
+            const batchRes = await Promise.all(batch);
+            pageResults.push(...batchRes);
+            // 批次间微小停顿
+            if (i + PAGE_BATCH_SIZE < pagePromises.length) {
+                await new Promise(r => setTimeout(r, 50));
+            }
+        }
+
         const allData = [...firstPage];
         for (const result of pageResults) {
             if (result?.Data?.LSJZList) allData.push(...result.Data.LSJZList);
@@ -146,7 +159,7 @@ export async function POST(request) {
     if (toFetch.length > 0) {
         // 在服务端并发拉取历史数据，加入 Chunk 防并发洪峰
         const fetched = [];
-        const CHUNK_SIZE = 15;
+        const CHUNK_SIZE = 6; // 降低批次大小，防止瞬时并发过高导致 500 错误
         for (let i = 0; i < toFetch.length; i += CHUNK_SIZE) {
             const chunk = toFetch.slice(i, i + CHUNK_SIZE);
             const chunkResults = await Promise.all(
@@ -158,6 +171,10 @@ export async function POST(request) {
                 })
             );
             fetched.push(...chunkResults);
+            // 增加一点处理间隔，保护 API 频率
+            if (i + CHUNK_SIZE < toFetch.length) {
+                await new Promise(r => setTimeout(r, 100));
+            }
         }
 
         const dbRecords = [];

@@ -22,8 +22,9 @@ function calcStats(history) {
     if (!history || history.length < 2) return { perf5d: 0, perf22d: 0, perf250d: 0 };
     const getPerf = (days) => {
         const data = history.slice(-(days + 1));
-        if (data.length < 2) return 0;
-        return ((data[data.length - 1].value / data[0].value) - 1) * 100;
+        if (data.length < 2 || !data[0].value || data[0].value === 0) return 0;
+        const perf = ((data[data.length - 1].value / data[0].value) - 1) * 100;
+        return isNaN(perf) || !isFinite(perf) ? 0 : perf;
     };
     return {
         perf5d: getPerf(5),
@@ -101,7 +102,16 @@ async function fetchFundHistoryServer(code, days) {
                 ).then(r => r.ok ? r.json() : null)
             );
         }
-        const pageResults = await Promise.all(pagePromises);
+        const pageResults = [];
+        const PAGE_BATCH_SIZE = 3;
+        for (let i = 0; i < pagePromises.length; i += PAGE_BATCH_SIZE) {
+            const batch = pagePromises.slice(i, i + PAGE_BATCH_SIZE);
+            const batchRes = await Promise.all(batch);
+            pageResults.push(...batchRes);
+            if (i + PAGE_BATCH_SIZE < pagePromises.length) {
+                await new Promise(r => setTimeout(r, 50));
+            }
+        }
         const allData = [...firstPage];
         for (const result of pageResults) {
             if (result?.Data?.LSJZList) allData.push(...result.Data.LSJZList);
