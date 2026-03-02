@@ -149,7 +149,11 @@ export async function POST(request) {
     }));
 
     for (const { key, code, type, entry } of cacheResults) {
-        if (entry && entry.date === today && Array.isArray(entry.history) && entry.history.length >= days * 0.7) {
+        // 核心优化：Smart Delta Caching
+        // 如果缓存存在，且数据量及格（>= 70% 的 target days），直接复用！
+        // 哪怕 entry.date 是昨天或者前天，我们也保留这庞大的骨架曲线，不再去 250 天全量并发拉取。
+        // 第 251 个点（今天的实时价格）前端会通过 refreshAssets 里的 fetchBulkStockData 自己补齐，无需后端操心。
+        if (entry && Array.isArray(entry.history) && entry.history.length >= days * 0.7) {
             result[key] = { history: entry.history, summary: calcStats(entry.history) };
         } else {
             toFetch.push({ code, type, key });
