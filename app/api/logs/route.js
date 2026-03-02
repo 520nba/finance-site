@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getSystemLogs, cleanupOldData } from '@/lib/storage';
+import { getSystemLogs, cleanupOldData, addSystemLog } from '@/lib/storage';
 
 export async function GET(request) {
     try {
@@ -36,7 +36,11 @@ export async function GET(request) {
                     PRIMARY KEY(code, record_date)
                 );
             `).run();
+            // 只有第一次初始化时才可能需要这些，但为了保险，确保插入一条初始化日志
+            await addSystemLog('INFO', 'System', 'D1 Tables initialized or checked from API');
         }
+
+        await addSystemLog('INFO', 'System', `Logs accessed (Filter: ${hours}h)`);
 
         const logs = await getSystemLogs(hours);
 

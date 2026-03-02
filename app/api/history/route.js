@@ -141,7 +141,7 @@ export async function GET(request) {
     history = await getHistoryFromDB(code, type, days);
 
     if (history && history.length >= days * 0.7) {
-        addSystemLog('INFO', 'History', `DB Cache Hit: ${code} (${type}), returned ${history.length} points`);
+        await addSystemLog('INFO', 'History', `DB Cache Hit: ${code} (${type}), returned ${history.length} points`);
     } else {
         if (type === 'stock') {
             history = await fetchStockHistoryServer(code, days);
@@ -149,7 +149,7 @@ export async function GET(request) {
             history = await fetchFundHistoryServer(code, days);
         }
         fetchedFromEastMoney = true;
-        addSystemLog('INFO', 'History', `External Fetch: ${code} (${type}) because DB had insufficient data`);
+        await addSystemLog('INFO', 'History', `External Fetch: ${code} (${type}) because DB had insufficient data`);
     }
 
     if (!history || history.length === 0) {

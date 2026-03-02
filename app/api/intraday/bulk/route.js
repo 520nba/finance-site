@@ -47,7 +47,7 @@ async function fetchSingleIntradayServer(code) {
             const isToday = dbData.points[0]?.time?.includes(':') && !dbData.points[0]?.time?.includes('-');
             const updatedAt = dbData.updated_at ? new Date(dbData.updated_at).getTime() : 0;
             if (now - updatedAt < 60000 || !isToday) {
-                if (!isToday) addSystemLog('INFO', 'Intraday', `Using non-trading day fallback for ${code}`);
+                if (!isToday) await addSystemLog('INFO', 'Intraday', `Using non-trading day fallback for ${code}`);
                 return dbData;
             }
         }

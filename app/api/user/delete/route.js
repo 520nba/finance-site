@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { readDoc, writeDoc, cleanupOldData } from '@/lib/storage';
+import { readDoc, writeDoc, cleanupOldData, addSystemLog } from '@/lib/storage';
 
 const STORAGE_KEY = 'users_config';
 
@@ -22,6 +22,7 @@ export async function POST(request) {
             // 1. 从配置中移除该用户
             delete data[targetUserId];
             await writeDoc(STORAGE_KEY, data);
+            await addSystemLog('WARN', 'Admin', `User ${targetUserId} deleted by admin`);
 
             // 2. 触发全局清理动作
             // 这将遍历所有剩余用户的资产，并删除 DB 中不再被引用的历史/分时数据
