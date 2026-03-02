@@ -109,11 +109,13 @@ function AssetCardComponent({ asset, onRemove, mode = 'volatility' }) {
                             </div>
                         </div>
                     </div>
-                    <IntradayChart
-                        data={asset.intraday?.points}
-                        prevClose={asset.intraday?.prevClose || asset.price}
-                        height={320}
-                    />
+                    <LazyChart height={320}>
+                        <IntradayChart
+                            data={asset.intraday?.points}
+                            prevClose={asset.intraday?.prevClose || asset.price}
+                            height={320}
+                        />
+                    </LazyChart>
                 </div>
             ) : (
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-8">

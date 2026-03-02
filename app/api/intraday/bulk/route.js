@@ -1,5 +1,9 @@
 import { NextResponse } from 'next/server';
 
+// 全局内存缓存，用于合并高频重复请求 (有效期 30 秒)
+const INTRADAY_CACHE = new Map();
+const CACHE_TTL = 30 * 1000;
+
 const BASE_HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     'Accept': '*/*',
@@ -25,6 +29,13 @@ async function fetchSingleIntradayServer(code) {
         // 增加信号超时处理，防止 Node.js fetch 无响应挂起
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), 8000);
+
+        // 检查缓存
+        const now = Date.now();
+        const cached = INTRADAY_CACHE.get(code);
+        if (cached && (now - cached.timestamp < CACHE_TTL)) {
+            return cached.data;
+        }
 
         const res = await fetch(url, { headers: BASE_HEADERS, signal: controller.signal }).finally(() => clearTimeout(timeout));
         if (!res.ok) return null;
@@ -69,15 +80,19 @@ async function fetchSingleIntradayServer(code) {
 
         const lastPrice = points[points.length - 1].value;
         const effectivePrevClose = prePrice || points[0].value;
-        const changePercent = effectivePrevClose > 0 ? (lastPrice / effectivePrevClose - 1) : 0;
+        const changePercent = effectivePrevClose > 0 ? ((lastPrice / effectivePrevClose - 1) * 100) : 0;
 
-        return {
+        const result = {
             code,
             price: lastPrice,
             changePercent,
             prevClose: effectivePrevClose,
             points
         };
+
+        // 写入缓存
+        INTRADAY_CACHE.set(code, { timestamp: now, data: result });
+        return result;
     } catch (e) {
         console.error(`[Intraday Bulk] Failed for ${code}:`, e.message);
         return null;
