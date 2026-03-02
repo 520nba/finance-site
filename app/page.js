@@ -252,6 +252,10 @@ export default function Home() {
           }
           return a;
         }));
+        // === 核心优化：流式加载节奏控制 ===
+        // 故意在此处注入微小延迟，等待上一批卡片在 DOM 中成功“解冻”并渲染曲线
+        // 也能极大缓解发往后端的 TCP 并发连接数，避免在 Cloudflare 被限流
+        await new Promise(r => setTimeout(r, 600));
       } catch (e) {
         console.error('[Frontend] History chunk load failed:', e);
       }

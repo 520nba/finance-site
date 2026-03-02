@@ -158,8 +158,9 @@ export async function POST(request) {
 
     if (toFetch.length > 0) {
         // 在服务端并发拉取历史数据，加入 Chunk 防并发洪峰
+        // 降低并发到 4，增加延迟到 400ms，极大地保护 Edge 与外网的连接池
         const fetched = [];
-        const CHUNK_SIZE = 10;
+        const CHUNK_SIZE = 4;
         for (let i = 0; i < toFetch.length; i += CHUNK_SIZE) {
             const chunk = toFetch.slice(i, i + CHUNK_SIZE);
             const chunkResults = await Promise.all(
@@ -171,9 +172,9 @@ export async function POST(request) {
                 })
             );
             fetched.push(...chunkResults);
-            // 增加一点处理间隔，保护 API 频率
+            // 增加更彻底的处理间隔，保护第三方 API 频率
             if (i + CHUNK_SIZE < toFetch.length) {
-                await new Promise(r => setTimeout(r, 100));
+                await new Promise(r => setTimeout(r, 400));
             }
         }
 
