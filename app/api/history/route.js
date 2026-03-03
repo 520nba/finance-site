@@ -12,10 +12,14 @@ const BASE_HEADERS = {
 };
 
 function resolveMarket(code) {
-    const lower = code.toLowerCase();
-    if (lower.startsWith('sh')) return { prefix: 'sh', clean: code.substring(2) };
-    if (lower.startsWith('sz')) return { prefix: 'sz', clean: code.substring(2) };
-    return { prefix: (code.startsWith('6') || code.startsWith('5')) ? 'sh' : 'sz', clean: code };
+    const match = code.match(/^([a-zA-Z]{2})(\d+)$/i);
+    let prefix = '';
+    let clean = code;
+    if (match) {
+        prefix = match[1].toLowerCase();
+        clean = match[2];
+    }
+    return { prefix, clean };
 }
 
 function calcStats(history) {
@@ -46,12 +50,11 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 5000) {
 
 async function fetchStockHistoryServer(code, days) {
     const { prefix, clean } = resolveMarket(code);
-    const candidates = prefix === 'sh' ? ['1', '0'] : ['0', '1'];
-    for (const mkt of candidates) {
-        try {
-            const url = `https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=${mkt}.${clean}&fields1=f1,f2&fields2=f51,f53&klt=101&fqt=1&end=20500101&lmt=${days + 5}`;
-            const res = await fetchWithTimeout(url, { headers: { ...BASE_HEADERS, 'Referer': 'https://quote.eastmoney.com/' } }, 4000);
-            if (!res.ok) continue;
+    const mkt = prefix === 'sz' ? '0' : '1'; // sz为0，其他为1（sh等）
+    try {
+        const url = `https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=${mkt}.${clean}&fields1=f1,f2&fields2=f51,f53&klt=101&fqt=1&end=20500101&lmt=${days + 5}`;
+        const res = await fetchWithTimeout(url, { headers: { ...BASE_HEADERS, 'Referer': 'https://quote.eastmoney.com/' } }, 4000);
+        if (res.ok) {
             const d = await res.json();
             if (d.data && d.data.klines) {
                 const data = d.data.klines.map(line => {
@@ -60,9 +63,9 @@ async function fetchStockHistoryServer(code, days) {
                 }).filter(i => !isNaN(i.value));
                 if (data.length > 0) return data.slice(-days);
             }
-        } catch (e) {
-            console.warn(`[History] EastMoney stock ${code} failed on market ${mkt}:`, e.message);
         }
+    } catch (e) {
+        console.warn(`[History] EastMoney stock ${code} failed:`, e.message);
     }
     return null;
 }

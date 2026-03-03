@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { Search, Plus, ListPlus, ChevronUp, Loader2 } from 'lucide-react';
 
-const CODE_REGEX = /^\d{6}$/;
+const CODE_REGEX = /^([a-zA-Z]{2})?\d{6}$/i;
 
 // 解析批量输入：逗号/空格/换行/顿号 分隔，过滤无效代码，去重
 function parseCodes(raw) {
@@ -30,7 +30,7 @@ export default function SearchBar({ onAdd }) {
         if (!code) return;
 
         if (!CODE_REGEX.test(code)) {
-            setError('请输入正确的 6 位数字代码（如 600028 或 110011）');
+            setError('请输入正确的代码（如 SH600028、SZ000001 或基金代码 110011）');
             return;
         }
 
@@ -45,7 +45,7 @@ export default function SearchBar({ onAdd }) {
     const handleBatch = async () => {
         const { valid, invalid } = parseCodes(batchInput);
         if (valid.length === 0) {
-            setBatchProgress({ done: 0, total: 0, msg: '未检测到有效的 6 位代码', isError: true });
+            setBatchProgress({ done: 0, total: 0, msg: '未检测到有效的代码', isError: true });
             return;
         }
 
@@ -83,7 +83,7 @@ export default function SearchBar({ onAdd }) {
                             type="text"
                             value={query}
                             onChange={(e) => { setQuery(e.target.value); setError(''); }}
-                            placeholder="输入代码 (如 000001、600028、110011)"
+                            placeholder="输入代码 (如 SZ000001、SH600028、110011)"
                             className={`w-full glass-effect bg-white/5 pl-12 pr-4 py-3 outline-none transition-all
                                 ${error ? 'border-red-500/60 focus:border-red-500' : 'border-white/10 focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/50'}`}
                         />
@@ -122,7 +122,7 @@ export default function SearchBar({ onAdd }) {
                         rows={3}
                         value={batchInput}
                         onChange={(e) => { setBatchInput(e.target.value); setBatchProgress(null); }}
-                        placeholder={"600036, 000001\n012831 024423\n110011"}
+                        placeholder={"SH600036, SZ000001\\n012831 024423\\n110011"}
                         disabled={batchProgress && !batchProgress.isDone}
                         className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 outline-none resize-none font-mono text-sm focus:border-cyan-500/50 transition-all disabled:opacity-40"
                     />

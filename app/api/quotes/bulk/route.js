@@ -7,16 +7,7 @@ const BASE_HEADERS = {
     'Referer': 'https://quote.eastmoney.com/'
 };
 
-function resolveMarket(code) {
-    const clean = code.replace(/^(sh|sz)/i, '');
-    let market = '1'; // 默认 SH
-    if (code.toLowerCase().startsWith('sz')) {
-        market = '0';
-    } else if (!code.toLowerCase().startsWith('sh')) {
-        market = (clean.startsWith('6') || clean.startsWith('5')) ? '1' : '0';
-    }
-    return { market, clean };
-}
+// 移除 resolveMarket，强制用户传前缀
 
 // 🚀 使用腾讯财经 API 批量获取行情 (极速且支持大量代码单次请求)
 async function fetchExternalBulkQuotes(stocks) {
@@ -26,11 +17,7 @@ async function fetchExternalBulkQuotes(stocks) {
 
     for (let i = 0; i < stocks.length; i += CHUNK_SIZE) {
         const chunk = stocks.slice(i, i + CHUNK_SIZE);
-        const q_params = chunk.map(code => {
-            const clean = code.replace(/^(sh|sz)/i, '');
-            const prefix = (clean.startsWith('6') || clean.startsWith('5') || clean.startsWith('11') || clean.startsWith('51')) ? 'sh' : 'sz';
-            return `${prefix}${clean}`;
-        }).join(',');
+        const q_params = chunk.map(code => code.toLowerCase()).join(',');
 
         try {
             const url = `https://qt.gtimg.cn/q=${q_params}`;

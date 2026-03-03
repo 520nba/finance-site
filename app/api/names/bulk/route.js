@@ -10,13 +10,7 @@ const BASE_HEADERS = {
     'Referer': 'https://quote.eastmoney.com/',
 };
 
-function resolveMarket(code) {
-    const clean = code.replace(/^(sh|sz)/i, '');
-    if (code.toLowerCase().startsWith('sh')) return { market: '1', code: clean };
-    if (code.toLowerCase().startsWith('sz')) return { market: '0', code: clean };
-    const prefix = (clean.startsWith('6') || clean.startsWith('5')) ? '1' : '0';
-    return { market: prefix, code: clean };
-}
+// remove unused resolveMarket
 
 /**
  * 带有超时控制的 fetch 包装
@@ -36,17 +30,23 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 5000) {
  * 获取股票名称 — 使用 stock/get (f58)
  */
 async function fetchStockName(code) {
-    const clean = code.replace(/^(sh|sz)/i, '');
-    for (const market of ['0', '1']) {
-        try {
-            const url = `https://push2.eastmoney.com/api/qt/stock/get?secid=${market}.${clean}&fields=f58`;
-            const res = await fetchWithTimeout(url, { headers: BASE_HEADERS });
-            if (!res.ok) continue;
+    const match = code.match(/^([a-zA-Z]{2})(\d+)$/i);
+    let clean = code;
+    let market = '1';
+    if (match) {
+        const prefix = match[1].toLowerCase();
+        clean = match[2];
+        if (prefix === 'sz') market = '0';
+    }
+    try {
+        const url = `https://push2.eastmoney.com/api/qt/stock/get?secid=${market}.${clean}&fields=f58`;
+        const res = await fetchWithTimeout(url, { headers: BASE_HEADERS });
+        if (res.ok) {
             const json = await res.json();
             if (json.data?.f58) return json.data.f58;
-        } catch (e) {
-            console.error(`[fetchStockName] Error fetching ${code} at market ${market}:`, e.message);
         }
+    } catch (e) {
+        console.error(`[fetchStockName] Error fetching ${code}:`, e.message);
     }
     return null;
 }

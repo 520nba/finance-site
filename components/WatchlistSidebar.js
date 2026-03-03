@@ -1,11 +1,13 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { ChevronDown, ChevronUp, ChevronsUpDown } from 'lucide-react';
 import { calculatePerformance } from '@/lib/utils';
+import { fetchBulkHistory } from '@/lib/api';
 
 // 从历史数据计算最终涨跌幅（单个数字）
 function lastPerf(history, days) {
+    if (!history || history.length === 0) return null;
     const curve = calculatePerformance(history, days);
     if (curve.length === 0) return null;
     return curve[curve.length - 1].performance;
@@ -37,6 +39,22 @@ function SortIcon({ colKey, sortKey, sortDesc }) {
 export default function WatchlistSidebar({ assets, mode = 'volatility', selectedCode, onSelect }) {
     const [sortKey, setSortKey] = useState('d5');
     const [sortDesc, setSortDesc] = useState(true);
+    const [statsData, setStatsData] = useState({});
+
+    // 每次 assets 变化或进入 volatility 模式时，批量拉取服务端 KV 缓存 (极速响应，不请求外部)
+    useEffect(() => {
+        if (mode !== 'volatility' || assets.length === 0) return;
+        const itemsToFetch = assets.map(a => ({ code: a.code, type: a.type }));
+        fetchBulkHistory(itemsToFetch, false).then(res => {
+            const newStats = {};
+            for (const key in res) {
+                if (res[key]?.summary) {
+                    newStats[key] = res[key].summary;
+                }
+            }
+            setStatsData(prev => ({ ...prev, ...newStats }));
+        }).catch(e => console.error("Sidebar bulk fetch failed:", e));
+    }, [assets, mode]);
 
     const handleSort = (key) => {
         if (sortKey === key) {
@@ -47,16 +65,18 @@ export default function WatchlistSidebar({ assets, mode = 'volatility', selected
         }
     };
 
-    // 预计算每个资产的涨跌幅，避免重复计算
+    // 预计算每个资产的涨跌幅，优先使用缓存的 summary
     const rows = useMemo(() => assets.map(asset => {
+        const key = `${asset.type}:${asset.code}`;
+        const summary = statsData[key] || asset.summary;
         const h = asset.history ?? [];
         return {
             ...asset,
-            d5: lastPerf(h, 5),
-            d22: lastPerf(h, 22),
-            d250: lastPerf(h, 250),
+            d5: summary?.perf5d ?? lastPerf(h, 5),
+            d22: summary?.perf22d ?? lastPerf(h, 22),
+            d250: summary?.perf250d ?? lastPerf(h, 250),
         };
-    }), [assets]);
+    }), [assets, statsData]);
 
     // 排序：null 值排最后
     const sorted = useMemo(() => {
