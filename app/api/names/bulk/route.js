@@ -60,8 +60,7 @@ async function fetchFundName(code) {
         const res = await fetchWithTimeout(url, { headers: BASE_HEADERS });
         if (!res.ok) return null;
 
-        const arrayBuffer = await res.arrayBuffer();
-        const text = new TextDecoder('gbk').decode(arrayBuffer);
+        const text = await res.text();
 
         const match = text.match(/jsonpgz\((.+)\)/);
         if (match) {
