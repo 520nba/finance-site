@@ -18,43 +18,47 @@ function resolveMarket(code) {
     return { market, clean };
 }
 
-// 模拟之前 lib/api.js 里的 external fetch
+// 🚀 使用腾讯财经 API 批量获取行情 (极速且支持大量代码单次请求)
 async function fetchExternalBulkQuotes(stocks) {
     if (stocks.length === 0) return {};
     const result = {};
-    const CHUNK_SIZE = 20;
+    const CHUNK_SIZE = 50; // 腾讯 API 支持极长 URL
 
     for (let i = 0; i < stocks.length; i += CHUNK_SIZE) {
         const chunk = stocks.slice(i, i + CHUNK_SIZE);
-        const secids = chunk.map(code => {
-            const { market, clean } = resolveMarket(code);
-            return `${market}.${clean}`;
+        const q_params = chunk.map(code => {
+            const clean = code.replace(/^(sh|sz)/i, '');
+            const prefix = (clean.startsWith('6') || clean.startsWith('5') || clean.startsWith('11') || clean.startsWith('51')) ? 'sh' : 'sz';
+            return `${prefix}${clean}`;
         }).join(',');
 
         try {
-            const url = `https://push2.eastmoney.com/api/qt/ulist.np/get?secids=${secids}&fields=f12,f14,f2,f3,f15,f16,f17,f18`;
-            const controller = new AbortController();
-            const timeout = setTimeout(() => controller.abort(), 8000);
-            const res = await fetch(url, { headers: BASE_HEADERS, signal: controller.signal }).finally(() => clearTimeout(timeout));
+            const url = `https://qt.gtimg.cn/q=${q_params}`;
+            const res = await fetch(url, { headers: { 'Referer': 'https://gu.qq.com/' } });
             if (!res.ok) continue;
 
-            const json = await res.json();
-            if (json.data && json.data.diff) {
-                for (const item of json.data.diff) {
-                    if (!item || !item.f12) continue;
-                    const code = item.f12;
-                    result[code] = {
-                        name: item.f14,
-                        code: code,
-                        price: (item.f2 !== undefined && item.f2 !== '-') ? item.f2 / 100 : 0,
-                        change: (item.f16 !== undefined && item.f16 !== '-') ? item.f16 / 100 : 0,
-                        changePercent: (item.f3 !== undefined && item.f3 !== '-') ? item.f3 / 100 : 0,
-                        prevClose: (item.f18 !== undefined && item.f18 !== '-') ? item.f18 / 100 : 0
-                    };
-                }
+            // 腾讯 API 返回的是 GBK 编码字符串，但在 Cloudflare 环境直接解码通常可用
+            const text = await res.text();
+            const lines = text.split(';').filter(l => l.trim());
+
+            for (const line of lines) {
+                const match = line.match(/v_([^=]+)="([^"]+)"/);
+                if (!match) continue;
+                const data = match[2].split('~');
+                if (data.length < 6) continue;
+
+                const code = data[2];
+                result[code] = {
+                    name: data[1],
+                    code: code,
+                    price: parseFloat(data[3]) || 0,
+                    change: parseFloat(data[31]) || 0,
+                    changePercent: parseFloat(data[32]) || 0,
+                    prevClose: parseFloat(data[4]) || 0
+                };
             }
         } catch (e) {
-            console.error(`[API] fetchExternalBulkQuotes chunk failed:`, e.message);
+            console.error(`[API] Tencent Fetch failed:`, e.message);
         }
     }
     return result;

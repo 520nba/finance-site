@@ -78,21 +78,7 @@ async function fetchFundName(code) {
 export async function syncNamesBulk(items, allowExternal = false) {
     if (!Array.isArray(items) || items.length === 0) return {};
 
-    const { getCloudflareContext } = await import('@opennextjs/cloudflare');
-    const { env } = await getCloudflareContext();
-    if (env?.DB) {
-        await env.DB.prepare(`
-            CREATE TABLE IF NOT EXISTS asset_names (
-                code TEXT NOT NULL,
-                type TEXT NOT NULL,
-                name TEXT NOT NULL,
-                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                PRIMARY KEY(code, type)
-            );
-        `).run();
-    }
-
-    // 优先从 DB (D1) 获取
+    // 优先从 KV 获取
     const result = await getAssetNamesFromDB(items);
     const toFetch = [];
 
