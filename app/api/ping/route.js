@@ -1,10 +1,9 @@
-import { getCloudflareContext } from "@opennextjs/cloudflare";
-
 export async function GET() {
     let hasKv = false;
     try {
+        const { getCloudflareContext } = await import("@opennextjs/cloudflare");
         const { env } = await getCloudflareContext();
-        hasKv = !!env?.STOCK_KV;
+        hasKv = !!env?.STOCK_DATA;
     } catch { }
 
     return new Response(JSON.stringify({

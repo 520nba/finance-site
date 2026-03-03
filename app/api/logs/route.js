@@ -12,8 +12,6 @@ export async function GET(request) {
             cleanupOldData().catch(() => { });
         }
 
-        const { getCloudflareContext } = await import('@opennextjs/cloudflare');
-
         await addSystemLog('INFO', 'System', `Logs accessed (Filter: ${hours}h)`);
 
         const logs = await getSystemLogs(hours);

@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server';
-import { getCloudflareContext } from "@opennextjs/cloudflare";
 
 export const runtime = 'edge';
 
@@ -10,32 +9,34 @@ export async function GET() {
     };
 
     try {
-        const ctx = await getCloudflareContext();
-        debugInfo.hasContext = !!ctx;
-        debugInfo.hasEnv = !!ctx?.env;
-
-        if (ctx?.env) {
-            debugInfo.envKeys = Object.keys(ctx.env);
-            debugInfo.hasKV = !!ctx.env.STOCK_DATA;
-            debugInfo.kvType = typeof ctx.env.STOCK_DATA;
+        // 动态导入，避免顶层导入失败
+        let CF;
+        try {
+            CF = await import("@opennextjs/cloudflare");
+            debugInfo.libraryLoaded = true;
+        } catch (e) {
+            debugInfo.libraryError = e.message;
         }
 
-        // 尝试读取一个测试键
-        if (ctx?.env?.STOCK_DATA) {
-            try {
-                // 使用 get 或 list 来测试连通性
-                const testVal = await ctx.env.STOCK_DATA.get('users_index');
-                debugInfo.readIndex = !!testVal;
-            } catch (e) {
-                debugInfo.readError = e.message;
+        if (CF?.getCloudflareContext) {
+            const ctx = await CF.getCloudflareContext();
+            debugInfo.hasContext = !!ctx;
+            if (ctx?.env) {
+                debugInfo.envKeys = Object.keys(ctx.env);
+                debugInfo.hasKV = !!ctx.env.STOCK_DATA;
             }
         }
 
-        debugInfo.status = 'success';
+        // 备选：检查全局 process.env
+        if (typeof process !== 'undefined' && process.env) {
+            debugInfo.hasProcessEnv = true;
+            debugInfo.processEnvKeys = Object.keys(process.env);
+        }
+
         return NextResponse.json(debugInfo);
     } catch (e) {
         return NextResponse.json({
-            status: 'error',
+            status: 'fatal',
             error: e.message,
             stack: e.stack,
             partialInfo: debugInfo
