@@ -106,7 +106,7 @@ export default function Home() {
       const quoteMap = await fetchBulkStockData(stockItems);
 
       setAssets(prev => prev.map(a => {
-        const q = quoteMap[a.code];
+        const q = quoteMap[a.code.toLowerCase()] || quoteMap[a.code];
         const newAsset = { ...a };
         if (q) {
           newAsset.price = q.price;
@@ -144,7 +144,7 @@ export default function Home() {
 
       if (type === 'stock') {
         const quoteMap = await fetchBulkStockData([{ code, type }], true);
-        const q = quoteMap[code];
+        const q = quoteMap[code.toLowerCase()] || quoteMap[code];
         return { ...q, name: q?.name || name, code, type };
       }
       return { name, price: 0, code, type };
@@ -154,8 +154,9 @@ export default function Home() {
     return null;
   };
 
-  const addAsset = async (code, typeHint) => {
+  const addAsset = async (rawCode, typeHint) => {
     setIsSyncing(true);
+    const code = rawCode.trim().toLowerCase();
     try {
       if (typeHint === 'stock' || activeTab === 'watchlist') {
         if (!/^[a-zA-Z]{2}\d{6}$/i.test(code)) {
@@ -218,10 +219,11 @@ export default function Home() {
         const histKey = `${type}:${code}`;
         const name = nameMap[histKey];
         if (type === 'stock') {
-          const q = stockQuoteMap[code];
-          return { ...q, name: q?.name || name || `股票 ${code}`, code, type };
+          const q = stockQuoteMap[code.toLowerCase()] || stockQuoteMap[code];
+          const resolvedName = q?.name || (name && name !== code ? name : `股票 ${code}`);
+          return { ...q, name: resolvedName, code, type };
         } else {
-          return { name: name || `基金 ${code}`, price: 0, code, type };
+          return { name: (name && name !== code ? name : `基金 ${code}`), price: 0, code, type };
         }
       });
 
