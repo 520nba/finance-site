@@ -136,12 +136,10 @@ export default function Home() {
 
   const getAssetDetails = async (code, type) => {
     try {
-      // 获取名称（带强制抓取逻辑）
+      // 获取名称
       const nameMap = await fetchBulkNames([{ code, type }], true);
       const name = nameMap[`${type}:${code}`] ?? (type === 'fund' ? `基金 ${code}` : `股票 ${code}`);
 
-      // 触发一次历史数据后端同步（不等待其全部返回大 JSON，只需确保后端抓取并保存）
-      // 传入 allowExternal: true 满足用户“强制抓取”需求
       fetchBulkHistory([{ code, type }], true, 250).catch(() => { });
 
       if (type === 'stock') {
@@ -159,21 +157,21 @@ export default function Home() {
   const addAsset = async (code, typeHint) => {
     setIsSyncing(true);
     try {
-      // 优先根据 typeHint，否则先试 stock 再试 fund
-      let asset = null;
-      if (typeHint) {
-        asset = await getAssetDetails(code, typeHint);
-      } else {
-        // 先假设为股票/ETF
-        asset = await getAssetDetails(code, 'stock');
-        // 如果股票没抓到有效的名称，尝试作为基金抓取
-        if (!asset || !asset.name || asset.name === code) {
-          const fundAsset = await getAssetDetails(code, 'fund');
-          if (fundAsset && fundAsset.name && fundAsset.name !== code) {
-            asset = fundAsset;
-          }
+      if (typeHint === 'stock' || activeTab === 'watchlist') {
+        if (!/^[a-zA-Z]{2}\d{6}$/i.test(code)) {
+          showToast('股票代码必须包含市场前缀 (如 sh600036、sz000001)');
+          setIsSyncing(false);
+          return;
+        }
+      } else if (typeHint === 'fund') {
+        if (!/^\d{6}$/.test(code)) {
+          showToast('基金代码必须为 6 位纯数字');
+          setIsSyncing(false);
+          return;
         }
       }
+
+      const asset = await getAssetDetails(code, typeHint);
 
       if (asset) {
         setAssets(prev => {
@@ -195,6 +193,8 @@ export default function Home() {
     setAssets(prev => prev.filter(a => a.code !== code));
     if (selectedCode === code) setSelectedCode(null);
   };
+
+
 
   const refreshAssets = async (list) => {
     if (!list || list.length === 0) return;
@@ -219,11 +219,9 @@ export default function Home() {
         const name = nameMap[histKey];
         if (type === 'stock') {
           const q = stockQuoteMap[code];
-          const resolvedName = (q?.name || name) ?? code;
-          return q ? { ...q, name: resolvedName, code, type }
-            : { name: resolvedName, price: 0, code, type };
+          return { ...q, name: q?.name || name || `股票 ${code}`, code, type };
         } else {
-          return { name: name ?? `基金 ${code}`, price: 0, code, type };
+          return { name: name || `基金 ${code}`, price: 0, code, type };
         }
       });
 

@@ -135,14 +135,8 @@ export async function syncNamesBulk(items, allowExternal = false) {
 
                 if (item.type === 'fund') {
                     name = await fetchFundName(item.code);
-                    if (!name) {
-                        name = await fetchStockName(item.code);
-                    }
                 } else {
                     name = await fetchStockName(item.code);
-                    if (!name) {
-                        name = await fetchFundName(item.code);
-                    }
                 }
 
                 return { key, name };

@@ -24,7 +24,6 @@ async function fetchExternalBulkQuotes(stocks) {
             const res = await fetch(url, { headers: { 'Referer': 'https://gu.qq.com/' } });
             if (!res.ok) continue;
 
-            // 修复：腾讯 API 返回的是 GBK 编码，避免 Cloudflare 环境下 res.text() 乱码
             const arrayBuffer = await res.arrayBuffer();
             const text = new TextDecoder('gbk').decode(arrayBuffer);
             const lines = text.split(';').filter(l => l.trim());
