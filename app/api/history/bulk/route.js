@@ -33,40 +33,46 @@ function calcStats(history) {
     };
 }
 
-function parseSinaKlines(jsonData, days) {
-    if (!Array.isArray(jsonData)) return null;
-    const result = jsonData
-        .map(item => ({ date: item.day, value: parseFloat(item.close) }))
-        .filter(i => i.date && !isNaN(i.value));
-    return result.length > 0 ? result.slice(-days) : null;
+async function fetchWithTimeout(url, options = {}, timeoutMs = 5000) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+        const res = await fetch(url, { ...options, signal: controller.signal });
+        return res;
+    } finally {
+        clearTimeout(timeout);
+    }
 }
 
 async function fetchStockHistoryServer(code, days) {
     const { prefix, clean } = resolveMarket(code);
-    const candidates = [`${prefix}${clean}`, `${prefix === 'sh' ? 'sz' : 'sh'}${clean}`];
-    for (const sinaCode of candidates) {
+    const candidates = prefix === 'sh' ? ['1', '0'] : ['0', '1'];
+    for (const mkt of candidates) {
         try {
-            const url = `https://money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData?symbol=${sinaCode}&scale=240&ma=no&datalen=${days + 10}`;
-            const res = await fetch(url, { headers: { ...BASE_HEADERS, 'Referer': 'https://finance.sina.com.cn/' } });
+            const url = `https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=${mkt}.${clean}&fields1=f1,f2&fields2=f51,f53&klt=101&fqt=1&end=20500101&lmt=${days + 5}`;
+            const res = await fetchWithTimeout(url, { headers: { ...BASE_HEADERS, 'Referer': 'https://quote.eastmoney.com/' } }, 4000);
             if (!res.ok) continue;
-            const text = await res.text();
-            const cleaned = text.replace(/^\uFEFF/, '').trim();
-            if (!cleaned || cleaned === 'null') continue;
-            const data = parseSinaKlines(JSON.parse(cleaned), days);
-            if (data) return data;
+            const d = await res.json();
+            if (d.data && d.data.klines) {
+                const data = d.data.klines.map(line => {
+                    const parts = line.split(',');
+                    return { date: parts[0], value: parseFloat(parts[1]) };
+                }).filter(i => !isNaN(i.value));
+                if (data.length > 0) return data.slice(-days);
+            }
         } catch (e) {
-            console.warn(`[Bulk] Sina stock ${code} failed:`, e.message);
+            console.warn(`[Bulk] EastMoney stock ${code} failed on market ${mkt}:`, e.message);
         }
     }
     return null;
 }
 
 async function fetchFundHistoryServer(code, days) {
-    // 仅抓取东财 lsjz（场外开放式基金历史净值）
     try {
-        const probeRes = await fetch(
+        const probeRes = await fetchWithTimeout(
             `https://api.fund.eastmoney.com/f10/lsjz?fundCode=${code}&pageIndex=1&pageSize=20&_=${Date.now()}`,
-            { headers: { ...BASE_HEADERS, 'Referer': `http://fundf10.eastmoney.com/jjjz_${code}.html` } }
+            { headers: { ...BASE_HEADERS, 'Referer': `http://fundf10.eastmoney.com/` } },
+            4000
         );
         if (!probeRes.ok) throw new Error(`probe ${probeRes.status}`);
         const probeData = await probeRes.json();
@@ -80,23 +86,20 @@ async function fetchFundHistoryServer(code, days) {
         const pagePromises = [];
         for (let page = 2; page <= pagesNeeded; page++) {
             pagePromises.push(
-                () => fetch(
+                () => fetchWithTimeout(
                     `https://api.fund.eastmoney.com/f10/lsjz?fundCode=${code}&pageIndex=${page}&pageSize=20&_=${Date.now()}`,
-                    { headers: { ...BASE_HEADERS, 'Referer': `http://fundf10.eastmoney.com/jjjz_${code}.html` } }
-                ).then(r => r.ok ? r.json() : null)
+                    { headers: { ...BASE_HEADERS, 'Referer': `http://fundf10.eastmoney.com/` } },
+                    3000
+                ).then(r => r.ok ? r.json() : null).catch(() => null)
             );
         }
+
         const pageResults = [];
-        // 每 3 个分页一组串行执行，减少瞬时并发
-        const PAGE_BATCH_SIZE = 3;
+        const PAGE_BATCH_SIZE = 6;
         for (let i = 0; i < pagePromises.length; i += PAGE_BATCH_SIZE) {
             const batch = pagePromises.slice(i, i + PAGE_BATCH_SIZE);
             const batchRes = await Promise.all(batch.map(fn => fn()));
             pageResults.push(...batchRes);
-            // 批次间微小停顿
-            if (i + PAGE_BATCH_SIZE < pagePromises.length) {
-                await new Promise(r => setTimeout(r, 50));
-            }
         }
 
         const allData = [...firstPage];
@@ -155,7 +158,7 @@ export async function syncHistoryBulk(items, days = 250, allowExternal = false) 
 
     // 2. 对于 KV 缓存中没有足够数据或数据过期的，尝试从外部 API 获取 (如果 allowExternal 为 true)
     if (toFetchExternally.length > 0) {
-        const CHUNK_SIZE = 4;
+        const CHUNK_SIZE = 8;
         const fetchedList = [];
         for (let i = 0; i < toFetchExternally.length; i += CHUNK_SIZE) {
             const chunk = toFetchExternally.slice(i, i + CHUNK_SIZE);
@@ -166,7 +169,7 @@ export async function syncHistoryBulk(items, days = 250, allowExternal = false) 
                 return { ...it, history, fetchedFromAPI: true };
             }));
             fetchedList.push(...chunkRes);
-            if (i + CHUNK_SIZE < toFetchExternally.length) await new Promise(r => setTimeout(r, 400));
+            if (i + CHUNK_SIZE < toFetchExternally.length) await new Promise(r => setTimeout(r, 100));
         }
 
         const dbRecords = [];
