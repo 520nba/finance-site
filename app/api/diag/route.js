@@ -1,36 +1,28 @@
 import { NextResponse } from 'next/server';
 
-export const runtime = 'edge';
-
 export async function GET() {
     let debugInfo = {
         status: 'init',
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+        runtime: typeof process !== 'undefined' ? process.env.NEXT_RUNTIME : 'unknown'
     };
 
     try {
-        // 动态导入，避免顶层导入失败
-        let CF;
-        try {
-            CF = await import("@opennextjs/cloudflare");
-            debugInfo.libraryLoaded = true;
-        } catch (e) {
-            debugInfo.libraryError = e.message;
-        }
+        const { getCloudflareContext } = await import("@opennextjs/cloudflare");
+        debugInfo.libraryLoaded = true;
 
-        if (CF?.getCloudflareContext) {
-            const ctx = await CF.getCloudflareContext();
-            debugInfo.hasContext = !!ctx;
-            if (ctx?.env) {
-                debugInfo.envKeys = Object.keys(ctx.env);
-                debugInfo.hasKV = !!ctx.env.STOCK_DATA;
-            }
+        const ctx = await getCloudflareContext();
+        debugInfo.hasContext = !!ctx;
+        if (ctx?.env) {
+            debugInfo.envKeys = Object.keys(ctx.env);
+            debugInfo.hasKV = !!ctx.env.STOCK_DATA;
         }
 
         // 备选：检查全局 process.env
         if (typeof process !== 'undefined' && process.env) {
             debugInfo.hasProcessEnv = true;
             debugInfo.processEnvKeys = Object.keys(process.env);
+            if (process.env.STOCK_DATA) debugInfo.kvInProcessEnv = true;
         }
 
         return NextResponse.json(debugInfo);
