@@ -6,7 +6,7 @@ pages_build_output_dir = ".open-next"
 
 [assets]
 directory = ".open-next/assets"
-binding = "ASSETS"
+# Remove reserved 'ASSETS' binding as it's automatically handled by Pages
 
 [[kv_namespaces]]
 binding = "STOCK_DATA"
