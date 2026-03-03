@@ -74,17 +74,27 @@ export async function syncQuotesBulk(items, allowExternal = false) {
         return dbResult;
     }
 
-    // 2. 否则，对于缺失的数据，进行外部补全（通常发生在添加新股票时）
-    const missingCodes = codes.filter(code => !dbResult[code]);
-    if (missingCodes.length > 0) {
-        const externalData = await fetchExternalBulkQuotes(missingCodes);
-        if (Object.keys(externalData).length > 0) {
-            await saveQuotesToDB(externalData);
-            await addSystemLog('INFO', 'Quotes', `Fetched & cached ${Object.keys(externalData).length} new quotes to DB`);
+    // 2. 否则，对于缺失或过期的数据，进行外部补全
+    const now = Date.now();
+    const toFetch = codes.filter(code => {
+        if (!dbResult[code]) return true;
+        // 如果数据超过 1 分钟，且允许外部访问，则认为已过期
+        const updatedAt = dbResult[code].updated_at ? new Date(dbResult[code].updated_at).getTime() : 0;
+        return now - updatedAt > 60000;
+    });
 
+    if (toFetch.length > 0) {
+        const externalData = await fetchExternalBulkQuotes(toFetch);
+        if (Object.keys(externalData).length > 0) {
+            const timeStr = new Date().toISOString();
+            const dataToSave = {};
             for (const [k, v] of Object.entries(externalData)) {
-                dbResult[k] = v;
+                const enriched = { ...v, updated_at: timeStr };
+                dataToSave[k] = enriched;
+                dbResult[k] = enriched;
             }
+            await saveQuotesToDB(dataToSave);
+            await addSystemLog('INFO', 'Quotes', `Synced ${Object.keys(externalData).length} quotes (including staleness refresh)`);
         }
     }
 

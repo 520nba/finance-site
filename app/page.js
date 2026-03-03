@@ -203,8 +203,8 @@ export default function Home() {
     try {
       const stockItems = list.filter(a => a.type === 'stock');
       const [stockQuoteMap, nameMap] = await Promise.all([
-        fetchBulkStockData(stockItems),
-        fetchBulkNames(list.map(a => ({ code: a.code, type: a.type }))),
+        fetchBulkStockData(stockItems, true),
+        fetchBulkNames(list.map(a => ({ code: a.code, type: a.type })), true),
       ]);
 
       const initialAssets = list.map(({ code, type }) => {
