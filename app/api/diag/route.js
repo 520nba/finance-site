@@ -1,26 +1,44 @@
 import { NextResponse } from 'next/server';
-import { getCloudflareContext } from "@opennextjs/cloudflare";
+import { getRequestContext } from "@opennextjs/cloudflare";
 
 export const runtime = 'edge';
 
 export async function GET() {
-    try {
-        const context = await getCloudflareContext();
-        const hasKV = !!context?.env?.STOCK_DATA;
-        const envKeys = context?.env ? Object.keys(context.env) : [];
+    let debugInfo = {
+        status: 'init',
+        timestamp: new Date().toISOString()
+    };
 
-        return NextResponse.json({
-            status: 'ok',
-            hasKV,
-            envKeys,
-            runtime: typeof EdgeRuntime !== 'undefined' ? 'edge' : 'node',
-            timestamp: new Date().toISOString()
-        });
+    try {
+        const context = getRequestContext();
+        debugInfo.hasContext = !!context;
+        debugInfo.hasEnv = !!context?.env;
+
+        if (context?.env) {
+            debugInfo.envKeys = Object.keys(context.env);
+            debugInfo.hasKV = !!context.env.STOCK_DATA;
+            debugInfo.kvType = typeof context.env.STOCK_DATA;
+        }
+
+        // 尝试读取一个测试键
+        if (context?.env?.STOCK_DATA) {
+            try {
+                const testVal = await context.env.STOCK_DATA.get('users_config');
+                debugInfo.readTest = !!testVal;
+                debugInfo.readTestLength = testVal?.length || 0;
+            } catch (e) {
+                debugInfo.readError = e.message;
+            }
+        }
+
+        debugInfo.status = 'success';
+        return NextResponse.json(debugInfo);
     } catch (e) {
         return NextResponse.json({
             status: 'error',
-            message: e.message,
-            stack: e.stack
-        }, { status: 500 });
+            error: e.message,
+            stack: e.stack,
+            partialInfo: debugInfo
+        }, { status: 200 }); // 返回 200 以防 Next.js 拦截 500
     }
 }
