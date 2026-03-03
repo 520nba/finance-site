@@ -16,20 +16,35 @@ export async function POST(request) {
             return NextResponse.json({ error: 'Invalid target user' }, { status: 400 });
         }
 
-        const data = await readDoc(STORAGE_KEY, {});
+        const globalData = await readDoc(STORAGE_KEY, {});
+        const userKey = `user:assets:${targetUserId}`;
+        let exists = false;
 
-        if (data[targetUserId]) {
-            // 1. 从配置中移除该用户
-            delete data[targetUserId];
-            await writeDoc(STORAGE_KEY, data);
+        // 1. 从旧全量配置中移除
+        if (globalData[targetUserId]) {
+            delete globalData[targetUserId];
+            await writeDoc(STORAGE_KEY, globalData);
+            exists = true;
+        }
+
+        // 2. 删除独立键
+        // 这里我们尝试读取一遍来确认是否存在（因为 KV 没有 exists 检查）
+        const independentData = await readDoc(userKey, null);
+        if (independentData) {
+            // 我们不真的调用 deleteDoc (目前没这封装)，而是写入空来模拟或直接清理
+            // 这里为了彻底，我们直接调用 kv.delete
+            import('@/lib/storage').then(async m => {
+                const kv = await m.getKvStorage();
+                if (kv) await kv.delete(userKey);
+            }).catch(() => { });
+            exists = true;
+        }
+
+        if (exists) {
             await addSystemLog('WARN', 'Admin', `User ${targetUserId} deleted by admin`);
-
-            // 2. 触发全局清理动作
-            // 这将遍历所有剩余用户的资产，并删除 KV 中不再被引用的历史/分时数据
-            // 由于 cleanupOldData 已经是异步且带耗时的，我们在这里异步执行
+            // 3. 触发全局清理动作
             cleanupOldData().catch(e => console.error('[Admin] Cleanup failed:', e));
-
-            return NextResponse.json({ success: true, message: `User ${targetUserId} and orphaned data removed.` });
+            return NextResponse.json({ success: true, message: `User ${targetUserId} and their data removed.` });
         } else {
             return NextResponse.json({ error: 'User not found' }, { status: 404 });
         }

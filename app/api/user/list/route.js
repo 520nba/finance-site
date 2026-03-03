@@ -12,8 +12,11 @@ export async function GET(request) {
         return NextResponse.json({ error: 'Unauthorized' }, { status: 403 });
     }
 
-    const data = await readDoc(STORAGE_KEY, {});
-    const userIds = Object.keys(data).filter(id => id !== 'admin'); // 排除 admin 自己
+    const INDEX_KEY = 'users_index';
+    const userIds = await readDoc(INDEX_KEY, []);
 
-    return NextResponse.json(userIds);
+    // 排除 admin
+    const filtered = userIds.filter(id => id !== 'admin');
+
+    return NextResponse.json(filtered);
 }

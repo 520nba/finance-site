@@ -22,21 +22,27 @@ export async function GET(request) {
     const baseUrl = `${protocol}://${host}`;
 
     try {
-        const data = await readDoc(STORAGE_KEY, {});
+        const INDEX_KEY = 'users_index';
+        const userIds = await readDoc(INDEX_KEY, []);
         const allItemsMap = new Map();
 
-        // 收集所有用户正在追踪的分时/历史资产
-        Object.values(data).forEach(list => {
-            if (Array.isArray(list)) {
-                list.forEach(a => {
-                    if (a && a.code && a.type) {
-                        const key = `${a.type}:${a.code}`;
-                        if (!allItemsMap.has(key)) {
-                            allItemsMap.set(key, { code: a.code, type: a.type });
-                        }
+        // 并发读取每个用户的资产列表
+        const userAssetLists = await Promise.all(userIds.map(async (userId) => {
+            const userKey = `user:assets:${userId}`;
+            const assets = await readDoc(userKey, []);
+            return Array.isArray(assets) ? assets : [];
+        }));
+
+        // 汇总所有资产
+        userAssetLists.forEach(list => {
+            list.forEach(a => {
+                if (a && a.code && a.type) {
+                    const key = `${a.type}:${a.code}`;
+                    if (!allItemsMap.has(key)) {
+                        allItemsMap.set(key, { code: a.code, type: a.type });
                     }
-                });
-            }
+                }
+            });
         });
 
         const itemsToSync = Array.from(allItemsMap.values());

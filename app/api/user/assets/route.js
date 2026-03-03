@@ -2,7 +2,8 @@ import { NextResponse } from 'next/server';
 import { readDoc, writeDoc, cleanupOldData, addSystemLog } from '@/lib/storage';
 
 
-const STORAGE_KEY = 'users_config';
+const LEGACY_STORAGE_KEY = 'users_config';
+const INDEX_KEY = 'users_index';
 
 export async function GET(request) {
     const { searchParams } = new URL(request.url);
@@ -12,8 +13,31 @@ export async function GET(request) {
         return NextResponse.json({ error: 'Missing userId' }, { status: 400 });
     }
 
-    const data = await readDoc(STORAGE_KEY, {});
-    const userAssets = data[userId] || [];
+    // 1. 尝试读取独立键 (新格式)
+    const userKey = `user:assets:${userId}`;
+    let userAssets = await readDoc(userKey, null);
+
+    // 2. 如果不存在，尝试从全量配置迁移 (旧格式)
+    if (!userAssets) {
+        const globalData = await readDoc(LEGACY_STORAGE_KEY, {});
+        userAssets = globalData[userId];
+        if (userAssets) {
+            // 自动触发迁移回填
+            await writeDoc(userKey, userAssets);
+
+            // 同时也把 ID 加入索引
+            const index = await readDoc(INDEX_KEY, []);
+            if (!index.includes(userId)) {
+                index.push(userId);
+                await writeDoc(INDEX_KEY, index);
+            }
+
+            await addSystemLog('INFO', 'Assets', `Migrated assets for user ${userId} to independent key`);
+        } else {
+            userAssets = [];
+        }
+    }
+
     return NextResponse.json(userAssets);
 }
 
@@ -25,25 +49,20 @@ export async function POST(request) {
             return NextResponse.json({ error: 'Missing userId' }, { status: 400 });
         }
 
-        const data = await readDoc(STORAGE_KEY, {});
-        // 记录更新前的所有活跃资产，用于判定是否有人删除了自选
-        const oldActiveCodes = new Set();
-        Object.values(data).forEach(list => list.forEach(a => oldActiveCodes.add(a.code)));
+        // 直接写入用户独立键，避免竞争冒险
+        const userKey = `user:assets:${userId}`;
+        const cleanAssets = assets.map(a => ({ code: a.code.toLowerCase(), type: a.type }));
 
-        data[userId] = assets.map(a => ({ code: a.code, type: a.type }));
-        await writeDoc(STORAGE_KEY, data);
-        await addSystemLog('INFO', 'Assets', `User ${userId} updated assets (${assets.length} items)`);
+        await writeDoc(userKey, cleanAssets);
 
-        // 如果更新后某些代码彻底消失在所有用户的列表中，触发清理
-        const newActiveCodes = new Set();
-        Object.values(data).forEach(list => list.forEach(a => newActiveCodes.add(a.code)));
-
-        for (const code of oldActiveCodes) {
-            if (!newActiveCodes.has(code)) {
-                // 该资产已不再被任何人关注，异步执行物理删除
-                import('@/lib/storage').then(m => m.deleteAssetData(code)).catch(() => { });
-            }
+        // 更新用户索引
+        const index = await readDoc(INDEX_KEY, []);
+        if (!index.includes(userId)) {
+            index.push(userId);
+            await writeDoc(INDEX_KEY, index);
         }
+
+        await addSystemLog('INFO', 'Assets', `User ${userId} updated assets (${assets.length} items) via independent key`);
 
         return NextResponse.json({ success: true });
     } catch (e) {
