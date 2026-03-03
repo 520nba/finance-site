@@ -55,27 +55,55 @@ async function fetchStockName(code) {
  * 获取场外基金名称 — 使用天天基金 JSONP
  */
 async function fetchFundName(code) {
+    // 方案1: 天天基金 JSONP (GBK 编码，需要手动解码)
     try {
         const url = `https://fundgz.1234567.com.cn/js/${code}.js?_=${Date.now()}`;
         const res = await fetchWithTimeout(url, { headers: BASE_HEADERS });
-        if (!res.ok) return null;
-
-        const text = await res.text();
-
-        const match = text.match(/jsonpgz\((.+)\)/);
-        if (match) {
-            try {
-                const data = JSON.parse(match[1]);
-                return data.name;
-            } catch (e) {
-                const nameMatch = match[1].match(/"name":"([^"]+)"/);
-                if (nameMatch) return nameMatch[1];
+        if (res.ok) {
+            const arrayBuffer = await res.arrayBuffer();
+            const text = new TextDecoder('gbk').decode(arrayBuffer);
+            const match = text.match(/jsonpgz\((.+)\)/);
+            if (match) {
+                try {
+                    const data = JSON.parse(match[1]);
+                    if (data.name) return data.name;
+                } catch (e) {
+                    const nameMatch = match[1].match(/"name":"([^"]+)"/);
+                    if (nameMatch) return nameMatch[1];
+                }
             }
         }
     } catch (e) {
-        console.error(`[fetchFundName] Error fetching fund ${code}:`, e.message);
+        console.warn(`[fetchFundName] JSONP failed for ${code}:`, e.message);
+    }
+
+    // 方案2: 东财 lsjz API 回退 (UTF-8，从历史净值页提取基金名)
+    try {
+        const url = `https://api.fund.eastmoney.com/f10/lsjz?fundCode=${code}&pageIndex=1&pageSize=1&_=${Date.now()}`;
+        const res = await fetchWithTimeout(url, { headers: { ...BASE_HEADERS, 'Referer': 'http://fundf10.eastmoney.com/' } });
+        if (res.ok) {
+            const data = await res.json();
+            if (data.Expansion) return data.Expansion;
+        }
+    } catch (e) {
+        console.warn(`[fetchFundName] EastMoney fallback failed for ${code}:`, e.message);
     }
     return null;
+}
+
+/**
+ * 检测名称是否为乱码（含大量不可打印字符或 mojibake 特征）
+ */
+function isGarbled(name) {
+    if (!name || typeof name !== 'string') return true;
+    // 统计不可识别字符的比例，正常中文名不该包含大量特殊替换字符
+    let badChars = 0;
+    for (const ch of name) {
+        const code = ch.charCodeAt(0);
+        // 替换字符 U+FFFD 或控制字符（除常规空格外）
+        if (code === 0xFFFD || (code < 0x20 && code !== 0x0A && code !== 0x0D)) badChars++;
+    }
+    return badChars > 0 || name.length === 0;
 }
 
 export async function syncNamesBulk(items, allowExternal = false) {
@@ -87,7 +115,9 @@ export async function syncNamesBulk(items, allowExternal = false) {
 
     for (const item of items) {
         const key = `${item.type}:${item.code}`;
-        if (!result[key]) {
+        if (!result[key] || isGarbled(result[key])) {
+            // 名称缺失或乱码，都需要重新抓取
+            if (result[key]) delete result[key];
             toFetch.push(item);
         }
     }
