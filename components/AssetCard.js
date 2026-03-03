@@ -127,16 +127,21 @@ function AssetCardComponent({ asset, onRemove, mode = 'volatility' }) {
                             </div>
                         </div>
                     </div>
-                    <div className="min-h-[200px]">
+                    <div className="flex-1">
                         {intraPoints.length > 0 ? (
                             <IntradayChart
                                 data={intraPoints}
-                                prevClose={intradayData?.prevClose || asset.price}
+                                prevClose={asset.prevClose || intradayData?.prevClose || asset.price}
                                 height={200}
                             />
                         ) : (
-                            <div className="h-[200px] flex items-center justify-center text-white/10 text-xs italic bg-white/5 rounded-lg border border-white/5 animate-pulse">
-                                分时数据同步中...
+                            <div className="h-[200px] flex flex-col items-center justify-center text-white/20 text-sm gap-2 bg-white/5 rounded-xl border border-white/5">
+                                <motion.div
+                                    animate={{ rotate: 360 }}
+                                    transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
+                                    className="w-5 h-5 border-2 border-white/10 border-t-white/40 rounded-full"
+                                />
+                                <span className="italic">行情数据同步中，请稍候...</span>
                             </div>
                         )}
                     </div>

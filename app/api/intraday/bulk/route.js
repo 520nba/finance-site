@@ -149,12 +149,19 @@ export async function syncIntradayBulk(items, allowExternal = false) {
         for (const item of toFetchFromPersist) {
             const dbData = dbDataMap[item.code];
             if (dbData && dbData.points && dbData.points.length > 0) {
+                // 判断是否为今日数据 (分时点的时间通常不带横杠日期)
                 const isToday = dbData.points[0]?.time?.includes(':') && !dbData.points[0]?.time?.includes('-');
                 const updatedAt = dbData.updated_at ? new Date(dbData.updated_at).getTime() : 0;
 
-                // 核心隔离逻辑：如果不允许外部访问，直接返回 DB 内容（哪怕是旧的/非交易日的）
-                // 如果允许外部访问且数据足够“新鲜”（小于 1 分钟且是今天的），也直接返回 DB
-                if (!allowExternal || (now - updatedAt < 60000 && isToday)) {
+                // 1. 如果是今日数据且足够新鲜，直接用
+                if (isToday && (now - updatedAt < 60000)) {
+                    result[item.code] = dbData;
+                    continue;
+                }
+
+                // 2. 如果不是今日数据（比如之前存的历史备份），但在非交易时段，也可以直接用
+                // 此处我们允许在非外部抓取模式下直接返回已有的任何数据
+                if (!allowExternal || !isToday) {
                     result[item.code] = dbData;
                     continue;
                 }
