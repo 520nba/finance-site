@@ -128,7 +128,11 @@ function AssetCardComponent({ asset, onRemove, mode = 'volatility' }) {
                         </div>
                     </div>
                     <div className="flex-1">
-                        {intraPoints.length > 0 ? (
+                        {asset.type === 'fund' ? (
+                            <div className="h-[200px] flex items-center justify-center text-white/20 text-sm bg-white/5 rounded-xl border border-white/5">
+                                <span className="italic">场外基金不支持分时数据</span>
+                            </div>
+                        ) : intraPoints.length > 0 ? (
                             <IntradayChart
                                 data={intraPoints}
                                 prevClose={asset.prevClose || intradayData?.prevClose || asset.price}

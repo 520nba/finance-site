@@ -64,7 +64,11 @@ async function fetchSingleIntradayServer(code) {
         if (!res.ok) return dbData; // 失败时返回 KV 里的（可能是昨天的）数据
         const json = await res.json();
         const d = json.data;
-        if (!d || !d.trends || d.trends.length === 0) {
+        if (!d) return dbData;
+        const isFormat1 = d.trends && Array.isArray(d.trends) && d.trends.length > 0;
+        const isFormat2 = Array.isArray(d) && d.length > 0;
+
+        if (!isFormat1 && !isFormat2) {
             // 如果远程返回空（非交易日），则彻底信任并返回 KV 中的上一个交易日数据
             return dbData;
         }
