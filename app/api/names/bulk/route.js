@@ -55,9 +55,11 @@ async function fetchStockName(code) {
  * 获取场外基金名称 — 使用天天基金 JSONP
  */
 async function fetchFundName(code) {
+    const match = code.match(/^([a-zA-Z]{2})?(\d+)$/i);
+    const clean = match ? match[2] : code;
     // 方案1: 天天基金 JSONP (GBK 编码，需要手动解码)
     try {
-        const url = `https://fundgz.1234567.com.cn/js/${code}.js?_=${Date.now()}`;
+        const url = `https://fundgz.1234567.com.cn/js/${clean}.js?_=${Date.now()}`;
         const res = await fetchWithTimeout(url, { headers: BASE_HEADERS });
         if (res.ok) {
             const arrayBuffer = await res.arrayBuffer();
@@ -79,7 +81,7 @@ async function fetchFundName(code) {
 
     // 方案2: 东财 lsjz API 回退 (UTF-8，从历史净值页提取基金名)
     try {
-        const url = `https://api.fund.eastmoney.com/f10/lsjz?fundCode=${code}&pageIndex=1&pageSize=1&_=${Date.now()}`;
+        const url = `https://api.fund.eastmoney.com/f10/lsjz?fundCode=${clean}&pageIndex=1&pageSize=1&_=${Date.now()}`;
         const res = await fetchWithTimeout(url, { headers: { ...BASE_HEADERS, 'Referer': 'http://fundf10.eastmoney.com/' } });
         if (res.ok) {
             const data = await res.json();

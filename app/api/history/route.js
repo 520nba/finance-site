@@ -71,9 +71,11 @@ async function fetchStockHistoryServer(code, days) {
 }
 
 async function fetchFundHistoryServer(code, days) {
+    const match = code.match(/^([a-zA-Z]{2})?(\d+)$/i);
+    const clean = match ? match[2] : code;
     try {
         const probeRes = await fetchWithTimeout(
-            `https://api.fund.eastmoney.com/f10/lsjz?fundCode=${code}&pageIndex=1&pageSize=20&_=${Date.now()}`,
+            `https://api.fund.eastmoney.com/f10/lsjz?fundCode=${clean}&pageIndex=1&pageSize=20&_=${Date.now()}`,
             { headers: { ...BASE_HEADERS, 'Referer': `http://fundf10.eastmoney.com/` } },
             4000
         );
@@ -90,7 +92,7 @@ async function fetchFundHistoryServer(code, days) {
         for (let page = 2; page <= pagesNeeded; page++) {
             pagePromises.push(
                 () => fetchWithTimeout(
-                    `https://api.fund.eastmoney.com/f10/lsjz?fundCode=${code}&pageIndex=${page}&pageSize=20&_=${Date.now()}`,
+                    `https://api.fund.eastmoney.com/f10/lsjz?fundCode=${clean}&pageIndex=${page}&pageSize=20&_=${Date.now()}`,
                     { headers: { ...BASE_HEADERS, 'Referer': `http://fundf10.eastmoney.com/` } },
                     3000
                 ).then(r => r.ok ? r.json() : null).catch(() => null)
