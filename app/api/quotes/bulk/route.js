@@ -63,22 +63,7 @@ async function fetchExternalBulkQuotes(stocks) {
 export async function syncQuotesBulk(items, allowExternal = false) {
     if (!Array.isArray(items) || items.length === 0) return {};
 
-    // 尝试初始化系统表
-    const { getCloudflareContext } = await import('@opennextjs/cloudflare');
-    const { env } = await getCloudflareContext();
-    if (env?.DB) {
-        await env.DB.prepare(`
-            CREATE TABLE IF NOT EXISTS asset_quotes (
-                code TEXT PRIMARY KEY,
-                name TEXT,
-                price REAL,
-                change REAL,
-                changePercent REAL,
-                prevClose REAL,
-                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            );
-        `).run();
-    }
+
 
     const codes = items.map(it => typeof it === 'string' ? it : it.code);
     // 1. 从 DB 获取当前缓存
