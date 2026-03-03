@@ -35,7 +35,7 @@ async function fetchExternalBulkQuotes(stocks) {
                 const data = match[2].split('~');
                 if (data.length < 6) continue;
 
-                const code = data[2];
+                const code = match[1].toLowerCase();
                 result[code] = {
                     name: data[1],
                     code: code,
