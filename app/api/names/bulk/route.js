@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { readDoc, writeDoc, getAssetNamesFromDB, saveAssetNamesToDB, addSystemLog } from '@/lib/storage';
+import { readDoc, writeDoc, getAssetNamesFromKV, saveAssetNamesToKV, addSystemLog } from '@/lib/storage';
 
 
 const STORAGE_KEY = 'names_config';
@@ -44,7 +44,9 @@ async function fetchStockName(code) {
             if (!res.ok) continue;
             const json = await res.json();
             if (json.data?.f58) return json.data.f58;
-        } catch (e) { }
+        } catch (e) {
+            console.error(`[fetchStockName] Error fetching ${code} at market ${market}:`, e.message);
+        }
     }
     return null;
 }
@@ -71,7 +73,9 @@ async function fetchFundName(code) {
                 if (nameMatch) return nameMatch[1];
             }
         }
-    } catch (e) { }
+    } catch (e) {
+        console.error(`[fetchFundName] Error fetching fund ${code}:`, e.message);
+    }
     return null;
 }
 
@@ -79,7 +83,7 @@ export async function syncNamesBulk(items, allowExternal = false) {
     if (!Array.isArray(items) || items.length === 0) return {};
 
     // 优先从 KV 获取
-    const result = await getAssetNamesFromDB(items);
+    const result = await getAssetNamesFromKV(items);
     const toFetch = [];
 
     for (const item of items) {
@@ -123,8 +127,8 @@ export async function syncNamesBulk(items, allowExternal = false) {
             }
         }
         if (Object.keys(newNames).length > 0) {
-            await saveAssetNamesToDB(newNames);
-            await addSystemLog('INFO', 'Names', `Cached ${Object.keys(newNames).length} new asset names to DB`);
+            await saveAssetNamesToKV(newNames);
+            await addSystemLog('INFO', 'Names', `Cached ${Object.keys(newNames).length} new asset names to KV`);
         }
     }
 

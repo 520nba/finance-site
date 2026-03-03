@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getIntradayFromDB, saveIntradayToDB, getBulkIntradayFromDB, addSystemLog } from '@/lib/storage';
+import { getIntradayFromKV, saveIntradayToKV, getBulkIntradayFromKV, addSystemLog } from '@/lib/storage';
 
 function todayStr() {
     return new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' });
@@ -41,15 +41,15 @@ async function fetchSingleIntradayServer(code) {
             return cached.data;
         }
 
-        // 2. 优先尝试从 D1 数据库获取 (有效期 1 分钟)
-        const dbData = await getIntradayFromDB(code, today, true); // 开启 fallbackToLatest
+        // 2. 优先尝试从 KV 缓存获取 (有效期 1 分钟)
+        const dbData = await getIntradayFromKV(code, today, true); // 开启 fallbackToLatest
         if (dbData && dbData.points && dbData.points.length > 0) {
             // 如果是今天的数据，检查 1 分钟新鲜度
             const isToday = dbData.points[0]?.time?.includes(':') && !dbData.points[0]?.time?.includes('-');
             const updatedAt = dbData.updated_at ? new Date(dbData.updated_at).getTime() : 0;
             if (now - updatedAt < 60000 || !isToday) {
                 if (isToday) {
-                    await addSystemLog('INFO', 'Intraday', `DB Cache Hit: ${code} (Fresh)`);
+                    await addSystemLog('INFO', 'Intraday', `KV Cache Hit: ${code} (Fresh)`);
                 } else {
                     await addSystemLog('INFO', 'Intraday', `Using non-trading day fallback for ${code}`);
                 }
@@ -61,11 +61,11 @@ async function fetchSingleIntradayServer(code) {
         const timeout = setTimeout(() => controller.abort(), 8000);
 
         const res = await fetch(url, { headers: BASE_HEADERS, signal: controller.signal }).finally(() => clearTimeout(timeout));
-        if (!res.ok) return dbData; // 失败时返回 DB 里的（可能是昨天的）数据
+        if (!res.ok) return dbData; // 失败时返回 KV 里的（可能是昨天的）数据
         const json = await res.json();
         const d = json.data;
         if (!d || !d.trends || d.trends.length === 0) {
-            // 如果远程返回空（非交易日），则彻底信任并返回 DB 中的上一个交易日数据
+            // 如果远程返回空（非交易日），则彻底信任并返回 KV 中的上一个交易日数据
             return dbData;
         }
 
@@ -113,8 +113,8 @@ async function fetchSingleIntradayServer(code) {
         INTRADAY_CACHE.set(code, { timestamp: now, data: result });
         await addSystemLog('INFO', 'Intraday', `External Fetch: ${code}`);
 
-        // 4. 异步写入 D1 数据库进行持久化缓存
-        await saveIntradayToDB(code, today, { ...result, updated_at: new Date().toISOString() });
+        // 4. 异步写入 KV 缓存进行持久化
+        await saveIntradayToKV(code, today, { ...result, updated_at: new Date().toISOString() });
 
         return result;
     } catch (e) {
@@ -142,8 +142,8 @@ export async function syncIntradayBulk(items, allowExternal = false) {
     }
 
     if (toFetchFromPersist.length > 0) {
-        // 2. 批量从 D1 获取
-        const dbDataMap = await getBulkIntradayFromDB(toFetchFromPersist, today);
+        // 2. 批量从 KV 获取
+        const dbDataMap = await getBulkIntradayFromKV(toFetchFromPersist, today);
         const externalFetchList = [];
 
         for (const item of toFetchFromPersist) {

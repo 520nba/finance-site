@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { readDoc, writeDoc, getHistoryFromDB, insertDailyPricesBatch, addSystemLog } from '@/lib/storage';
+import { readDoc, writeDoc, getHistoryFromKV, insertDailyPricesBatch, addSystemLog } from '@/lib/storage';
 
 function todayStr() {
     return new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' });
@@ -138,11 +138,11 @@ export async function GET(request) {
     let history = null;
     let fetchedFromEastMoney = false;
 
-    // 优先从 DB 获取 (股票和基金通用)
-    history = await getHistoryFromDB(code, type, days);
+    // 优先从 KV 获取 (股票和基金通用)
+    history = await getHistoryFromKV(code, type, days);
 
     if (history && history.length >= days * 0.7) {
-        await addSystemLog('INFO', 'History', `DB Cache Hit: ${code} (${type}), returned ${history.length} points`);
+        await addSystemLog('INFO', 'History', `KV Cache Hit: ${code} (${type}), returned ${history.length} points`);
     } else {
         if (type === 'stock') {
             history = await fetchStockHistoryServer(code, days);
@@ -150,7 +150,7 @@ export async function GET(request) {
             history = await fetchFundHistoryServer(code, days);
         }
         fetchedFromEastMoney = true;
-        await addSystemLog('INFO', 'History', `External Fetch: ${code} (${type}) because DB had insufficient data`);
+        await addSystemLog('INFO', 'History', `External Fetch: ${code} (${type}) because KV had insufficient data`);
     }
 
     if (!history || history.length === 0) {

@@ -88,13 +88,20 @@ export default function Home() {
     sync();
   }, [assetCodesStr, userId, isLogged, isSessionReady, loadedUserId]);
 
+  // 使用 useRef 透传最新的 assets 到闭包内容
+  const assetsRef = useRef(assets);
+  useEffect(() => {
+    assetsRef.current = assets;
+  }, [assets]);
+
   // 实时数据自动轮询 (只轮询 Quotes 报价，历史/分时由组件内部按需分发)
   useEffect(() => {
     if (activeTab !== 'watchlist' || !isLogged || assets.length === 0) return;
 
     const tick = async () => {
       if (isSyncing) return;
-      const stockItems = assets.filter(a => a.type === 'stock');
+      // 从 ref 拿到最准的映射
+      const stockItems = assetsRef.current.filter(a => a.type === 'stock');
       // 只更新轻量级的 Quotes
       const quoteMap = await fetchBulkStockData(stockItems);
 

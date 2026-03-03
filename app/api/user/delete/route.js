@@ -25,7 +25,7 @@ export async function POST(request) {
             await addSystemLog('WARN', 'Admin', `User ${targetUserId} deleted by admin`);
 
             // 2. 触发全局清理动作
-            // 这将遍历所有剩余用户的资产，并删除 DB 中不再被引用的历史/分时数据
+            // 这将遍历所有剩余用户的资产，并删除 KV 中不再被引用的历史/分时数据
             // 由于 cleanupOldData 已经是异步且带耗时的，我们在这里异步执行
             cleanupOldData().catch(e => console.error('[Admin] Cleanup failed:', e));
 

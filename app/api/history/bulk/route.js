@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { readDoc, writeDoc, insertDailyPricesBatch, getBulkHistoryFromDB, getHistoryFromDB, addSystemLog } from '@/lib/storage';
+import { readDoc, writeDoc, insertDailyPricesBatch, getBulkHistoryFromKV, getHistoryFromKV, addSystemLog } from '@/lib/storage';
 
 function todayStr() {
     return new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' });
@@ -80,7 +80,7 @@ async function fetchFundHistoryServer(code, days) {
         const pagePromises = [];
         for (let page = 2; page <= pagesNeeded; page++) {
             pagePromises.push(
-                fetch(
+                () => fetch(
                     `https://api.fund.eastmoney.com/f10/lsjz?fundCode=${code}&pageIndex=${page}&pageSize=20&_=${Date.now()}`,
                     { headers: { ...BASE_HEADERS, 'Referer': `http://fundf10.eastmoney.com/jjjz_${code}.html` } }
                 ).then(r => r.ok ? r.json() : null)
@@ -91,7 +91,7 @@ async function fetchFundHistoryServer(code, days) {
         const PAGE_BATCH_SIZE = 3;
         for (let i = 0; i < pagePromises.length; i += PAGE_BATCH_SIZE) {
             const batch = pagePromises.slice(i, i + PAGE_BATCH_SIZE);
-            const batchRes = await Promise.all(batch);
+            const batchRes = await Promise.all(batch.map(fn => fn()));
             pageResults.push(...batchRes);
             // 批次间微小停顿
             if (i + PAGE_BATCH_SIZE < pagePromises.length) {
@@ -122,15 +122,15 @@ export async function syncHistoryBulk(items, days = 250, allowExternal = false) 
     const result = {};
     const toFetchExternally = [];
 
-    // 1. 并发从 D1 获取 DB 数据 (使用 Batch)
-    const dbHistoryMap = await getBulkHistoryFromDB(items, days);
+    // 1. 并发从 KV 缓存获取历史数据 (使用 Batch)
+    const dbHistoryMap = await getBulkHistoryFromKV(items, days);
 
     for (const item of items) {
         const key = `${item.type}:${item.code}`;
         const dbHistory = dbHistoryMap[key];
 
         if (dbHistory && dbHistory.length > 0) {
-            // 实际上 getBulkHistoryFromDB 返回的是 reverse 后的结果，即正序（最早到最新）。
+            // 实际上 getBulkHistoryFromKV 返回的是 reverse 后的结果，即正序（最早到最新）。
             const latestDateStr = dbHistory[dbHistory.length - 1].date;
             const latestDate = new Date(latestDateStr);
             const today = new Date();
@@ -138,8 +138,8 @@ export async function syncHistoryBulk(items, days = 250, allowExternal = false) 
             const timeDiff = today.getTime() - latestDate.getTime();
             const daysDiff = timeDiff / (1000 * 3600 * 24);
 
-            // 核心隔离逻辑：如果不允许外部访问，直接返回 DB 内容（哪怕是旧的）
-            // 如果允许外部访问且数据足够“新鲜”（小于 2 天），也直接返回 DB
+            // 核心隔离逻辑：如果不允许外部访问，直接返回 KV 缓存内容（哪怕是旧的）
+            // 如果允许外部访问且数据足够“新鲜”（小于 2 天），也直接返回缓存
             if (!allowExternal || daysDiff < 2) {
                 result[key] = {
                     history: dbHistory,
@@ -153,7 +153,7 @@ export async function syncHistoryBulk(items, days = 250, allowExternal = false) 
         }
     }
 
-    // 2. 对于 D1 中没有足够数据或数据过期的，尝试从外部 API 获取 (如果 allowExternal 为 true)
+    // 2. 对于 KV 缓存中没有足够数据或数据过期的，尝试从外部 API 获取 (如果 allowExternal 为 true)
     if (toFetchExternally.length > 0) {
         const CHUNK_SIZE = 4;
         const fetchedList = [];

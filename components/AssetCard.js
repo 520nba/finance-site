@@ -157,16 +157,14 @@ function AssetCardComponent({ asset, onRemove, mode = 'volatility' }) {
     );
 }
 
-// 深度优化：防止每 60 秒轮询无脑推平整个卡片组件的 DOM
 export default memo(AssetCardComponent, (prev, next) => {
     return (
         prev.mode === next.mode &&
         prev.asset.code === next.asset.code &&
         prev.asset.price === next.asset.price &&
         prev.asset.changePercent === next.asset.changePercent &&
-        // 确保历史数据由无到有时能触发重新渲染
-        prev.asset.history?.length === next.asset.history?.length &&
-        // 如果分时最后一个点的 price 相同，大概率无需重载图表
+        // 修复：比对最新时间或最新值而不是固定长度来感知变动 (如滑动窗口)
+        prev.asset.history?.[prev.asset.history.length - 1]?.date === next.asset.history?.[next.asset.history.length - 1]?.date &&
         prev.asset.intraday?.price === next.asset.intraday?.price
     );
 });

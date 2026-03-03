@@ -1,3 +1,4 @@
+import { NextResponse } from 'next/server';
 import { readDoc, addSystemLog } from '@/lib/storage';
 import { syncNamesBulk } from '@/app/api/names/bulk/route';
 import { syncHistoryBulk } from '@/app/api/history/bulk/route';

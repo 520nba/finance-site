@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getBulkQuotesFromDB, saveQuotesToDB, addSystemLog } from '@/lib/storage';
+import { getBulkQuotesFromKV, saveQuotesToKV, addSystemLog } from '@/lib/storage';
 
 const BASE_HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
@@ -37,8 +37,9 @@ async function fetchExternalBulkQuotes(stocks) {
             const res = await fetch(url, { headers: { 'Referer': 'https://gu.qq.com/' } });
             if (!res.ok) continue;
 
-            // 腾讯 API 返回的是 GBK 编码字符串，但在 Cloudflare 环境直接解码通常可用
-            const text = await res.text();
+            // 修复：腾讯 API 返回的是 GBK 编码，避免 Cloudflare 环境下 res.text() 乱码
+            const arrayBuffer = await res.arrayBuffer();
+            const text = new TextDecoder('gbk').decode(arrayBuffer);
             const lines = text.split(';').filter(l => l.trim());
 
             for (const line of lines) {
@@ -70,11 +71,11 @@ export async function syncQuotesBulk(items, allowExternal = false) {
 
 
     const codes = items.map(it => typeof it === 'string' ? it : it.code);
-    // 1. 从 DB 获取当前缓存
-    const dbResult = await getBulkQuotesFromDB(codes);
+    // 1. 从 KV 获取当前缓存
+    const dbResult = await getBulkQuotesFromKV(codes);
 
     if (!allowExternal) {
-        // 如果不允许外部访问，则直接返回 DB 数据
+        // 如果不允许外部访问，则直接返回缓存数据
         return dbResult;
     }
 
@@ -97,7 +98,7 @@ export async function syncQuotesBulk(items, allowExternal = false) {
                 dataToSave[k] = enriched;
                 dbResult[k] = enriched;
             }
-            await saveQuotesToDB(dataToSave);
+            await saveQuotesToKV(dataToSave);
             await addSystemLog('INFO', 'Quotes', `Synced ${Object.keys(externalData).length} quotes (including staleness refresh)`);
         }
     }
