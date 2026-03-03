@@ -64,7 +64,7 @@ function AssetCardComponent({ asset, onRemove, mode = 'volatility' }) {
     // 2. 分时数据获取 (仅在 realtime 模式且可见时启用，开启自动轮询 2 分钟)
     const { data: intradayData } = useAssetData(
         `intra:${asset.type}:${asset.code}`,
-        () => fetchBulkIntradayData([{ code: asset.code, type: asset.type }], false).then(res => res[asset.code]),
+        () => fetchBulkIntradayData([{ code: asset.code, type: asset.type }], true).then(res => res[asset.code]),
         {
             enabled: isVisible && mode === 'realtime',
             refreshInterval: 120000 // 2 分钟更新一次
