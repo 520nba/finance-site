@@ -1,5 +1,8 @@
-import { NextResponse } from 'next/server';
 import { readDoc, addSystemLog } from '@/lib/storage';
+import { syncNamesBulk } from '@/app/api/names/bulk/route';
+import { syncHistoryBulk } from '@/app/api/history/bulk/route';
+import { syncQuotesBulk } from '@/app/api/quotes/bulk/route';
+import { syncIntradayBulk } from '@/app/api/intraday/bulk/route';
 
 const STORAGE_KEY = 'users_config';
 
@@ -40,29 +43,13 @@ export async function GET(request) {
             return NextResponse.json({ success: true, message: 'No assets to sync' });
         }
 
-        const runFetch = async (endpoint, payload) => {
-            try {
-                // 向自身的 API 接口发起带 allowExternal: true 的同步请求
-                const res = await fetch(`${baseUrl}${endpoint}`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload)
-                });
-                if (!res.ok) {
-                    throw new Error(`Endpoint returned status ${res.status}`);
-                }
-            } catch (e) {
-                console.error(`Cron sync failed for ${endpoint}:`, e.message);
-            }
-        };
-
         const promises = [];
 
         // 每天早上 7 点触发的全局数据同步 (基础信息 + 日K历史)
         if (task === 'daily' || task === 'all') {
             await addSystemLog('INFO', 'Cron', `Starting DAILY sync for ${itemsToSync.length} items`);
-            promises.push(runFetch('/api/names/bulk', { items: itemsToSync, allowExternal: true }));
-            promises.push(runFetch('/api/history/bulk', { items: itemsToSync, allowExternal: true, days: 250 }));
+            promises.push(syncNamesBulk(itemsToSync, true));
+            promises.push(syncHistoryBulk(itemsToSync, 250, true));
         }
 
         // 交易日正常交易时间触发的高频同步 (实时股价 + 当日分时)
@@ -70,9 +57,9 @@ export async function GET(request) {
             await addSystemLog('INFO', 'Cron', `Starting INTRADAY sync for ${itemsToSync.length} items`);
             const stocksOnly = itemsToSync.filter(i => i.type === 'stock');
             if (stocksOnly.length > 0) {
-                promises.push(runFetch('/api/quotes/bulk', { items: stocksOnly, allowExternal: true }));
+                promises.push(syncQuotesBulk(stocksOnly, true));
             }
-            promises.push(runFetch('/api/intraday/bulk', { items: itemsToSync, allowExternal: true }));
+            promises.push(syncIntradayBulk(itemsToSync, true));
         }
 
         // Edge 运行时需阻塞等待并发请求完毕，不能脱机后台执行

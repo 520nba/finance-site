@@ -116,94 +116,83 @@ async function fetchFundHistoryServer(code, days) {
     return null;
 }
 
+export async function syncHistoryBulk(items, days = 250, allowExternal = false) {
+    if (!Array.isArray(items) || items.length === 0) return {};
+
+    const result = {};
+    const toFetchExternally = [];
+
+    // 1. 并发从 D1 获取 DB 数据 (使用 Batch)
+    const dbHistoryMap = await getBulkHistoryFromDB(items, days);
+
+    for (const item of items) {
+        const key = `${item.type}:${item.code}`;
+        const dbHistory = dbHistoryMap[key];
+
+        if (dbHistory && dbHistory.length > 0) {
+            // 实际上 getBulkHistoryFromDB 返回的是 reverse 后的结果，即正序（最早到最新）。
+            const latestDateStr = dbHistory[dbHistory.length - 1].date;
+            const latestDate = new Date(latestDateStr);
+            const today = new Date();
+            today.setHours(today.getHours() + 8); // Asia/Shanghai
+            const timeDiff = today.getTime() - latestDate.getTime();
+            const daysDiff = timeDiff / (1000 * 3600 * 24);
+
+            // 核心隔离逻辑：如果不允许外部访问，直接返回 DB 内容（哪怕是旧的）
+            // 如果允许外部访问且数据足够“新鲜”（小于 2 天），也直接返回 DB
+            if (!allowExternal || daysDiff < 2) {
+                result[key] = {
+                    history: dbHistory,
+                    summary: calcStats(dbHistory)
+                };
+                continue;
+            }
+        }
+        if (allowExternal) {
+            toFetchExternally.push(item);
+        }
+    }
+
+    // 2. 对于 D1 中没有足够数据或数据过期的，尝试从外部 API 获取 (如果 allowExternal 为 true)
+    if (toFetchExternally.length > 0) {
+        const CHUNK_SIZE = 4;
+        const fetchedList = [];
+        for (let i = 0; i < toFetchExternally.length; i += CHUNK_SIZE) {
+            const chunk = toFetchExternally.slice(i, i + CHUNK_SIZE);
+            const chunkRes = await Promise.all(chunk.map(async (it) => {
+                let history = null;
+                if (it.type === 'stock') history = await fetchStockHistoryServer(it.code, days);
+                else history = await fetchFundHistoryServer(it.code, days);
+                return { ...it, history, fetchedFromAPI: true };
+            }));
+            fetchedList.push(...chunkRes);
+            if (i + CHUNK_SIZE < toFetchExternally.length) await new Promise(r => setTimeout(r, 400));
+        }
+
+        const dbRecords = [];
+        for (const item of fetchedList) {
+            const key = `${item.type}:${item.code}`;
+            if (item.history && item.history.length > 0) {
+                result[key] = { history: item.history, summary: calcStats(item.history) };
+                for (const h of item.history) {
+                    dbRecords.push({ code: item.code, type: item.type, price: h.value, date: h.date });
+                }
+            } else {
+                result[key] = { history: [], summary: { perf5d: 0, perf22d: 0, perf250d: 0 } };
+            }
+        }
+
+        if (dbRecords.length > 0) {
+            await insertDailyPricesBatch(dbRecords);
+        }
+    }
+    return result;
+}
+
 export async function POST(request) {
     try {
         const { items, days = 250, allowExternal = false } = await request.json();
-        if (!Array.isArray(items) || items.length === 0) return NextResponse.json({});
-
-        // 初始化
-        const { env } = await getCloudflareContext();
-        if (env?.DB) {
-            await env.DB.prepare(`
-                CREATE TABLE IF NOT EXISTS asset_history (
-                    code TEXT NOT NULL,
-                    type TEXT NOT NULL,
-                    record_date TEXT NOT NULL,
-                    price REAL NOT NULL,
-                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    PRIMARY KEY(code, type, record_date)
-                );
-            `).run();
-        }
-
-        const result = {};
-        const toFetchExternally = [];
-
-        // 1. 并发从 D1 获取 DB 数据 (使用 Batch)
-        const dbHistoryMap = await getBulkHistoryFromDB(items, days);
-
-        for (const item of items) {
-            const key = `${item.type}:${item.code}`;
-            const dbHistory = dbHistoryMap[key];
-
-            if (dbHistory && dbHistory.length > 0) {
-                // 判断 D1 里的数据是否过期
-                const latestDateStr = dbHistory[dbHistory.length - 1].date; // 注意 getBulkHistoryFromDB 已经 reverse 返回了，所以最新的是最后一个 (或你需要检查返回的数据格式，假设已经是按日期正序)
-                // 实际上 getBulkHistoryFromDB 返回的是 reverse 后的结果，即正序（最早到最新）。
-                const latestDate = new Date(latestDateStr);
-                const today = new Date();
-                today.setHours(today.getHours() + 8); // Asia/Shanghai
-                const timeDiff = today.getTime() - latestDate.getTime();
-                const daysDiff = timeDiff / (1000 * 3600 * 24);
-
-                // 如果 allowExternal=false，我们强制使用 DB 数据
-                if (!allowExternal || daysDiff < 2) {
-                    result[key] = {
-                        history: dbHistory,
-                        summary: calcStats(dbHistory)
-                    };
-                    continue;
-                }
-            }
-            if (allowExternal) {
-                toFetchExternally.push(item);
-            }
-        }
-
-        // 2. 对于 D1 中没有足够数据或数据过期的，尝试从外部 API 获取 (如果 allowExternal 为 true)
-        if (toFetchExternally.length > 0) {
-            const CHUNK_SIZE = 4;
-            const fetchedList = [];
-            for (let i = 0; i < toFetchExternally.length; i += CHUNK_SIZE) {
-                const chunk = toFetchExternally.slice(i, i + CHUNK_SIZE);
-                const chunkRes = await Promise.all(chunk.map(async (it) => {
-                    let history = null;
-                    if (it.type === 'stock') history = await fetchStockHistoryServer(it.code, days);
-                    else history = await fetchFundHistoryServer(it.code, days);
-                    return { ...it, history, fetchedFromAPI: true };
-                }));
-                fetchedList.push(...chunkRes);
-                if (i + CHUNK_SIZE < toFetchExternally.length) await new Promise(r => setTimeout(r, 400));
-            }
-
-            const dbRecords = [];
-            for (const item of fetchedList) {
-                const key = `${item.type}:${item.code}`;
-                if (item.history && item.history.length > 0) {
-                    await writeDoc(`hist:${item.type}:${item.code}`, { date: new Date().toISOString(), history: item.history });
-                    result[key] = { history: item.history, summary: calcStats(item.history) };
-                    for (const h of item.history) {
-                        dbRecords.push({ code: item.code, type: item.type, price: h.value, date: h.date });
-                    }
-                } else {
-                    result[key] = { history: [], summary: { perf5d: 0, perf22d: 0, perf250d: 0 } };
-                }
-            }
-
-            if (dbRecords.length > 0) {
-                await insertDailyPricesBatch(dbRecords);
-            }
-        }
+        const result = await syncHistoryBulk(items, days, allowExternal);
         return NextResponse.json(result);
     } catch (e) {
         return NextResponse.json({ error: e.message }, { status: 500 });

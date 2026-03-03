@@ -75,9 +75,8 @@ async function fetchFundName(code) {
     return null;
 }
 
-export async function POST(request) {
-    const { items, allowExternal = false } = await request.json();
-    if (!Array.isArray(items) || items.length === 0) return NextResponse.json({});
+export async function syncNamesBulk(items, allowExternal = false) {
+    if (!Array.isArray(items) || items.length === 0) return {};
 
     const { getCloudflareContext } = await import('@opennextjs/cloudflare');
     const { env } = await getCloudflareContext();
@@ -149,5 +148,15 @@ export async function POST(request) {
         if (!result[key]) result[key] = item.code;
     }
 
-    return NextResponse.json(result);
+    return result;
+}
+
+export async function POST(request) {
+    try {
+        const { items, allowExternal = false } = await request.json();
+        const result = await syncNamesBulk(items, allowExternal);
+        return NextResponse.json(result);
+    } catch (e) {
+        return NextResponse.json({ error: e.message }, { status: 500 });
+    }
 }

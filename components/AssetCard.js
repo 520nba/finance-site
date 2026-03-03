@@ -1,47 +1,80 @@
 'use client';
 
+import { useState, useEffect, useRef, memo } from 'react';
 import { motion } from 'framer-motion';
 import { Trash2 } from 'lucide-react';
 import VolatilityChart from './VolatilityChart';
 import IntradayChart from './IntradayChart';
 import LazyChart from './LazyChart';
 import { calculatePerformance } from '@/lib/utils';
+import { useAssetData } from '@/hooks/useAssetData';
+import { fetchBulkHistory, fetchBulkIntradayData } from '@/lib/api';
 
 // 独立子组件，展示具体时段的表现
-function MetricPanel({ label, value, history, days }) {
+function MetricPanel({ label, value, history = [], days }) {
     const isPositive = value >= 0;
     return (
         <div className="flex flex-col gap-2">
             <div className="flex justify-between items-end">
                 <span className="text-sm font-bold opacity-40 uppercase tracking-tighter">{label}表现</span>
                 <span className={`text-base font-mono font-bold ${isPositive ? 'text-red-400' : 'text-green-400'}`}>
-                    {isPositive ? '+' : ''}{value.toFixed(2)}%
+                    {isPositive ? '+' : ''}{value?.toFixed(2)}%
                 </span>
             </div>
-            <LazyChart height={80}>
-                {history.length > 0 ? (
-                    <VolatilityChart
-                        data={calculatePerformance(history, days)}
-                        title={label}
-                        color={isPositive ? '#ef4444' : '#10b981'}
-                        height={80}
-                        compact={true}
-                    />
-                ) : (
-                    <div className="h-[80px] flex items-center justify-center text-white/20 text-xs italic">
-                        历史数据加载中…
-                    </div>
-                )}
-            </LazyChart>
+            {history.length > 0 ? (
+                <VolatilityChart
+                    data={calculatePerformance(history, days)}
+                    title={label}
+                    color={isPositive ? '#ef4444' : '#10b981'}
+                    height={80}
+                    compact={true}
+                />
+            ) : (
+                <div className="h-[80px] flex items-center justify-center text-white/20 text-xs italic bg-white/5 rounded-lg">
+                    数据加载中…
+                </div>
+            )}
         </div>
     );
 }
 
-import { memo } from 'react';
-
 function AssetCardComponent({ asset, onRemove, mode = 'volatility' }) {
-    const history = asset.history ?? [];
-    const summary = asset.summary ?? { perf5d: 0, perf22d: 0, perf250d: 0 };
+    const [isVisible, setIsVisible] = useState(false);
+    const containerRef = useRef(null);
+
+    // 监听进入视口，实现真正的懒加载请求
+    useEffect(() => {
+        const obs = new IntersectionObserver(([entry]) => {
+            if (entry.isIntersecting) {
+                setIsVisible(true);
+                obs.disconnect();
+            }
+        }, { rootMargin: '200px' });
+        if (containerRef.current) obs.observe(containerRef.current);
+        return () => obs.disconnect();
+    }, []);
+
+    // 1. 历史数据获取 (仅在 volatility 模式且可见时启用)
+    const { data: historyData } = useAssetData(
+        `hist:${asset.type}:${asset.code}`,
+        () => fetchBulkHistory([{ code: asset.code, type: asset.type }], false).then(res => res[`${asset.type}:${asset.code}`]),
+        { enabled: isVisible && mode === 'volatility' }
+    );
+
+    // 2. 分时数据获取 (仅在 realtime 模式且可见时启用，开启自动轮询 2 分钟)
+    const { data: intradayData } = useAssetData(
+        `intra:${asset.type}:${asset.code}`,
+        () => fetchBulkIntradayData([{ code: asset.code, type: asset.type }], false).then(res => res[asset.code]),
+        {
+            enabled: isVisible && mode === 'realtime',
+            refreshInterval: 120000 // 2 分钟更新一次
+        }
+    );
+
+    const history = historyData?.history ?? [];
+    const summary = historyData?.summary ?? asset.summary ?? { perf5d: 0, perf22d: 0, perf250d: 0 };
+    const intraPoints = intradayData?.points ?? [];
+
 
     const l5 = summary.perf5d;
     const l22 = summary.perf22d;
@@ -49,8 +82,11 @@ function AssetCardComponent({ asset, onRemove, mode = 'volatility' }) {
 
     const isPositive = (asset.changePercent ?? 0) >= 0;
 
+    const isPositiveChange = (asset.changePercent ?? 0) >= 0;
+
     return (
         <motion.div
+            ref={containerRef}
             layout
             id={`asset-${asset.code}`}
             initial={{ opacity: 0, y: 20 }}
@@ -64,8 +100,8 @@ function AssetCardComponent({ asset, onRemove, mode = 'volatility' }) {
                         {asset.name}
                     </h3>
                     {mode === 'realtime' && (
-                        <p className={`text-sm font-mono font-bold mt-0.5 ${isPositive ? 'text-red-400' : 'text-green-400'}`}>
-                            {isPositive ? '+' : ''}{asset.changePercent?.toFixed(2)}%
+                        <p className={`text-sm font-mono font-bold mt-0.5 ${isPositiveChange ? 'text-red-400' : 'text-green-400'}`}>
+                            {isPositiveChange ? '+' : ''}{asset.changePercent?.toFixed(2)}%
                         </p>
                     )}
                 </div>
@@ -91,19 +127,25 @@ function AssetCardComponent({ asset, onRemove, mode = 'volatility' }) {
                             </div>
                         </div>
                     </div>
-                    <LazyChart height={200}>
-                        <IntradayChart
-                            data={asset.intraday?.points}
-                            prevClose={asset.intraday?.prevClose || asset.price}
-                            height={200}
-                        />
-                    </LazyChart>
+                    <div className="min-h-[200px]">
+                        {intraPoints.length > 0 ? (
+                            <IntradayChart
+                                data={intraPoints}
+                                prevClose={intradayData?.prevClose || asset.price}
+                                height={200}
+                            />
+                        ) : (
+                            <div className="h-[200px] flex items-center justify-center text-white/10 text-xs italic bg-white/5 rounded-lg border border-white/5 animate-pulse">
+                                分时数据同步中...
+                            </div>
+                        )}
+                    </div>
                 </div>
             ) : (
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-6 pt-2 border-t border-white/5">
-                    <MetricPanel label="5日" value={l5} history={history} days={5} />
-                    <MetricPanel label="22日" value={l22} history={history} days={22} />
-                    <MetricPanel label="250日" value={l250} history={history} days={250} />
+                    <MetricPanel label="5日" value={summary.perf5d} history={history} days={5} />
+                    <MetricPanel label="22日" value={summary.perf22d} history={history} days={22} />
+                    <MetricPanel label="250日" value={summary.perf250d} history={history} days={250} />
                 </div>
             )}
         </motion.div>

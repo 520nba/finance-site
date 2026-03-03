@@ -60,53 +60,57 @@ async function fetchExternalBulkQuotes(stocks) {
     return result;
 }
 
+export async function syncQuotesBulk(items, allowExternal = false) {
+    if (!Array.isArray(items) || items.length === 0) return {};
+
+    // 尝试初始化系统表
+    const { getCloudflareContext } = await import('@opennextjs/cloudflare');
+    const { env } = await getCloudflareContext();
+    if (env?.DB) {
+        await env.DB.prepare(`
+            CREATE TABLE IF NOT EXISTS asset_quotes (
+                code TEXT PRIMARY KEY,
+                name TEXT,
+                price REAL,
+                change REAL,
+                changePercent REAL,
+                prevClose REAL,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            );
+        `).run();
+    }
+
+    const codes = items.map(it => typeof it === 'string' ? it : it.code);
+    // 1. 从 DB 获取当前缓存
+    const dbResult = await getBulkQuotesFromDB(codes);
+
+    if (!allowExternal) {
+        // 如果不允许外部访问，则直接返回 DB 数据
+        return dbResult;
+    }
+
+    // 2. 否则，对于缺失的数据，进行外部补全（通常发生在添加新股票时）
+    const missingCodes = codes.filter(code => !dbResult[code]);
+    if (missingCodes.length > 0) {
+        const externalData = await fetchExternalBulkQuotes(missingCodes);
+        if (Object.keys(externalData).length > 0) {
+            await saveQuotesToDB(externalData);
+            await addSystemLog('INFO', 'Quotes', `Fetched & cached ${Object.keys(externalData).length} new quotes to DB`);
+
+            for (const [k, v] of Object.entries(externalData)) {
+                dbResult[k] = v;
+            }
+        }
+    }
+
+    return dbResult;
+}
+
 export async function POST(request) {
     try {
         const { items, allowExternal = false } = await request.json();
-        if (!Array.isArray(items) || items.length === 0) return NextResponse.json({});
-
-        // 尝试初始化系统表
-        const { getCloudflareContext } = await import('@opennextjs/cloudflare');
-        const { env } = await getCloudflareContext();
-        if (env?.DB) {
-            await env.DB.prepare(`
-                CREATE TABLE IF NOT EXISTS asset_quotes (
-                    code TEXT PRIMARY KEY,
-                    name TEXT,
-                    price REAL,
-                    change REAL,
-                    changePercent REAL,
-                    prevClose REAL,
-                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-                );
-            `).run();
-        }
-
-        const codes = items.map(it => typeof it === 'string' ? it : it.code);
-        // 1. 从 DB 获取当前缓存
-        const dbResult = await getBulkQuotesFromDB(codes);
-
-        if (!allowExternal) {
-            // 如果不允许外部访问，则直接返回 DB 数据
-            return NextResponse.json(dbResult);
-        }
-
-        // 2. 否则，对于缺失的数据，进行外部补全（通常发生在添加新股票时）
-        const missingCodes = codes.filter(code => !dbResult[code]);
-        if (missingCodes.length > 0) {
-            const externalData = await fetchExternalBulkQuotes(missingCodes);
-            if (Object.keys(externalData).length > 0) {
-                await saveQuotesToDB(externalData);
-                await addSystemLog('INFO', 'Quotes', `Fetched & cached ${Object.keys(externalData).length} new quotes to DB`);
-
-                for (const [k, v] of Object.entries(externalData)) {
-                    dbResult[k] = v;
-                }
-            }
-        }
-
-        return NextResponse.json(dbResult);
-
+        const result = await syncQuotesBulk(items, allowExternal);
+        return NextResponse.json(result);
     } catch (e) {
         return NextResponse.json({ error: e.message }, { status: 500 });
     }

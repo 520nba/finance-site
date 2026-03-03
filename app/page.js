@@ -88,28 +88,22 @@ export default function Home() {
     sync();
   }, [assetCodesStr, userId, isLogged, isSessionReady, loadedUserId]);
 
-  // 实时数据自动轮询 (60秒)
+  // 实时数据自动轮询 (只轮询 Quotes 报价，历史/分时由组件内部按需分发)
   useEffect(() => {
     if (activeTab !== 'watchlist' || !isLogged || assets.length === 0) return;
 
     const tick = async () => {
       if (isSyncing) return;
       const stockItems = assets.filter(a => a.type === 'stock');
+      // 只更新轻量级的 Quotes
       const quoteMap = await fetchBulkStockData(stockItems);
-      const intradayMap = await fetchBulkIntradayData(assets.map(a => ({ code: a.code, type: a.type })));
 
       setAssets(prev => prev.map(a => {
         const q = quoteMap[a.code];
-        const intra = intradayMap[a.code];
         const newAsset = { ...a };
         if (q) {
           newAsset.price = q.price;
           newAsset.changePercent = q.changePercent;
-        }
-        if (intra) {
-          newAsset.intraday = intra;
-          newAsset.price = intra.price;
-          newAsset.changePercent = intra.changePercent;
         }
         return newAsset;
       }));
@@ -135,31 +129,20 @@ export default function Home() {
 
   const getAssetDetails = async (code, type) => {
     try {
-      if (type === 'fund') {
-        const [nameMap, historyRes] = await Promise.all([
-          fetchBulkNames([{ code, type }], true),
-          fetchFundHistory(code, 250),
-        ]);
-        const name = nameMap[`${type}:${code}`] ?? `基金 ${code}`;
-        const historyData = historyRes || { history: [], summary: { perf5d: 0, perf22d: 0, perf250d: 0 } };
-        const history = historyData.history || [];
-        const summary = historyData.summary;
-        const price = history.length > 0 ? history[history.length - 1].value : 0;
-        return { name, price, code, type, history, summary };
-      } else {
-        const [assetInfo, historyRes] = await Promise.all([
-          fetchStockData(code),
-          fetchStockHistory(code, 250),
-        ]);
-        const historyData = historyRes || { history: [], summary: { perf5d: 0, perf22d: 0, perf250d: 0 } };
-        const history = historyData.history || [];
-        const summary = historyData.summary;
-        const nameMap = await fetchBulkNames([{ code, type }], true);
-        const name = assetInfo?.name || nameMap[`${type}:${code}`];
-        if (name) {
-          return { ...assetInfo, name, code, type, history, summary };
-        }
+      // 获取名称（带强制抓取逻辑）
+      const nameMap = await fetchBulkNames([{ code, type }], true);
+      const name = nameMap[`${type}:${code}`] ?? (type === 'fund' ? `基金 ${code}` : `股票 ${code}`);
+
+      // 触发一次历史数据后端同步（不等待其全部返回大 JSON，只需确保后端抓取并保存）
+      // 传入 allowExternal: true 满足用户“强制抓取”需求
+      fetchBulkHistory([{ code, type }], true, 250).catch(() => { });
+
+      if (type === 'stock') {
+        const quoteMap = await fetchBulkStockData([{ code, type }], true);
+        const q = quoteMap[code];
+        return { ...q, name: q?.name || name, code, type };
       }
+      return { name, price: 0, code, type };
     } catch (e) {
       console.error(`Failed to fetch details for ${code} (${type}):`, e);
     }
@@ -210,62 +193,36 @@ export default function Home() {
     if (!list || list.length === 0) return;
     setIsSyncing(true);
 
-    // 0. 立刻用传入的 list 渲染骨架或占位数据，让用户马上看到列表结构，消除白屏/无数据时的阻塞感。
+    // 1. 立刻渲染骨架，消除阻塞感。
     const skeletonAssets = list.map(({ code, type }) => ({
       name: `加载中...`, price: 0, code, type, history: [], summary: null, changePercent: 0
     }));
     setAssets(skeletonAssets);
 
-    // 1. 获取基础名称与股票实时信息
-    const stockItems = list.filter(a => a.type === 'stock');
-    const [stockQuoteMap, nameMap] = await Promise.all([
-      fetchBulkStockData(stockItems),
-      fetchBulkNames(list.map(a => ({ code: a.code, type: a.type }))),
-    ]);
+    // 2. 仅获取基础名称与股票实时报价
+    try {
+      const stockItems = list.filter(a => a.type === 'stock');
+      const [stockQuoteMap, nameMap] = await Promise.all([
+        fetchBulkStockData(stockItems),
+        fetchBulkNames(list.map(a => ({ code: a.code, type: a.type }))),
+      ]);
 
-    // 获取到名称和实时报价后更新 UI
-    const initialAssets = list.map(({ code, type }) => {
-      const histKey = `${type}:${code}`;
-      const name = nameMap[histKey];
-      if (type === 'stock') {
-        const q = stockQuoteMap[code];
-        const resolvedName = (q?.name || name) ?? code;
-        return q ? { ...q, name: q.name || resolvedName, code, type, history: [], summary: null }
-          : { name: resolvedName, price: 0, code, type, history: [], summary: null };
-      } else {
-        const resolvedName = name ?? `基金 ${code}`;
-        return { name: resolvedName, price: 0, code, type, history: [], summary: null };
-      }
-    });
+      const initialAssets = list.map(({ code, type }) => {
+        const histKey = `${type}:${code}`;
+        const name = nameMap[histKey];
+        if (type === 'stock') {
+          const q = stockQuoteMap[code];
+          const resolvedName = (q?.name || name) ?? code;
+          return q ? { ...q, name: resolvedName, code, type }
+            : { name: resolvedName, price: 0, code, type };
+        } else {
+          return { name: name ?? `基金 ${code}`, price: 0, code, type };
+        }
+      });
 
-    setAssets(initialAssets);
-
-    // 2. 分段获取历史数据，成功一组就更新一组，实现“流式”加载效果
-    const HISTORY_CHUNK_SIZE = 30; // 既然纯读数据库，可以将 Chunk 加大以减少往返时间
-    const historyChunks = [];
-    for (let i = 0; i < list.length; i += HISTORY_CHUNK_SIZE) {
-      historyChunks.push(list.slice(i, i + HISTORY_CHUNK_SIZE));
-    }
-
-    for (const chunk of historyChunks) {
-      try {
-        const chunkMap = await fetchBulkHistory(chunk.map(a => ({ code: a.code, type: a.type })));
-        setAssets(prev => prev.map(a => {
-          const histKey = `${a.type}:${a.code}`;
-          if (chunkMap[histKey]) {
-            const histData = chunkMap[histKey];
-            const price = a.type === 'fund' && histData.history && histData.history.length > 0
-              ? histData.history[histData.history.length - 1].value
-              : a.price;
-            return { ...a, history: histData.history, summary: histData.summary, price };
-          }
-          return a;
-        }));
-        // 由于后端全走 D1 Batch 读取，不再有外部阻塞限流问题，不需要人为引入长延迟
-        await new Promise(r => setTimeout(r, 50));
-      } catch (e) {
-        console.error('[Frontend] History chunk load failed:', e);
-      }
+      setAssets(initialAssets);
+    } catch (e) {
+      console.error('[Frontend] Refresh failed:', e);
     }
 
     setIsSyncing(false);
