@@ -114,7 +114,7 @@ async function fetchSingleIntradayServer(code) {
         await addSystemLog('INFO', 'Intraday', `External Fetch: ${code}`);
 
         // 4. 异步写入 D1 数据库进行持久化缓存
-        saveIntradayToDB(code, today, { ...result, updated_at: new Date().toISOString() });
+        await saveIntradayToDB(code, today, { ...result, updated_at: new Date().toISOString() });
 
         return result;
     } catch (e) {
