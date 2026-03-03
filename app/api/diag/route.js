@@ -1,44 +1,47 @@
 import { NextResponse } from 'next/server';
-import { getRequestContext } from "@opennextjs/cloudflare";
+import * as CF from "@opennextjs/cloudflare";
 
 export const runtime = 'edge';
 
 export async function GET() {
     let debugInfo = {
         status: 'init',
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+        availableExports: Object.keys(CF)
     };
 
     try {
-        const context = getRequestContext();
-        debugInfo.hasContext = !!context;
-        debugInfo.hasEnv = !!context?.env;
-
-        if (context?.env) {
-            debugInfo.envKeys = Object.keys(context.env);
-            debugInfo.hasKV = !!context.env.STOCK_DATA;
-            debugInfo.kvType = typeof context.env.STOCK_DATA;
-        }
-
-        // 尝试读取一个测试键
-        if (context?.env?.STOCK_DATA) {
-            try {
-                const testVal = await context.env.STOCK_DATA.get('users_config');
-                debugInfo.readTest = !!testVal;
-                debugInfo.readTestLength = testVal?.length || 0;
-            } catch (e) {
-                debugInfo.readError = e.message;
+        // 尝试 getRequestContext
+        try {
+            const ctx = CF.getRequestContext ? CF.getRequestContext() : null;
+            debugInfo.getRequestContextResult = ctx ? 'object' : 'null';
+            if (ctx?.env) {
+                debugInfo.envKeys = Object.keys(ctx.env);
+                debugInfo.hasKV = !!ctx.env.STOCK_DATA;
             }
+        } catch (e) {
+            debugInfo.getRequestContextError = e.message;
         }
 
-        debugInfo.status = 'success';
+        // 尝试 getCloudflareContext
+        try {
+            const ctx = CF.getCloudflareContext ? await CF.getCloudflareContext() : null;
+            debugInfo.getCloudflareContextResult = ctx ? 'object' : 'null';
+            if (ctx?.env && !debugInfo.hasKV) {
+                debugInfo.hasKV = !!ctx.env.STOCK_DATA;
+                if (debugInfo.hasKV) debugInfo.source = 'getCloudflareContext';
+            }
+        } catch (e) {
+            debugInfo.getCloudflareContextError = e.message;
+        }
+
         return NextResponse.json(debugInfo);
     } catch (e) {
         return NextResponse.json({
-            status: 'error',
+            status: 'fatal',
             error: e.message,
             stack: e.stack,
             partialInfo: debugInfo
-        }, { status: 200 }); // 返回 200 以防 Next.js 拦截 500
+        });
     }
 }
