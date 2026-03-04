@@ -17,11 +17,12 @@ export async function POST(request) {
             return NextResponse.json({ error: 'Invalid target user' }, { status: 400 });
         }
 
-        const globalData = await readDoc(STORAGE_KEY, {});
+        const INDEX_KEY = 'users_index';
         const userKey = `user:assets:${targetUserId}`;
         let exists = false;
 
-        // 1. 从旧全量配置中移除
+        // 1. 从旧全量配置中移除 (兼容逻辑)
+        const globalData = await readDoc(STORAGE_KEY, {});
         if (globalData[targetUserId]) {
             delete globalData[targetUserId];
             await writeDoc(STORAGE_KEY, globalData);
@@ -29,22 +30,24 @@ export async function POST(request) {
         }
 
         // 2. 删除独立键
-        // 这里我们尝试读取一遍来确认是否存在（因为 KV 没有 exists 检查）
         const independentData = await readDoc(userKey, null);
         if (independentData) {
-            // 我们不真的调用 deleteDoc (目前没这封装)，而是写入空来模拟或直接清理
-            // 这里为了彻底，我们直接调用 kv.delete
             import('@/lib/storage').then(async m => {
-                const kv = await m.getKvStorage();
-                if (kv) await kv.delete(userKey);
+                await m.deleteDoc(userKey);
             }).catch(() => { });
+            exists = true;
+        }
+
+        // 3. 从索引中移除 (核心：防止 Cron 继续生效)
+        const index = await readDoc(INDEX_KEY, []);
+        const newIndex = index.filter(id => id !== targetUserId);
+        if (index.length !== newIndex.length) {
+            await writeDoc(INDEX_KEY, newIndex);
             exists = true;
         }
 
         if (exists) {
             await addSystemLog('WARN', 'Admin', `User ${targetUserId} deleted by admin`);
-            // 3. 触发全局清理动作
-            cleanupOldData().catch(e => console.error('[Admin] Cleanup failed:', e));
             return NextResponse.json({ success: true, message: `User ${targetUserId} and their data removed.` });
         } else {
             return NextResponse.json({ error: 'User not found' }, { status: 404 });

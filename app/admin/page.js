@@ -89,6 +89,27 @@ export default function AdminPage() {
         setSecretKey('');
     };
 
+    const triggerCleanup = async () => {
+        if (!confirm('确定要扫描全库并删除所有“未被订阅”的僵尸行情数据吗？\n\n此操作会大幅降低 KV 负载并加快 Cron 运行速度。')) return;
+        setLoading(true);
+        try {
+            const res = await fetch('/api/admin/cleanup', {
+                method: 'POST',
+                headers: { 'x-admin-key': secretKey }
+            });
+            const data = await res.json();
+            if (res.ok) {
+                showToast(`清理成功！\n历史: -${data.deleted_hist}, 名称: -${data.deleted_names}`, 'success');
+                fetchAllData(); // 重新计数
+            } else {
+                showToast(data.error || '清理任务失败');
+            }
+        } catch (e) {
+            showToast('请求超时或网络异常');
+        }
+        setLoading(false);
+    };
+
     return (
         <main className="min-h-screen bg-[#050510] relative text-white selection:bg-red-500/30 font-sans overflow-x-hidden pt-8">
             <AnimatePresence>
@@ -174,13 +195,21 @@ export default function AdminPage() {
                                 onClick={() => fetchAllData()}
                                 className="flex items-center gap-2 px-6 py-2 rounded-full hover:bg-white/10 transition-all font-bold text-sm"
                             >
-                                <RefreshCcw size={16} className={loading ? 'animate-spin' : ''} /> <span className="hidden sm:inline">强制刷新全量结构</span>
+                                <RefreshCcw size={16} className={loading ? 'animate-spin' : ''} /> <span className="hidden sm:inline">强制刷新数据</span>
+                            </button>
+                            <button
+                                onClick={triggerCleanup}
+                                disabled={loading}
+                                className="flex items-center gap-2 px-6 py-2 rounded-full hover:bg-orange-500/20 hover:text-orange-400 transition-all font-bold text-sm border-x border-white/5"
+                                title="扫描并删除无人关注的股票/基金历史与分时缓存"
+                            >
+                                <Activity size={16} className={loading ? 'animate-pulse' : ''} /> <span className="hidden sm:inline">深度大扫除</span>
                             </button>
                             <button
                                 onClick={handleLogout}
                                 className="flex items-center gap-2 px-6 py-2 rounded-full hover:bg-red-500/20 hover:text-red-400 transition-all font-bold text-sm"
                             >
-                                <LogOut size={16} /> <span className="hidden sm:inline">销毁凭证退出</span>
+                                <LogOut size={16} /> <span className="hidden sm:inline">退出登录</span>
                             </button>
                         </div>
                     </header>
