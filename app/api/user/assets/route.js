@@ -11,10 +11,15 @@ export async function GET(request) {
         return NextResponse.json({ success: false, error: 'Missing userId', code: 'BAD_REQUEST' }, { status: 400 });
     }
 
-    // [100% D1-Only] 仅从 D1 读取，不再向 KV 回退
-    // 这样用户删除资产后，D1 为空即为空，不会再从旧 KV “复活”数据
-    const userAssets = await getUserAssets(userId);
-    return NextResponse.json({ success: true, data: userAssets });
+    try {
+        // [100% D1-Only] 仅从 D1 读取，不再向 KV 回退
+        // 这样用户删除资产后，D1 为空即为空，不会再从旧 KV “复活”数据
+        const userAssets = await getUserAssets(userId);
+        return NextResponse.json({ success: true, data: userAssets });
+    } catch (e) {
+        console.error(`[Assets] GET failed for ${userId}:`, e.message);
+        return NextResponse.json({ success: false, error: e.message, code: 'D1_ERROR' }, { status: 503 });
+    }
 }
 
 export async function POST(request) {
@@ -65,7 +70,7 @@ export async function POST(request) {
         return NextResponse.json({
             success: false,
             error: e.message,
-            stack: e.stack,
+            stack: process.env.NODE_ENV !== 'production' ? e.stack : undefined,
             code: 'INTERNAL_ERROR'
         }, { status: 500 });
     }

@@ -141,7 +141,8 @@ export function useAssetSync({ userId, isLogged }) {
     // 数据变化后同步到服务端（暴露给外部主动调用）
     const syncAssetsToServer = useCallback(async (currentAssets) => {
         if (!isLogged || !userId || !isSessionReady || userId !== loadedUserId) return;
-        const listToSync = currentAssets || assets;
+        // 优先使用传入的列表，否则读取 Ref（避免把 assets 列入 useCallback 依赖，防止实时报价更新时重建函数引用）
+        const listToSync = currentAssets || assetsRef.current;
         const skeleton = listToSync.map(a => ({ code: a.code, type: a.type }));
         try {
             await fetch('/api/user/assets', {
@@ -153,7 +154,7 @@ export function useAssetSync({ userId, isLogged }) {
         } catch (e) {
             console.error('Sync failed:', e);
         }
-    }, [isLogged, userId, isSessionReady, loadedUserId, assets]);
+    }, [isLogged, userId, isSessionReady, loadedUserId]);
 
     // 依然保留 useEffect 监听，用于捕获非显式调用的列表变化（如其他副作用）
     useEffect(() => {

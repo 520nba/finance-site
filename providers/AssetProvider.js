@@ -55,6 +55,7 @@ export function AssetProvider({ children }) {
         selectedCode,
         setSelectedCode,
         syncAssetsToServer,
+        assetsRef,
     });
 
     const value = useMemo(() => ({
