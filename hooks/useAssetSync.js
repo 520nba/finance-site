@@ -108,7 +108,10 @@ export function useAssetSync({ userId, isLogged }) {
             }
         };
         sync();
-    }, [assetCodesStr, userId, isLogged, isSessionReady, loadedUserId, assets]);
+        // assets 对象数组有意省略：assetCodesStr 已精确代表列表的增删变化，
+        // 避免在价格轮询更新时（价格变化 → assets 引用变化）触发不必要的 KV 写回。
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [assetCodesStr, userId, isLogged, isSessionReady, loadedUserId]);
 
     const assetsRef = useRef(assets);
     useEffect(() => {
