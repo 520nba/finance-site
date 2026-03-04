@@ -73,14 +73,14 @@ export async function POST(request) {
             await addSystemLog('INFO', 'Assets', `User ${userId} assets changed (${assets.length} items)`);
         }
 
-        // 后台触发垃圾回收（使用静态引入，无动态 import 开销）
+        // 核心：清理被删除资产的 KV 数据（必须 await，Workers 不支持 Response 之后的后台任务）
         if (removedAssets.length > 0) {
-            removedAssets.forEach(r => {
-                cleanupSingleAssetIfNotUsed(r.type, r.code).catch(() => { });
-            });
+            await Promise.all(
+                removedAssets.map(r => cleanupSingleAssetIfNotUsed(r.type, r.code).catch(() => { }))
+            );
         }
 
-        return NextResponse.json({ success: true });
+        return NextResponse.json({ success: true, cleaned: removedAssets.length });
     } catch (e) {
         return NextResponse.json({ error: e.message }, { status: 500 });
     }
