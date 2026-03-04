@@ -108,26 +108,38 @@ async function fetchFundName(code) {
 }
 
 /**
- * 检测名称是否为乱码（含大量不可打印字符或 mojibake 特征）
+ * 检测名称是否有效（乱码、404 错误页、或未抓取成功的占位符）
  */
-function isGarbled(name) {
+function isInvalidName(name) {
     if (!name || typeof name !== 'string') return true;
-    if (name.length === 0) return true;
+    const clean = name.trim();
+    if (clean.length === 0) return true;
 
-    // 乱码特征：1. 带有 U+FFFD 替换字符 2. 大量生僻字/非中文字符 (GBK 转 UTF-8 失败常见特征)
+    // 1. 明确的错误页特征 (针对东财跳转失败捕获的标题)
+    const ERROR_PATTERNS = [
+        '页面未找到',
+        '404',
+        'Bad Gateway',
+        'Service Unavailable',
+        'Cloudflare',
+        'Internal Server Error',
+        '东方财富网', // 如果名称里全是这个，可能是命中了错误页全局 Title
+    ];
+    if (ERROR_PATTERNS.some(p => clean.includes(p)) && clean.length < 20) return true;
+
+    // 2. 如果名称就是代码本身（之前的 fallback），尝试重新抓取
+    if (/^\d{6}$/.test(clean)) return true;
+
+    // 3. 乱码特征：1. 带有 U+FFFD 替换字符 2. 大量非中文字符
     let badChars = 0;
-    for (let i = 0; i < name.length; i++) {
-        const code = name.charCodeAt(i);
-        // 特征 1: Unicode replacement character
+    for (let i = 0; i < clean.length; i++) {
+        const code = clean.charCodeAt(i);
         if (code === 0xFFFD) return true;
-        // 特征 2: 控制字符
         if (code < 0x20 && code !== 0x0A && code !== 0x0D) badChars++;
-        // 特征 3: 某些中文乱码常见区间 (例如 0xE000-0xF8FF 私有使用区)
         if (code >= 0xE000 && code <= 0xF8FF) badChars++;
     }
 
-    // 如果超过 20% 的字符是乱码特征，或者是纯拼音前缀等（视情况而定），我们就认为是乱码
-    return (badChars / name.length) > 0.3;
+    return (badChars / clean.length) > 0.3;
 }
 
 export async function syncNamesBulk(items, allowExternal = false) {
@@ -139,9 +151,10 @@ export async function syncNamesBulk(items, allowExternal = false) {
 
     for (const item of items) {
         const key = `${item.type}:${item.code}`;
-        if (!result[key] || isGarbled(result[key])) {
-            // 名称缺失或乱码，都需要重新抓取
-            if (result[key]) delete result[key];
+        const name = result[key];
+        if (!name || isInvalidName(name)) {
+            // 名称缺失或属于非法占位符，触发全量重新拉取
+            if (name) delete result[key];
             toFetch.push(item);
         }
     }
