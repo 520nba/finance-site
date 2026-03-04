@@ -1,14 +1,28 @@
 import { NextResponse } from 'next/server';
 import { getD1Storage, runSql, queryOne, queryAll } from '@/lib/storage/d1Client';
+import { getCloudflareContext } from "@opennextjs/cloudflare";
 
 /**
  * D1 深度诊断接口
- * 路径: /api/diag/d1-test
- * 用法: GET /api/diag/d1-test?token=SECRET
  */
 export async function GET(request) {
+    let secret = process.env.DIAG_SECRET;
+
+    try {
+        const ctx = await getCloudflareContext();
+        if (ctx?.env?.DIAG_SECRET) secret = ctx.env.DIAG_SECRET;
+    } catch (e) { /* fallback to process.env */ }
+
     const token = new URL(request.url).searchParams.get('token');
-    if (!process.env.DIAG_SECRET || token !== process.env.DIAG_SECRET) {
+
+    if (!secret) {
+        return NextResponse.json({
+            error: 'Unauthorized',
+            hint: 'DIAG_SECRET is not configured in environment variables.'
+        }, { status: 403 });
+    }
+
+    if (token !== secret) {
         return NextResponse.json({ error: 'Unauthorized' }, { status: 403 });
     }
 

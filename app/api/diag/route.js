@@ -1,9 +1,23 @@
 import { NextResponse } from 'next/server';
+import { getCloudflareContext } from "@opennextjs/cloudflare";
 
 export async function GET(request) {
-    // 增加诊断接口鉴权
+    let secret = process.env.DIAG_SECRET;
+    try {
+        const ctx = await getCloudflareContext();
+        if (ctx?.env?.DIAG_SECRET) secret = ctx.env.DIAG_SECRET;
+    } catch (e) { }
+
     const token = request.headers.get('x-diag-token') || new URL(request.url).searchParams.get('token');
-    if (!process.env.DIAG_SECRET || token !== process.env.DIAG_SECRET) {
+
+    if (!secret) {
+        return NextResponse.json({
+            error: 'Unauthorized',
+            hint: 'DIAG_SECRET is not configured.'
+        }, { status: 403 });
+    }
+
+    if (token !== secret) {
         return NextResponse.json({ error: 'Unauthorized' }, { status: 403 });
     }
 
