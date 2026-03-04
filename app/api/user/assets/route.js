@@ -49,10 +49,16 @@ export async function POST(request) {
             return NextResponse.json({ error: 'Missing userId' }, { status: 400 });
         }
 
-        // 直接写入用户独立键，避免竞争冒险
+        // 获取用户当前的资产以便比对（寻找被删掉的）
         const userKey = `user:assets:${userId}`;
+        const oldAssets = await readDoc(userKey, []);
+
         const cleanAssets = assets.map(a => ({ code: a.code.toLowerCase(), type: a.type }));
 
+        // 识别出被删除的资产
+        const removedAssets = oldAssets.filter(old => !cleanAssets.some(a => a.code === old.code && a.type === old.type));
+
+        // 直接写入用户独立键，避免竞争冒险
         await writeDoc(userKey, cleanAssets);
 
         // 更新用户索引
@@ -63,6 +69,15 @@ export async function POST(request) {
         }
 
         await addSystemLog('INFO', 'Assets', `User ${userId} updated assets (${assets.length} items) via independent key`);
+
+        // 异步后台触发垃圾回收（删除刚被取消关注的幽灵资产）
+        if (removedAssets.length > 0) {
+            import('@/lib/storage').then(m => {
+                if (m.cleanupSingleAssetIfNotUsed) {
+                    removedAssets.forEach(r => m.cleanupSingleAssetIfNotUsed(r.type, r.code));
+                }
+            }).catch(() => { });
+        }
 
         return NextResponse.json({ success: true });
     } catch (e) {
