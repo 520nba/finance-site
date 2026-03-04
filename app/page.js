@@ -5,7 +5,6 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { TrendingUp, PieChart, RefreshCw, X, Eye, Activity } from 'lucide-react';
 import SearchBar from '@/components/SearchBar';
 import AssetCard from '@/components/AssetCard';
-import AdminPanel from '@/components/AdminPanel';
 import WatchlistSidebar from '@/components/WatchlistSidebar';
 import LogsModal from '@/components/LogsModal';
 import { fetchStockData, fetchStockHistory, fetchFundHistory, fetchFundInfo, fetchBulkHistory, fetchBulkStockData, fetchBulkNames, fetchIntradayData, fetchBulkIntradayData } from '@/lib/api';
@@ -403,9 +402,6 @@ export default function Home() {
               </motion.div>
             ) : (
               <>
-                {userId === 'admin' && (
-                  <AdminPanel adminId={userId} onToast={showToast} />
-                )}
                 <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
                   {filteredAssets.length > 0 ? (
                     filteredAssets.map(asset => (
