@@ -90,6 +90,19 @@ async function fetchFundName(code) {
     } catch (e) {
         console.warn(`[fetchFundName] EastMoney fallback failed for ${code}:`, e.message);
     }
+
+    // 方案3: 东方财富移动端 API 回退 (UTF-8 JSON, 对 ETF/QDII 支持完美)
+    try {
+        const url = `https://fundmobapi.eastmoney.com/FundMNewApi/FundMNBaseInfo?pageIndex=1&FCODE=${clean}&deviceid=123`;
+        const res = await fetchWithTimeout(url, { headers: BASE_HEADERS });
+        if (res.ok) {
+            const data = await res.json();
+            if (data?.Datas?.SHORTNAME) return data.Datas.SHORTNAME;
+        }
+    } catch (e) {
+        console.warn(`[fetchFundName] EastMoney Mobile fallback failed for ${code}:`, e.message);
+    }
+
     return null;
 }
 
