@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { readDoc, writeDoc, cleanupOldData, addSystemLog } from '@/lib/storage';
+import { isAdminAuthorized } from '@/lib/auth';
 
 const STORAGE_KEY = 'users_config';
 
@@ -7,8 +8,8 @@ export async function POST(request) {
     try {
         const { adminId, targetUserId } = await request.json();
 
-        // 权限验证
-        if (adminId !== 'admin') {
+        // 统一权限验证
+        if (!(await isAdminAuthorized(request, adminId))) {
             return NextResponse.json({ error: 'Unauthorized' }, { status: 403 });
         }
 

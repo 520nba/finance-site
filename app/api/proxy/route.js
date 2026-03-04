@@ -18,7 +18,32 @@ export async function GET(request) {
     const targetUrl = searchParams.get('url');
     if (!targetUrl) return NextResponse.json({ error: 'Missing url' }, { status: 400 });
     let urlObj;
-    try { urlObj = new URL(targetUrl); } catch { return NextResponse.json({ error: 'Invalid url' }, { status: 400 }); }
+    try {
+        urlObj = new URL(targetUrl);
+    } catch {
+        return NextResponse.json({ error: 'Invalid url format' }, { status: 400 });
+    }
+
+    // SSRF 基础防御：只允许 http 和 https 协议
+    if (urlObj.protocol !== 'http:' && urlObj.protocol !== 'https:') {
+        return NextResponse.json({ error: 'Forbidden protocol' }, { status: 403 });
+    }
+
+    // 域名白名单保护，防止内网扫描或跳板攻击
+    const ALLOWED_DOMAINS = [
+        'eastmoney.com',
+        '1234567.com.cn',
+        'gtimg.cn' // 腾讯财经
+    ];
+
+    const isAllowed = ALLOWED_DOMAINS.some(domain =>
+        urlObj.hostname === domain || urlObj.hostname.endsWith(`.${domain}`)
+    );
+
+    if (!isAllowed) {
+        return NextResponse.json({ error: 'Forbidden Proxy Target' }, { status: 403 });
+    }
+
     try {
         const headers = buildHeaders(urlObj);
         // 增加信号超时处理，防止 Node.js fetch 无响应挂起

@@ -1,8 +1,13 @@
 import { NextResponse } from 'next/server';
 import { getSystemLogs, cleanupOldData, addSystemLog } from '@/lib/storage';
+import { isAdminAuthorized } from '@/lib/auth';
 
 export async function GET(request) {
     try {
+        if (!(await isAdminAuthorized(request))) {
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 403 });
+        }
+
         const { searchParams } = new URL(request.url);
         const hours = parseInt(searchParams.get('hours')) || 48;
         const format = searchParams.get('format') || 'json';

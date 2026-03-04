@@ -1,14 +1,11 @@
 import { NextResponse } from 'next/server';
 import { readDoc } from '@/lib/storage';
+import { isAdminAuthorized } from '@/lib/auth';
 
 const STORAGE_KEY = 'users_config';
 
 export async function GET(request) {
-    const { searchParams } = new URL(request.url);
-    const adminId = searchParams.get('adminId');
-
-    // 简单验证：只有 ID 为 admin 的用户可以获取列表
-    if (adminId !== 'admin') {
+    if (!(await isAdminAuthorized(request))) {
         return NextResponse.json({ error: 'Unauthorized' }, { status: 403 });
     }
 

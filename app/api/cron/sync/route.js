@@ -11,9 +11,10 @@ export async function GET(request) {
     const { searchParams } = new URL(request.url);
     const token = searchParams.get('token');
 
-    // 简单的安全校验，生产上可通过环境变量提供密钥
-    if (token !== (process.env.CRON_SECRET || 'antigravity_sync')) {
-        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    // 移除弱密码 fallback，强制要求环境密钥
+    const envSecret = process.env.CRON_SECRET;
+    if (!envSecret || token !== envSecret) {
+        return NextResponse.json({ error: 'Unauthorized or secret not configured' }, { status: 403 });
     }
 
     const task = searchParams.get('task') || 'all'; // 'daily', 'intraday', 'all'

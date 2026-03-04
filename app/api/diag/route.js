@@ -1,6 +1,12 @@
 import { NextResponse } from 'next/server';
 
-export async function GET() {
+export async function GET(request) {
+    // 增加诊断接口鉴权
+    const token = request.headers.get('x-diag-token') || new URL(request.url).searchParams.get('token');
+    if (!process.env.DIAG_SECRET || token !== process.env.DIAG_SECRET) {
+        return NextResponse.json({ error: 'Unauthorized' }, { status: 403 });
+    }
+
     let debugInfo = {
         status: 'init',
         timestamp: new Date().toISOString(),
@@ -27,11 +33,10 @@ export async function GET() {
 
         return NextResponse.json(debugInfo);
     } catch (e) {
+        // 发生错误时只返回统一提示，坚决不返回 err.stack 以防止信息泄露
         return NextResponse.json({
             status: 'fatal',
-            error: e.message,
-            stack: e.stack,
-            partialInfo: debugInfo
-        });
+            error: 'Internal Server Error'
+        }, { status: 500 });
     }
 }
