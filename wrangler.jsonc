@@ -21,7 +21,7 @@
         {
             "binding": "DB",
             "database_name": "stock-tracker-db",
-            "database_id": "1a5054bb-e46e-438f-bdd3-77ad67ae8998",
+            "database_id": "8451af7d-ba5b-47b3-915f-8aee5fa82723",
             "migrations_dir": "migrations"
         }
     ]
