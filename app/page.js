@@ -81,6 +81,8 @@ export default function Home() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ userId, assets: skeleton }),
         });
+        // 广播事件通知同浏览器的其他 Tab 页面
+        localStorage.setItem('tracker_assets_updated', Date.now().toString());
       } catch (e) {
         console.error('Sync failed:', e);
       }
@@ -94,12 +96,51 @@ export default function Home() {
     assetsRef.current = assets;
   }, [assets]);
 
+  // 监听多标签页同步防冲突 (跨 Tab 数据漂移保护)
+  useEffect(() => {
+    const handleStorage = (e) => {
+      if (e.key === 'tracker_assets_updated' && isLogged && userId) {
+        // 其他页面同步了新配置，读取远端执行无感对齐
+        fetch(`/api/user/assets?userId=${userId}`).then(r => r.json()).then(list => {
+          if (Array.isArray(list)) {
+            const newStr = list.map(a => `${a.type}:${a.code}`).sort().join(',');
+            const oldStr = assetsRef.current.map(a => `${a.type}:${a.code}`).sort().join(',');
+            if (newStr !== oldStr) refreshAssets(list);
+          }
+        }).catch(() => { });
+      }
+    };
+    window.addEventListener('storage', handleStorage);
+    return () => window.removeEventListener('storage', handleStorage);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isLogged, userId]);
+
   // 实时数据自动轮询 (只轮询 Quotes 报价，历史/分时由组件内部按需分发)
   useEffect(() => {
     if (activeTab !== 'watchlist' || !isLogged || assets.length === 0) return;
 
+    let isInitialTick = true;
     const tick = async () => {
       if (isSyncing) return;
+
+      // 1. 每隔一分钟执行轮询时，检测云端用户的实际结构是否发生变更（针对跨设备数据防冲突保护）
+      if (!isInitialTick) {
+        try {
+          const res = await fetch(`/api/user/assets?userId=${userId}`);
+          const remoteList = await res.json();
+          if (Array.isArray(remoteList)) {
+            const newCodes = remoteList.map(a => `${a.type}:${a.code}`).sort().join(',');
+            const oldCodes = assetsRef.current.map(a => `${a.type}:${a.code}`).sort().join(',');
+            if (newCodes !== oldCodes) {
+              refreshAssets(remoteList);
+              return; // 直接交给重加载进程接管
+            }
+          }
+        } catch (e) { /* ignore */ }
+      }
+      isInitialTick = false;
+
+      // 2. 如果资产结构没变，继续原有的报价刷新流程
       // 从 ref 拿到最准的映射
       const stockItems = assetsRef.current.filter(a => a.type === 'stock');
       // 只更新轻量级的 Quotes
@@ -119,7 +160,8 @@ export default function Home() {
     const timer = setInterval(tick, 60000);
     tick();
     return () => clearInterval(timer);
-  }, [activeTab, isLogged, assets.length, isSyncing]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, isLogged, assets.length, isSyncing, userId]);
 
   const handleLogin = () => {
     const id = loginInput.trim();
