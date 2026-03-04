@@ -3,6 +3,8 @@ import { fetchBulkStockQuotes } from '@/services/api/quotesService';
 import { fetchBulkNames } from '@/services/api/namesService';
 import { fetchBulkHistory } from '@/services/api/historyService';
 
+const ASSET_NAMES_CACHE_KEY = 'tracker_asset_names_v1';
+
 export function useAssetSync({ userId, isLogged }) {
     const [assets, setAssets] = useState([]);
     const [isSyncing, setIsSyncing] = useState(false);
@@ -14,9 +16,25 @@ export function useAssetSync({ userId, isLogged }) {
         setIsSyncing(true);
 
         // 1. 立刻渲染骨架，消除阻塞感。
-        const skeletonAssets = list.map(({ code, type }) => ({
-            name: `加载中...`, price: 0, code, type, history: [], summary: null, changePercent: 0
-        }));
+        // [Optimized] 优先从 localStorage 读取缓存名称，实现秒开显示
+        let localNames = {};
+        try {
+            localNames = JSON.parse(localStorage.getItem(ASSET_NAMES_CACHE_KEY) || '{}');
+        } catch (e) { /* ignore */ }
+
+        const skeletonAssets = list.map(({ code, type }) => {
+            const cacheKey = `${type}:${code}`;
+            const cachedName = localNames[cacheKey];
+            return {
+                name: cachedName || `加载中...`,
+                price: 0,
+                code,
+                type,
+                history: [],
+                summary: null,
+                changePercent: 0
+            };
+        });
         setAssets(skeletonAssets);
 
         // 2. 仅获取基础名称与股票实时报价
@@ -40,6 +58,17 @@ export function useAssetSync({ userId, isLogged }) {
             });
 
             setAssets(initialAssets);
+
+            // [Optimized] 持久化名称到本地，供下次刷新秒显
+            try {
+                const newLocalNames = { ...localNames };
+                Object.entries(nameMap).forEach(([key, val]) => {
+                    if (val && val !== key.split(':')[1]) {
+                        newLocalNames[key] = val;
+                    }
+                });
+                localStorage.setItem(ASSET_NAMES_CACHE_KEY, JSON.stringify(newLocalNames));
+            } catch (e) { /* ignore */ }
 
             // 3. 异步补充历史数据 (Orchestrator Layer 1.5 - Background Hydration)
             // 这一步不需要阻塞，完成后会自动触发 UI 图表渲染

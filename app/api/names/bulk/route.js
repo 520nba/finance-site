@@ -107,6 +107,9 @@ async function fetchFundName(code) {
     return null;
 }
 
+// 全局内存缓存 (L1 Cache) - 存储最常访问的资产名称，减少 D1 查询压力
+const GLOBAL_NAME_CACHE = new Map();
+
 /**
  * 检测名称是否有效（乱码、404 错误页、或未抓取成功的占位符）
  */
@@ -145,20 +148,39 @@ function isInvalidName(name) {
 export async function syncNamesBulk(items, allowExternal = false) {
     if (!Array.isArray(items) || items.length === 0) return {};
 
-    // 优先从 D1 获取
-    const result = await getAssetNames(items);
-    const toFetch = [];
+    const result = {};
+    const missingInMem = [];
 
+    // 1. 优先尝试 L1 (内存缓存)
     for (const item of items) {
         const key = `${item.type}:${item.code}`;
-        const name = result[key];
-        if (!name || isInvalidName(name)) {
-            // 名称缺失或属于非法占位符，触发全量重新拉取
-            if (name) delete result[key];
+        const cached = GLOBAL_NAME_CACHE.get(key);
+        if (cached && !isInvalidName(cached)) {
+            result[key] = cached;
+        } else {
+            missingInMem.push(item);
+        }
+    }
+
+    if (missingInMem.length === 0) return result;
+
+    // 2. L1 缺失的部分，尝试 L2 (D1 数据库)
+    const d1Result = await getAssetNames(missingInMem);
+    const toFetch = [];
+
+    for (const item of missingInMem) {
+        const key = `${item.type}:${item.code}`;
+        const name = d1Result[key];
+        if (name && !isInvalidName(name)) {
+            result[key] = name;
+            // 回填到 L1
+            GLOBAL_NAME_CACHE.set(key, name);
+        } else {
             toFetch.push(item);
         }
     }
 
+    // 3. L2 也缺失且允许外部拉取的部分，触发 L3 (外部抓取)
     if (toFetch.length > 0 && allowExternal) {
         const fetched = [];
         const CHUNK_SIZE = 10;
@@ -184,11 +206,12 @@ export async function syncNamesBulk(items, allowExternal = false) {
             if (name) {
                 result[key] = name;
                 newNames[key] = name;
+                GLOBAL_NAME_CACHE.set(key, name); // 同步更新 L1 内存缓存
             }
         }
         if (Object.keys(newNames).length > 0) {
             await saveAssetNames(newNames);
-            console.log(`[Names] Cached ${Object.keys(newNames).length} new asset names to D1`);
+            console.log(`[Names] Cached ${Object.keys(newNames).length} new asset names to D1 and L1`);
         }
     }
 
