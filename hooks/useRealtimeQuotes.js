@@ -15,7 +15,9 @@ export function useRealtimeQuotes({ activeTab, isLogged, assets, isSyncing, user
             if (tickCount % 5 === 0) {
                 try {
                     const res = await fetch(`/api/user/assets?userId=${userId}`);
-                    const remoteList = await res.json();
+                    const json = await res.json();
+                    // 后端统一返回 { success, data: [] } envelope 格式
+                    const remoteList = json?.data ?? json;
                     if (Array.isArray(remoteList)) {
                         const newCodes = remoteList.map(a => `${a.type}:${a.code}`).sort().join(',');
                         const oldCodes = assetsRef.current.map(a => `${a.type}:${a.code}`).sort().join(',');

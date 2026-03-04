@@ -68,7 +68,9 @@ export function useAssetSync({ userId, isLogged }) {
             setIsSessionReady(false);
             try {
                 const res = await fetch(`/api/user/assets?userId=${userId}`);
-                const list = await res.json();
+                const json = await res.json();
+                // 后端统一返回 { success, data: [] } envelope 格式
+                const list = json?.data ?? json;
                 if (Array.isArray(list) && list.length > 0) {
                     await refreshAssets(list);
                 } else {
@@ -117,7 +119,8 @@ export function useAssetSync({ userId, isLogged }) {
     useEffect(() => {
         const handleStorage = (e) => {
             if (e.key === 'tracker_assets_updated' && isLogged && userId) {
-                fetch(`/api/user/assets?userId=${userId}`).then(r => r.json()).then(list => {
+                fetch(`/api/user/assets?userId=${userId}`).then(r => r.json()).then(json => {
+                    const list = json?.data ?? json;
                     if (Array.isArray(list)) {
                         const newStr = list.map(a => `${a.type}:${a.code}`).sort().join(',');
                         const oldStr = assetsRef.current.map(a => `${a.type}:${a.code}`).sort().join(',');
