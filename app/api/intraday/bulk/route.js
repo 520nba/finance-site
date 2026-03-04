@@ -37,10 +37,10 @@ async function fetchSingleIntradayServer(code) {
     try {
         const url = `https://push2.eastmoney.com/api/qt/stock/trends2/get?secid=${market}.${clean}&fields1=f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13&fields2=f51,f52,f53,f54,f55,f56,f57,f58`;
 
-        // 1. 检查内存缓存 (30秒)
+        // 检查内存缓存 (30秒)：命中时只打 console，不写 KV 日志（每分钟30个资产会产生30次冗余 KV 写）
         const cached = INTRADAY_CACHE.get(code);
         if (cached && (now - cached.timestamp < CACHE_TTL)) {
-            await addSystemLog('INFO', 'Intraday', `Memory Cache Hit: ${code}`);
+            console.log(`[Intraday] Memory Cache Hit: ${code}`);
             return cached.data;
         }
 
@@ -50,11 +50,12 @@ async function fetchSingleIntradayServer(code) {
             // 如果是今天的数据，检查 1 分钟新鲜度
             const isToday = dbData.points[0]?.time?.includes(':') && !dbData.points[0]?.time?.includes('-');
             const updatedAt = dbData.updated_at ? new Date(dbData.updated_at).getTime() : 0;
+            // KV 缓存命中：同样只打 console，避免每个 KV Hit 都写日志 KV
             if (now - updatedAt < 60000 || !isToday) {
                 if (isToday) {
-                    await addSystemLog('INFO', 'Intraday', `KV Cache Hit: ${code} (Fresh)`);
+                    console.log(`[Intraday] KV Cache Hit: ${code} (Fresh)`);
                 } else {
-                    await addSystemLog('INFO', 'Intraday', `Using non-trading day fallback for ${code}`);
+                    console.log(`[Intraday] KV Cache Hit: ${code} (Non-trading day fallback)`);
                 }
                 return dbData;
             }
@@ -163,7 +164,7 @@ export async function syncIntradayBulk(items, allowExternal = false) {
         }
 
         if (externalFetchList.length > 0 && allowExternal) {
-            // 3. 最后才去拉网络，分片串行以保护 Edge
+            // 3. 最后才去拉网络，分片串行以保护 Edge（与 history/bulk 保持一致）
             const CHUNK_SIZE = 10;
             for (let i = 0; i < externalFetchList.length; i += CHUNK_SIZE) {
                 const chunk = externalFetchList.slice(i, i + CHUNK_SIZE);
@@ -175,6 +176,10 @@ export async function syncIntradayBulk(items, allowExternal = false) {
                 );
                 for (const { code, data } of chunkResults) {
                     if (data) result[code] = data;
+                }
+                // 分片间延迟：减少对东方财富 API 的突发请求压力，防止限流
+                if (i + CHUNK_SIZE < externalFetchList.length) {
+                    await new Promise(r => setTimeout(r, 100));
                 }
             }
         }

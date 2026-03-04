@@ -18,9 +18,6 @@ export async function GET(request) {
     }
 
     const task = searchParams.get('task') || 'all'; // 'daily', 'intraday', 'all'
-    const protocol = request.headers.get('x-forwarded-proto') || 'http';
-    const host = request.headers.get('host');
-    const baseUrl = `${protocol}://${host}`;
 
     try {
         const INDEX_KEY = 'users_index';
@@ -34,7 +31,7 @@ export async function GET(request) {
             return Array.isArray(assets) ? assets : [];
         }));
 
-        // 汇总所有资产
+        // 汇总所有资产（去重）
         userAssetLists.forEach(list => {
             list.forEach(a => {
                 if (a && a.code && a.type) {
@@ -51,23 +48,38 @@ export async function GET(request) {
             return NextResponse.json({ success: true, message: 'No assets to sync' });
         }
 
-        const promises = [];
+        // ⚡ 关键：串行执行，而非 Promise.all 并行
+        // 原因：三个任务同时运行时总时间 = max(三者)，可能轻松超过 Cloudflare 的 30s 壁钟限制。
+        // 串行后每个任务独立计时，且任意一个异常不会影响其他任务的执行。
+        const results = {};
 
         // 每天早上 7 点触发的全局数据同步 (基础信息 + 日K历史)
         if (task === 'daily' || task === 'all') {
             await addSystemLog('INFO', 'Cron', `Starting DAILY sync for ${itemsToSync.length} items`);
-            promises.push(syncNamesBulk(itemsToSync, true));
-            promises.push(syncHistoryBulk(itemsToSync, 250, true));
+            try {
+                results.names = await syncNamesBulk(itemsToSync, true);
+            } catch (e) {
+                console.error('[Cron] syncNamesBulk failed:', e.message);
+                results.names_error = e.message;
+            }
+            try {
+                results.history = await syncHistoryBulk(itemsToSync, 250, true);
+            } catch (e) {
+                console.error('[Cron] syncHistoryBulk failed:', e.message);
+                results.history_error = e.message;
+            }
         }
 
-        // 交易日正常交易时间触发的高频同步 (仅分时图，报价由前端直接从腾讯 API 拉取)
+        // 交易日正常交易时间触发的高频同步
         if (task === 'intraday' || task === 'all') {
             await addSystemLog('INFO', 'Cron', `Starting INTRADAY sync for ${itemsToSync.length} items`);
-            promises.push(syncIntradayBulk(itemsToSync, true));
+            try {
+                results.intraday = await syncIntradayBulk(itemsToSync, true);
+            } catch (e) {
+                console.error('[Cron] syncIntradayBulk failed:', e.message);
+                results.intraday_error = e.message;
+            }
         }
-
-        // Edge 运行时需阻塞等待并发请求完毕，不能脱机后台执行
-        await Promise.all(promises);
 
         return NextResponse.json({ success: true, count: itemsToSync.length, task });
 
