@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getKvStorage, writeDoc } from '@/lib/storage/kvClient';
+import { runSql } from '@/lib/storage/d1Client';
 
 export async function POST(request) {
     try {
@@ -14,14 +14,14 @@ export async function POST(request) {
             return NextResponse.json({ success: false, error: 'Invalid password' }, { status: 401 });
         }
 
-        // 创建短路 Session (1小时有效)
+        // 创建短路 Session (1小时有效，存入 D1)
         const sessionToken = crypto.randomUUID();
         const expiresAt = Date.now() + 3600 * 1000;
 
-        await writeDoc(`session:${sessionToken}`, {
-            createdAt: Date.now(),
-            expiresAt
-        });
+        await runSql(
+            'INSERT INTO admin_sessions (token, expires_at) VALUES (?, ?)',
+            [sessionToken, expiresAt]
+        );
 
         return NextResponse.json({
             success: true,

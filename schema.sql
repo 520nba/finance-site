@@ -62,4 +62,11 @@ CREATE TABLE IF NOT EXISTS system_logs (
     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
+-- 管理员会话表
+CREATE TABLE IF NOT EXISTS admin_sessions (
+    token TEXT PRIMARY KEY,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    expires_at DATETIME NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_logs_timestamp ON system_logs(timestamp);
