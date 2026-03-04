@@ -7,17 +7,27 @@ import { Trash2, Users, ShieldAlert, RefreshCcw } from 'lucide-react';
 export default function AdminPanel({ adminId, onToast }) {
     const [users, setUsers] = useState([]);
     const [loading, setLoading] = useState(false);
+    const [secretKey, setSecretKey] = useState('');
+    const [isAuthenticated, setIsAuthenticated] = useState(false);
 
     const fetchUsers = async () => {
+        if (!secretKey) return onToast('请输入您的 Server Admin Key');
         setLoading(true);
         try {
-            const res = await fetch(`/api/user/list?adminId=${adminId}`);
+            const res = await fetch(`/api/user/list`, {
+                headers: { 'x-admin-key': secretKey }
+            });
             if (res.ok) {
                 const data = await res.json();
                 setUsers(data);
+                setIsAuthenticated(true);
+            } else {
+                onToast('鉴权失败: Token 无效');
+                setIsAuthenticated(false);
             }
         } catch (e) {
-            onToast('获取用户列表失败');
+            onToast('服务器连接失败');
+            setIsAuthenticated(false);
         }
         setLoading(false);
     };
@@ -28,8 +38,11 @@ export default function AdminPanel({ adminId, onToast }) {
         try {
             const res = await fetch('/api/user/delete', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ adminId, targetUserId }),
+                headers: {
+                    'Content-Type': 'application/json',
+                    'x-admin-key': secretKey
+                },
+                body: JSON.stringify({ targetUserId }),
             });
             const data = await res.json();
             if (res.ok) {
@@ -43,13 +56,40 @@ export default function AdminPanel({ adminId, onToast }) {
         }
     };
 
-    useEffect(() => {
-        if (adminId === 'admin') {
-            fetchUsers();
-        }
-    }, [adminId]);
-
     if (adminId !== 'admin') return null;
+
+    if (!isAuthenticated) {
+        return (
+            <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="w-full glass-effect p-8 border-red-500/10 mb-12 flex flex-col items-center justify-center text-center py-12"
+            >
+                <ShieldAlert size={48} className="text-red-500/50 mb-4" />
+                <h2 className="text-xl font-black tracking-tighter uppercase italic mb-2">安全终端锁定</h2>
+                <p className="text-xs text-white/40 mb-6 max-w-sm">
+                    系统已启用严格的 ADMIN_API_KEY 环境鉴权。请输入服务端的密钥以解锁控制面板。
+                </p>
+                <div className="flex gap-2 max-w-sm w-full">
+                    <input
+                        type="password"
+                        placeholder="ADMIN_API_KEY"
+                        value={secretKey}
+                        onChange={(e) => setSecretKey(e.target.value)}
+                        className="flex-1 bg-white/5 border border-red-500/20 rounded-xl px-4 py-2 outline-none focus:border-red-500/60 transition-all font-mono text-sm"
+                        onKeyDown={(e) => e.key === 'Enter' && fetchUsers()}
+                    />
+                    <button
+                        onClick={fetchUsers}
+                        className="bg-red-600/80 hover:bg-red-500 text-white px-6 py-2 rounded-xl font-bold text-sm transition-all flex items-center gap-2"
+                        disabled={loading}
+                    >
+                        {loading ? <RefreshCcw size={14} className="animate-spin" /> : '解锁'}
+                    </button>
+                </div>
+            </motion.div>
+        );
+    }
 
     return (
         <motion.div
