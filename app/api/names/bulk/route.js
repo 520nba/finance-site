@@ -57,26 +57,22 @@ async function fetchStockName(code) {
 async function fetchFundName(code) {
     const match = code.match(/^([a-zA-Z]{2})?(\d+)$/i);
     const clean = match ? match[2] : code;
-    // 方案1: 天天基金 JSONP (GBK 编码，需要手动解码)
+    // 方案1: 腾讯财经 API (GBK 编码，最稳定的名称获取源，使用 Buffer 解析)
     try {
-        const url = `https://fundgz.1234567.com.cn/js/${clean}.js?_=${Date.now()}`;
+        const url = `https://qt.gtimg.cn/q=s_jj${clean}`;
         const res = await fetchWithTimeout(url, { headers: BASE_HEADERS });
         if (res.ok) {
             const arrayBuffer = await res.arrayBuffer();
             const text = new TextDecoder('gbk').decode(arrayBuffer);
-            const match = text.match(/jsonpgz\((.+)\)/);
-            if (match) {
-                try {
-                    const data = JSON.parse(match[1]);
-                    if (data.name) return data.name;
-                } catch (e) {
-                    const nameMatch = match[1].match(/"name":"([^"]+)"/);
-                    if (nameMatch) return nameMatch[1];
-                }
+            const parts = text.split('~');
+            if (parts.length > 2 && parts[1]) {
+                const name = parts[1].trim();
+                // 腾讯财经有时候返回的带有冗余的后缀，直接返回
+                return name;
             }
         }
     } catch (e) {
-        console.warn(`[fetchFundName] JSONP failed for ${code}:`, e.message);
+        console.warn(`[fetchFundName] Tencent fallback failed for ${code}:`, e.message);
     }
 
     // 方案2: 东财 lsjz API 回退 (UTF-8，从历史净值页提取基金名)
@@ -116,14 +112,22 @@ async function fetchFundName(code) {
  */
 function isGarbled(name) {
     if (!name || typeof name !== 'string') return true;
-    // 统计不可识别字符的比例，正常中文名不该包含大量特殊替换字符
+    if (name.length === 0) return true;
+
+    // 乱码特征：1. 带有 U+FFFD 替换字符 2. 大量生僻字/非中文字符 (GBK 转 UTF-8 失败常见特征)
     let badChars = 0;
-    for (const ch of name) {
-        const code = ch.charCodeAt(0);
-        // 替换字符 U+FFFD 或控制字符（除常规空格外）
-        if (code === 0xFFFD || (code < 0x20 && code !== 0x0A && code !== 0x0D)) badChars++;
+    for (let i = 0; i < name.length; i++) {
+        const code = name.charCodeAt(i);
+        // 特征 1: Unicode replacement character
+        if (code === 0xFFFD) return true;
+        // 特征 2: 控制字符
+        if (code < 0x20 && code !== 0x0A && code !== 0x0D) badChars++;
+        // 特征 3: 某些中文乱码常见区间 (例如 0xE000-0xF8FF 私有使用区)
+        if (code >= 0xE000 && code <= 0xF8FF) badChars++;
     }
-    return badChars > 0 || name.length === 0;
+
+    // 如果超过 20% 的字符是乱码特征，或者是纯拼音前缀等（视情况而定），我们就认为是乱码
+    return (badChars / name.length) > 0.3;
 }
 
 export async function syncNamesBulk(items, allowExternal = false) {
