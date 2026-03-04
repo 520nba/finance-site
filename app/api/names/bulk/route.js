@@ -91,16 +91,21 @@ async function fetchFundName(code) {
         console.warn(`[fetchFundName] EastMoney fallback failed for ${code}:`, e.message);
     }
 
-    // 方案3: 东方财富移动端 API 回退 (UTF-8 JSON, 对 ETF/QDII 支持完美)
+    // 方案3: 解析天天基金网页版 HTML 的 title (最稳定兜底，专治 QDII/ETF)
     try {
-        const url = `https://fundmobapi.eastmoney.com/FundMNewApi/FundMNBaseInfo?pageIndex=1&FCODE=${clean}&deviceid=123`;
-        const res = await fetchWithTimeout(url, { headers: BASE_HEADERS });
+        const url = `https://fund.eastmoney.com/${clean}.html`;
+        const res = await fetchWithTimeout(url, { headers: { ...BASE_HEADERS, 'Accept': 'text/html' } }, 6000);
         if (res.ok) {
-            const data = await res.json();
-            if (data?.Datas?.SHORTNAME) return data.Datas.SHORTNAME;
+            const html = await res.text();
+            // 一般 title 格式: <title>易方达原油A类人民币(003321)基金净值_估值...
+            const titleMatch = html.match(/<title>([^<(]+)/);
+            if (titleMatch && titleMatch[1]) {
+                const name = titleMatch[1].trim();
+                if (name && !name.includes('天天基金网')) return name;
+            }
         }
     } catch (e) {
-        console.warn(`[fetchFundName] EastMoney Mobile fallback failed for ${code}:`, e.message);
+        console.warn(`[fetchFundName] HTML fallback failed for ${code}:`, e.message);
     }
 
     return null;
