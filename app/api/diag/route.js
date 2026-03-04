@@ -22,6 +22,7 @@ export async function GET(request) {
         if (ctx?.env) {
             debugInfo.envKeys = Object.keys(ctx.env);
             debugInfo.hasKV = !!ctx.env.STOCK_DATA;
+            debugInfo.hasD1 = !!ctx.env.DB;
         }
 
         // 备选：检查全局 process.env
