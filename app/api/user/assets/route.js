@@ -1,10 +1,9 @@
 import { NextResponse } from 'next/server';
-import { readDoc, writeDoc } from '@/lib/storage/kvClient';
-import { addSystemLog } from '@/lib/storage/logRepo';
+import { readDoc } from '@/lib/storage/kvClient';
+import { getUserAssets, saveUserAssets } from '@/lib/storage/userRepo';
 import { cleanupSingleAssetIfNotUsed } from '@/lib/storage/maintenanceRepo';
 
 const LEGACY_STORAGE_KEY = 'users_config';
-const INDEX_KEY = 'users_index';
 
 export async function GET(request) {
     const { searchParams } = new URL(request.url);
@@ -14,38 +13,30 @@ export async function GET(request) {
         return NextResponse.json({ success: false, error: 'Missing userId', code: 'BAD_REQUEST' }, { status: 400 });
     }
 
-    // 1. 尝试读取独立键 (新格式)
-    const userKey = `user:assets:${userId}`;
-    let userAssets = await readDoc(userKey, null);
+    // 1. 优先从 D1 读取 (新存储)
+    let userAssets = await getUserAssets(userId);
 
-    // 2. 如果不存在，尝试从全量配置迁移 (旧格式)
-    if (!userAssets) {
-        const globalData = await readDoc(LEGACY_STORAGE_KEY, {});
-        userAssets = globalData[userId];
-        if (userAssets) {
-            // 自动触发迁移回填：写入失败只记录错误，不阻止本次数据返回
-            // 即：迁移失败时用户仍能看到数据（降级到旧格式读取），下次登录会再次尝试迁移
-            let migrated = false;
+    // 2. 如果 D1 为空，尝试从 KV 迁移 (兼容旧格式)
+    if (userAssets.length === 0) {
+        // 尝试 KV 独立键
+        const userKey = `user:assets:${userId}`;
+        let kvAssets = await readDoc(userKey, null);
+
+        // 如果独立键也没有，尝试全量配置
+        if (!kvAssets) {
+            const globalData = await readDoc(LEGACY_STORAGE_KEY, {});
+            kvAssets = globalData[userId];
+        }
+
+        if (kvAssets && Array.isArray(kvAssets)) {
+            userAssets = kvAssets;
+            // 触发异步迁移到 D1
             try {
-                await writeDoc(userKey, userAssets);
-                migrated = true;
-
-                // 同时也把 ID 加入索引（只有主写入成功才更新索引）
-                const index = await readDoc(INDEX_KEY, []);
-                if (!index.includes(userId)) {
-                    index.push(userId);
-                    await writeDoc(INDEX_KEY, index);
-                }
+                await saveUserAssets(userId, kvAssets);
+                console.log(`[Migration] Migrated user ${userId} assets from KV to D1`);
             } catch (migErr) {
-                // 迁移写入失败：记录真实错误，避免日志掩盖问题
-                console.error(`[Migration] Failed to write new key for user ${userId}:`, migErr?.message);
+                console.error(`[Migration] D1 migration failed for ${userId}:`, migErr.message);
             }
-
-            if (migrated) {
-                await addSystemLog('INFO', 'Assets', `Migrated assets for user ${userId} to independent key`);
-            }
-        } else {
-            userAssets = [];
         }
     }
 
@@ -60,32 +51,22 @@ export async function POST(request) {
             return NextResponse.json({ success: false, error: 'Missing userId', code: 'BAD_REQUEST' }, { status: 400 });
         }
 
-        // 获取用户当前的资产以便比对（寻找被删掉的）
-        const userKey = `user:assets:${userId}`;
-        const oldAssets = await readDoc(userKey, []);
-
+        // 获取旧资产用于比对清理
+        const oldAssets = await getUserAssets(userId);
         const cleanAssets = assets.map(a => ({ code: a.code.toLowerCase(), type: a.type }));
 
-        // 识别出被删除的资产
+        // 识别被删除的资产
         const removedAssets = oldAssets.filter(old => !cleanAssets.some(a => a.code === old.code && a.type === old.type));
         const assetsChanged = removedAssets.length > 0 || cleanAssets.some(c => !oldAssets.some(o => o.code === c.code && o.type === c.type));
 
-        // 直接写入用户独立键，避免竞争冒险
-        await writeDoc(userKey, cleanAssets);
+        // 写入 D1
+        await saveUserAssets(userId, cleanAssets);
 
-        // 更新用户索引
-        const index = await readDoc(INDEX_KEY, []);
-        if (!index.includes(userId)) {
-            index.push(userId);
-            await writeDoc(INDEX_KEY, index);
-        }
-
-        // 仅在资产结构真正变更时记录日志（避免每分钟轮询都触发 KV 写日志）
         if (assetsChanged) {
-            await addSystemLog('INFO', 'Assets', `User ${userId} assets changed (${assets.length} items)`);
+            console.log(`[Assets] User ${userId} assets updated in D1 (${assets.length} items)`);
         }
 
-        // 核心：清理被删除资产的 KV 数据（必须 await，Workers 不支持 Response 之后的后台任务）
+        // 清理被删除资产的冗余数据
         if (removedAssets.length > 0) {
             await Promise.all(
                 removedAssets.map(r => cleanupSingleAssetIfNotUsed(r.type, r.code).catch(() => { }))

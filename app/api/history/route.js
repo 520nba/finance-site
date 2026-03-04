@@ -1,7 +1,5 @@
 import { NextResponse } from 'next/server';
-import { readDoc, writeDoc } from '@/lib/storage/kvClient';
-import { getHistoryFromKV, insertDailyPricesBatch } from '@/lib/storage/historyRepo';
-import { addSystemLog } from '@/lib/storage/logRepo';
+import { getHistory, insertDailyPricesBatch } from '@/lib/storage/historyRepo';
 
 function todayStr() {
     return new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' });
@@ -69,14 +67,14 @@ async function fetchStockHistoryServer(code, days) {
                     return { date: parts[0], value: parseFloat(parts[1]) };
                 }).filter(i => !isNaN(i.value));
                 if (data.length > 0) {
-                    await addSystemLog('INFO', 'History', `EastMoney fetch OK: ${code} (${data.length} pts)`);
+                    console.log(`[History] EastMoney fetch OK: ${code} (${data.length} pts)`);
                     return data.slice(-days);
                 }
             }
         }
-        await addSystemLog('WARN', 'History', `EastMoney returned non-ok for ${code}: ${res.status}`);
+        console.warn(`[History] EastMoney returned non-ok for ${code}: ${res.status}`);
     } catch (e) {
-        await addSystemLog('WARN', 'History', `EastMoney stock ${code} failed: ${e.message}`);
+        console.warn(`[History] EastMoney stock ${code} failed: ${e.message}`);
     }
 
     // 备用数据源: 尝试从腾讯 API 拼历史（仅当 eastmoney 失败时）
@@ -97,13 +95,13 @@ async function fetchStockHistoryServer(code, days) {
                     return { date, value: parseFloat(parts[2]) };
                 }).filter(i => !isNaN(i.value));
                 if (data.length > 0) {
-                    await addSystemLog('INFO', 'History', `Tencent flashdata OK: ${code} (${data.length} pts)`);
+                    console.log(`[History] Tencent flashdata OK: ${code} (${data.length} pts)`);
                     return data.slice(-days);
                 }
             }
         }
     } catch (e2) {
-        await addSystemLog('WARN', 'History', `Tencent fallback also failed for ${code}: ${e2.message}`);
+        console.warn(`[History] Tencent fallback also failed for ${code}: ${e2.message}`);
     }
     return null;
 }
@@ -157,7 +155,7 @@ async function fetchFundHistoryServer(code, days) {
                 .reverse();
         }
     } catch (e) {
-        await addSystemLog('WARN', 'History', `Fund lsjz ${code} failed: ${e.message}`);
+        console.warn(`[History] Fund lsjz ${code} failed: ${e.message}`);
     }
     return null;
 }
@@ -174,28 +172,17 @@ export async function GET(request) {
     }
 
     try {
-        const storageKey = `hist:${type}:${code}`;
         const today = todayStr();
 
-        // 1. 检查 KV 日级缓存
+        // 1. 优先从 D1 读取
         if (!noCache) {
-            const entry = await readDoc(storageKey, null);
-            if (entry && entry.date === today && Array.isArray(entry.history) && entry.history.length >= days * 0.7) {
-                return NextResponse.json({
-                    history: entry.history,
-                    summary: calcStats(entry.history),
-                    source: 'kv_cache'
-                });
-            }
-
-            // 2. 从 KV 时序数据中读取历史记录
-            const kvHistory = await getHistoryFromKV(code, type, days);
+            const kvHistory = await getHistory(code, type, days);
             if (kvHistory && kvHistory.length >= days * 0.7) {
-                await addSystemLog('INFO', 'History', `KV timeseries hit: ${code} (${kvHistory.length}pts)`);
+                console.log(`[History] D1 hit: ${code} (${kvHistory.length}pts)`);
                 return NextResponse.json({
                     history: kvHistory,
                     summary: calcStats(kvHistory),
-                    source: 'kv_timeseries'
+                    source: 'd1_storage'
                 });
             }
         }
@@ -209,7 +196,7 @@ export async function GET(request) {
         }
 
         if (!history || history.length === 0) {
-            await addSystemLog('WARN', 'History', `No data from any source for ${code} (${type})`);
+            console.warn(`[History] No data from any source for ${code} (${type})`);
             return NextResponse.json({ history: [], summary: { perf5d: 0, perf22d: 0, perf250d: 0 }, source: 'empty' });
         }
 
@@ -223,7 +210,7 @@ export async function GET(request) {
             source: 'external_api'
         });
     } catch (e) {
-        await addSystemLog('ERROR', 'History', `Crash for ${code}: ${e.message}`).catch(() => { });
+        console.error(`[History] Crash for ${code}: ${e.message}`);
         return NextResponse.json({
             error: e.message,
             stack: process.env.NODE_ENV !== 'production' ? e.stack : undefined

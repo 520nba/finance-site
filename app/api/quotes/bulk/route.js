@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getBulkQuotesFromKV, saveQuotesToKV } from '@/lib/storage/quoteRepo';
-import { addSystemLog } from '@/lib/storage/logRepo';
+import { getBulkQuotes, saveQuotes } from '@/lib/storage/quoteRepo';
 
 const BASE_HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
@@ -58,8 +57,8 @@ export async function syncQuotesBulk(items, allowExternal = false) {
 
 
     const codes = items.map(it => typeof it === 'string' ? it : it.code);
-    // 1. 从 KV 获取当前缓存
-    const dbResult = await getBulkQuotesFromKV(codes);
+    // 1. 从 D1/内存 获取当前缓存
+    const dbResult = await getBulkQuotes(codes);
 
     if (!allowExternal) {
         // 如果不允许外部访问，则直接返回缓存数据
@@ -85,8 +84,8 @@ export async function syncQuotesBulk(items, allowExternal = false) {
                 dataToSave[k] = enriched;
                 dbResult[k] = enriched;
             }
-            await saveQuotesToKV(dataToSave);
-            await addSystemLog('INFO', 'Quotes', `Synced ${Object.keys(externalData).length} quotes (including staleness refresh)`);
+            await saveQuotes(dataToSave);
+            console.log(`[Quotes] Synced ${Object.keys(externalData).length} quotes (including staleness refresh)`);
         }
     }
 

@@ -1,18 +1,16 @@
 import { NextResponse } from 'next/server';
-import { readDoc } from '@/lib/storage/kvClient';
+import { getAllUserIds } from '@/lib/storage/userRepo';
 import { isAdminAuthorized } from '@/lib/auth';
-
-const STORAGE_KEY = 'users_config';
 
 export async function GET(request) {
     if (!(await isAdminAuthorized(request))) {
         return NextResponse.json({ error: 'Unauthorized' }, { status: 403 });
     }
 
-    const INDEX_KEY = 'users_index';
-    const userIds = await readDoc(INDEX_KEY, []);
+    // 从 D1 获取所有用户 ID
+    const userIds = await getAllUserIds();
 
-    // 排除 admin
+    // 排除 admin 账号
     const filtered = userIds.filter(id => id !== 'admin');
 
     return NextResponse.json(filtered);

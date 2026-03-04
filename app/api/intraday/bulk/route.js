@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getIntradayFromKV, saveIntradayToKV, getBulkIntradayFromKV } from '@/lib/storage/intradayRepo';
-import { addSystemLog } from '@/lib/storage/logRepo';
+import { getIntraday, saveIntraday, getBulkIntraday } from '@/lib/storage/intradayRepo';
 
 function todayStr() {
     return new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' });
@@ -44,8 +43,8 @@ async function fetchSingleIntradayServer(code) {
             return cached.data;
         }
 
-        // 2. 优先尝试从 KV 缓存获取 (有效期 1 分钟)
-        const dbData = await getIntradayFromKV(code, today, true); // 开启 fallbackToLatest
+        // 2. 优先尝试从持久化层获取 (有效期 1 分钟)
+        const dbData = await getIntraday(code, today, true); // 开启 fallbackToLatest
         if (dbData && dbData.points && dbData.points.length > 0) {
             // 如果是今天的数据，检查 1 分钟新鲜度
             const isToday = dbData.points[0]?.time?.includes(':') && !dbData.points[0]?.time?.includes('-');
@@ -103,10 +102,10 @@ async function fetchSingleIntradayServer(code) {
         };
 
         INTRADAY_CACHE.set(code, { timestamp: now, data: result });
-        await addSystemLog('INFO', 'Intraday', `External Fetch: ${code}`);
+        console.log(`[Intraday] External Fetch: ${code}`);
 
-        // 4. 异步写入 KV 缓存进行持久化
-        await saveIntradayToKV(code, today, { ...result, updated_at: new Date().toISOString() });
+        // 4. 异步写入持久化层进行持久化 (D1 或内存)
+        await saveIntraday(code, today, { ...result, updated_at: new Date().toISOString() });
 
         return result;
     } catch (e) {
@@ -134,8 +133,8 @@ export async function syncIntradayBulk(items, allowExternal = false) {
     }
 
     if (toFetchFromPersist.length > 0) {
-        // 2. 批量从 KV 获取
-        const dbDataMap = await getBulkIntradayFromKV(toFetchFromPersist, today);
+        // 2. 批量从 D1/持久化层 获取
+        const dbDataMap = await getBulkIntraday(toFetchFromPersist, today);
         const externalFetchList = [];
 
         for (const item of toFetchFromPersist) {

@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { readDoc, writeDoc, deleteDoc } from '@/lib/storage/kvClient';
-import { addSystemLog } from '@/lib/storage/logRepo';
+import { deleteUser } from '@/lib/storage/userRepo';
 import { isAdminAuthorized } from '@/lib/auth';
 
 const STORAGE_KEY = 'users_config';
@@ -18,36 +18,40 @@ export async function POST(request) {
             return NextResponse.json({ error: 'Invalid target user' }, { status: 400 });
         }
 
-        const INDEX_KEY = 'users_index';
-        const userKey = `user:assets:${targetUserId}`;
-        let exists = false;
+        // 1. 从 D1 中物理删除 (新存储核心操作)
+        const d1Deleted = await deleteUser(targetUserId);
 
-        // 1. 从旧全量配置中移除 (兼容逻辑)
+        // 2. 清理旧 KV 数据 (兼容逻辑，确保双重干净)
+        const userKey = `user:assets:${targetUserId}`;
+        let kvDeleted = false;
+
+        // 删除 KV 独立键
+        const independentData = await readDoc(userKey, null);
+        if (independentData) {
+            await deleteDoc(userKey);
+            kvDeleted = true;
+        }
+
+        // 从同步全量配置中移除
         const globalData = await readDoc(STORAGE_KEY, {});
         if (globalData[targetUserId]) {
             delete globalData[targetUserId];
             await writeDoc(STORAGE_KEY, globalData);
-            exists = true;
+            kvDeleted = true;
         }
 
-        // 2. 删除独立键
-        const independentData = await readDoc(userKey, null);
-        if (independentData) {
-            await deleteDoc(userKey);
-            exists = true;
-        }
-
-        // 3. 从索引中移除 (核心：防止 Cron 继续生效)
+        // 从 KV 索引中移除 (如果还在用)
+        const INDEX_KEY = 'users_index';
         const index = await readDoc(INDEX_KEY, []);
         const newIndex = index.filter(id => id !== targetUserId);
         if (index.length !== newIndex.length) {
             await writeDoc(INDEX_KEY, newIndex);
-            exists = true;
+            kvDeleted = true;
         }
 
-        if (exists) {
-            await addSystemLog('WARN', 'Admin', `User ${targetUserId} deleted by admin`);
-            return NextResponse.json({ success: true, message: `User ${targetUserId} and their data removed.` });
+        if (d1Deleted || kvDeleted) {
+            console.warn(`[Admin] User ${targetUserId} deleted by admin (D1: ${d1Deleted}, KV: ${kvDeleted})`);
+            return NextResponse.json({ success: true, message: `User ${targetUserId} data removed.` });
         } else {
             return NextResponse.json({ error: 'User not found' }, { status: 404 });
         }

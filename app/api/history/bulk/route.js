@@ -1,7 +1,5 @@
 import { NextResponse } from 'next/server';
-import { readDoc, writeDoc } from '@/lib/storage/kvClient';
-import { insertDailyPricesBatch, getBulkHistoryFromKV, getHistoryFromKV } from '@/lib/storage/historyRepo';
-import { addSystemLog } from '@/lib/storage/logRepo';
+import { insertDailyPricesBatch, getBulkHistory, getHistory } from '@/lib/storage/historyRepo';
 
 function todayStr() {
     return new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' });
@@ -165,8 +163,8 @@ export async function syncHistoryBulk(items, days = 250, allowExternal = false) 
     const result = {};
     const toFetchExternally = [];
 
-    // 1. 并发从 KV 缓存获取历史数据 (使用 Batch)
-    const dbHistoryMap = await getBulkHistoryFromKV(items, days);
+    // 1. 并发从 D1 获取历史数据
+    const dbHistoryMap = await getBulkHistory(items, days);
 
     for (const item of items) {
         const key = `${item.type}:${item.code}`;

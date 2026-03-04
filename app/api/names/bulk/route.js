@@ -1,10 +1,8 @@
 import { NextResponse } from 'next/server';
-import { readDoc, writeDoc } from '@/lib/storage/kvClient';
-import { getAssetNamesFromKV, saveAssetNamesToKV } from '@/lib/storage/nameRepo';
-import { addSystemLog } from '@/lib/storage/logRepo';
+import { getAssetNames, saveAssetNames } from '@/lib/storage/nameRepo';
 
 
-const STORAGE_KEY = 'names_config';
+
 
 const BASE_HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
@@ -147,8 +145,8 @@ function isInvalidName(name) {
 export async function syncNamesBulk(items, allowExternal = false) {
     if (!Array.isArray(items) || items.length === 0) return {};
 
-    // 优先从 KV 获取
-    const result = await getAssetNamesFromKV(items);
+    // 优先从 D1 获取
+    const result = await getAssetNames(items);
     const toFetch = [];
 
     for (const item of items) {
@@ -189,8 +187,8 @@ export async function syncNamesBulk(items, allowExternal = false) {
             }
         }
         if (Object.keys(newNames).length > 0) {
-            await saveAssetNamesToKV(newNames);
-            await addSystemLog('INFO', 'Names', `Cached ${Object.keys(newNames).length} new asset names to KV`);
+            await saveAssetNames(newNames);
+            console.log(`[Names] Cached ${Object.keys(newNames).length} new asset names to D1`);
         }
     }
 
