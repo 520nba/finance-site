@@ -24,6 +24,7 @@ export async function GET(request) {
     }
 
     const cleanSecret = secret?.trim();
+    const secretSource = (ctx?.env?.DIAG_SECRET) ? 'Cloudflare Context' : 'process.env';
 
     if (!cleanSecret) {
         return NextResponse.json({
@@ -39,6 +40,8 @@ export async function GET(request) {
             debug: {
                 tokenReceived: !!token,
                 secretLength: cleanSecret.length,
+                secretMask: `${cleanSecret[0]}***${cleanSecret[cleanSecret.length - 1]}`,
+                secretSource: secretSource,
                 match: false,
                 envKeys: envKeys
             }
