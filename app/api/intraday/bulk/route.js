@@ -34,7 +34,7 @@ async function fetchSingleIntradayServer(code) {
     const now = Date.now();
 
     try {
-        const url = `https://push2.eastmoney.com/api/qt/stock/trends/get?secid=${market}.${clean}&fields1=f1,f2&fields2=f51,f52,f53`;
+        const url = `https://push2.eastmoney.com/api/qt/stock/trends2/get?secid=${market}.${clean}&fields1=f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13&fields2=f51,f52,f53,f54,f55,f56,f57,f58`;
 
         // 1. 检查内存缓存 (30秒)
         const cached = INTRADAY_CACHE.get(code);
@@ -66,41 +66,25 @@ async function fetchSingleIntradayServer(code) {
         if (!res.ok) return dbData; // 失败时返回 KV 里的（可能是昨天的）数据
         const json = await res.json();
         const d = json.data;
-        if (!d) return dbData;
-        const isFormat1 = d.trends && Array.isArray(d.trends) && d.trends.length > 0;
-        const isFormat2 = Array.isArray(d) && d.length > 0;
-
-        if (!isFormat1 && !isFormat2) {
+        if (!d || !d.trends || !Array.isArray(d.trends) || d.trends.length === 0) {
             // 如果远程返回空（非交易日），则彻底信任并返回 KV 中的上一个交易日数据
             return dbData;
         }
 
         let points = [];
-        let prePrice = (d.prePrice ?? d.preClose ?? 0) / 100;
+        let prePrice = parseFloat(d.preClose) || parseFloat(d.prePrice) || 0;
 
-        if (d.trends && Array.isArray(d.trends)) {
-            points = d.trends.map(line => {
-                const parts = line.split(',');
-                const fullTime = parts[0];
-                const timePart = fullTime.includes(' ') ? fullTime.split(' ')[1] : fullTime;
-                const val = parseFloat(parts[2]);
-                return {
-                    time: timePart,
-                    value: isNaN(val) ? 0 : val / 100
-                };
-            }).filter(p => p.value > 0);
-        } else if (Array.isArray(d)) {
-            points = d.map(item => {
-                const val = parseFloat(item.f3);
-                let timeStr = String(item.f2);
-                if (timeStr.length >= 4) {
-                    const hh = timeStr.slice(-4, -2);
-                    const mm = timeStr.slice(-2);
-                    timeStr = `${hh}:${mm}`;
-                }
-                return { time: timeStr, value: isNaN(val) ? 0 : val / 100 };
-            }).filter(p => p.value > 0);
-        }
+        points = d.trends.map(line => {
+            const parts = line.split(',');
+            const fullTime = parts[0];
+            const timePart = fullTime.includes(' ') ? fullTime.split(' ')[1] : fullTime;
+            // trends2 接口会直接返回真实的浮点数价格，无需像 trends 接口一样除以 100，完美适配 ETF (例如返回 3.341 而非 3341)
+            const val = parseFloat(parts[2]);
+            return {
+                time: timePart,
+                value: isNaN(val) ? 0 : val
+            };
+        }).filter(p => p.value > 0);
 
         if (points.length === 0) return null;
 
