@@ -7,7 +7,7 @@ import SearchBar from '@/components/SearchBar';
 import AssetCard from '@/components/AssetCard';
 import WatchlistSidebar from '@/components/WatchlistSidebar';
 import LogsModal from '@/components/LogsModal';
-import { fetchStockData, fetchStockHistory, fetchFundHistory, fetchFundInfo, fetchBulkHistory, fetchBulkStockData, fetchBulkNames, fetchIntradayData, fetchBulkIntradayData } from '@/lib/api';
+import { fetchBulkHistory, fetchBulkStockData, fetchBulkNames, fetchBulkIntradayData } from '@/lib/api';
 
 // 简单 Toast 状态，避免 alert() 阻断 UI
 function useToast() {
@@ -118,12 +118,13 @@ export default function Home() {
   useEffect(() => {
     if (activeTab !== 'watchlist' || !isLogged || assets.length === 0) return;
 
-    let isInitialTick = true;
+    let tickCount = 0;
     const tick = async () => {
       if (isSyncing) return;
+      tickCount++;
 
-      // 1. 每隔一分钟执行轮询时，检测云端用户的实际结构是否发生变更（针对跨设备数据防冲突保护）
-      if (!isInitialTick) {
+      // 1. 每 5 分钟才做一次跨设备检查（节省 4/5 的 KV 读取）
+      if (tickCount % 5 === 0) {
         try {
           const res = await fetch(`/api/user/assets?userId=${userId}`);
           const remoteList = await res.json();
@@ -137,7 +138,6 @@ export default function Home() {
           }
         } catch (e) { /* ignore */ }
       }
-      isInitialTick = false;
 
       // 2. 如果资产结构没变，继续原有的报价刷新流程
       // 从 ref 拿到最准的映射

@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
-import { readDoc, writeDoc, cleanupOldData, addSystemLog } from '@/lib/storage';
-
+import { readDoc, writeDoc, addSystemLog, cleanupSingleAssetIfNotUsed } from '@/lib/storage';
 
 const LEGACY_STORAGE_KEY = 'users_config';
 const INDEX_KEY = 'users_index';
@@ -57,6 +56,7 @@ export async function POST(request) {
 
         // 识别出被删除的资产
         const removedAssets = oldAssets.filter(old => !cleanAssets.some(a => a.code === old.code && a.type === old.type));
+        const assetsChanged = removedAssets.length > 0 || cleanAssets.some(c => !oldAssets.some(o => o.code === c.code && o.type === c.type));
 
         // 直接写入用户独立键，避免竞争冒险
         await writeDoc(userKey, cleanAssets);
@@ -68,15 +68,16 @@ export async function POST(request) {
             await writeDoc(INDEX_KEY, index);
         }
 
-        await addSystemLog('INFO', 'Assets', `User ${userId} updated assets (${assets.length} items) via independent key`);
+        // 仅在资产结构真正变更时记录日志（避免每分钟轮询都触发 KV 写日志）
+        if (assetsChanged) {
+            await addSystemLog('INFO', 'Assets', `User ${userId} assets changed (${assets.length} items)`);
+        }
 
-        // 异步后台触发垃圾回收（删除刚被取消关注的幽灵资产）
+        // 后台触发垃圾回收（使用静态引入，无动态 import 开销）
         if (removedAssets.length > 0) {
-            import('@/lib/storage').then(m => {
-                if (m.cleanupSingleAssetIfNotUsed) {
-                    removedAssets.forEach(r => m.cleanupSingleAssetIfNotUsed(r.type, r.code));
-                }
-            }).catch(() => { });
+            removedAssets.forEach(r => {
+                cleanupSingleAssetIfNotUsed(r.type, r.code).catch(() => { });
+            });
         }
 
         return NextResponse.json({ success: true });

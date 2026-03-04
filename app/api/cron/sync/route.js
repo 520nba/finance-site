@@ -2,7 +2,6 @@ import { NextResponse } from 'next/server';
 import { readDoc, addSystemLog } from '@/lib/storage';
 import { syncNamesBulk } from '@/app/api/names/bulk/route';
 import { syncHistoryBulk } from '@/app/api/history/bulk/route';
-import { syncQuotesBulk } from '@/app/api/quotes/bulk/route';
 import { syncIntradayBulk } from '@/app/api/intraday/bulk/route';
 
 const STORAGE_KEY = 'users_config';
@@ -60,13 +59,9 @@ export async function GET(request) {
             promises.push(syncHistoryBulk(itemsToSync, 250, true));
         }
 
-        // 交易日正常交易时间触发的高频同步 (实时股价 + 当日分时)
+        // 交易日正常交易时间触发的高频同步 (仅分时图，报价由前端直接从腾讯 API 拉取)
         if (task === 'intraday' || task === 'all') {
             await addSystemLog('INFO', 'Cron', `Starting INTRADAY sync for ${itemsToSync.length} items`);
-            const stocksOnly = itemsToSync.filter(i => i.type === 'stock');
-            if (stocksOnly.length > 0) {
-                promises.push(syncQuotesBulk(stocksOnly, true));
-            }
             promises.push(syncIntradayBulk(itemsToSync, true));
         }
 
