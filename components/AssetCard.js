@@ -5,7 +5,6 @@ import { motion } from 'framer-motion';
 import { Trash2 } from 'lucide-react';
 import VolatilityChart from './VolatilityChart';
 import IntradayChart from './IntradayChart';
-import LazyChart from './LazyChart';
 import { calculatePerformance } from '@/lib/utils';
 import { useAssetData } from '@/hooks/useAssetData';
 import { fetchBulkHistory } from '@/services/api/historyService';
