@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
-import { readDoc, writeDoc, insertDailyPricesBatch, getBulkHistoryFromKV, getHistoryFromKV, addSystemLog } from '@/lib/storage';
+import { readDoc, writeDoc } from '@/lib/storage/kvClient';
+import { insertDailyPricesBatch, getBulkHistoryFromKV, getHistoryFromKV } from '@/lib/storage/historyRepo';
+import { addSystemLog } from '@/lib/storage/logRepo';
 
 function todayStr() {
     return new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' });
@@ -48,12 +50,43 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 5000) {
     }
 }
 
+async function fetchStockHistoryTencent(code, days) {
+    try {
+        const url = `https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?_var=kline_dayqfq&param=${code.toLowerCase()},day,2024-01-01,2026-12-31,500,qfq`;
+        const res = await fetchWithTimeout(url, { headers: BASE_HEADERS }, 4000);
+        if (res.ok) {
+            const text = await res.text();
+            const jsonStr = text.replace(/^kline_dayqfq=/, '');
+            const d = JSON.parse(jsonStr);
+            const stockData = d.data?.[code.toLowerCase()];
+            const kline = stockData?.qfqday || stockData?.day;
+            if (kline && Array.isArray(kline)) {
+                return kline.map(item => ({
+                    date: item[0],
+                    value: parseFloat(item[2]) // 收盘价在 index 2
+                })).filter(i => !isNaN(i.value)).slice(-days);
+            }
+        }
+    } catch (e) {
+        console.warn(`[Bulk] Tencent stock ${code} failed:`, e.message);
+    }
+    return null;
+}
+
 async function fetchStockHistoryServer(code, days) {
     const { prefix, clean } = resolveMarket(code);
     const mkt = prefix === 'sz' ? '0' : '1';
+
+    // 1. 尝试 EastMoney (主用)
     try {
         const url = `https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=${mkt}.${clean}&fields1=f1,f2&fields2=f51,f53&klt=101&fqt=1&end=20500101&lmt=${days + 5}`;
-        const res = await fetchWithTimeout(url, { headers: { ...BASE_HEADERS, 'Referer': 'https://quote.eastmoney.com/' } }, 4000);
+        const res = await fetchWithTimeout(url, {
+            headers: {
+                ...BASE_HEADERS,
+                'Referer': 'https://quote.eastmoney.com/',
+                'Accept-Language': 'zh-CN,zh;q=0.9'
+            }
+        }, 4000);
         if (res.ok) {
             const d = await res.json();
             if (d.data && d.data.klines) {
@@ -67,7 +100,9 @@ async function fetchStockHistoryServer(code, days) {
     } catch (e) {
         console.warn(`[Bulk] EastMoney stock ${code} failed:`, e.message);
     }
-    return null;
+
+    // 2. 尝试 Tencent (备用)
+    return await fetchStockHistoryTencent(code, days);
 }
 
 async function fetchFundHistoryServer(code, days) {
@@ -201,8 +236,8 @@ export async function POST(request) {
     try {
         const { items, days = 250, allowExternal = false } = await request.json();
         const result = await syncHistoryBulk(items, days, allowExternal);
-        return NextResponse.json(result);
+        return NextResponse.json({ success: true, data: result });
     } catch (e) {
-        return NextResponse.json({ error: e.message }, { status: 500 });
+        return NextResponse.json({ success: false, error: e.message, code: 'INTERNAL_ERROR' }, { status: 500 });
     }
 }

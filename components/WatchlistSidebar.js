@@ -3,7 +3,7 @@
 import { useState, useMemo, useEffect } from 'react';
 import { ChevronDown, ChevronUp, ChevronsUpDown } from 'lucide-react';
 import { calculatePerformance } from '@/lib/utils';
-import { fetchBulkHistory } from '@/lib/api';
+import { fetchBulkHistory } from '@/services/api/historyService';
 
 // 从历史数据计算最终涨跌幅（单个数字）
 function lastPerf(history, days) {

@@ -27,6 +27,7 @@ export default function LogsModal({ isOpen, onClose }) {
         if (isOpen) {
             fetchLogs();
         }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [isOpen, hours]);
 
     const handleDownload = () => {
@@ -111,7 +112,7 @@ export default function LogsModal({ isOpen, onClose }) {
                                         [{new Date(log.timestamp).toLocaleTimeString()}]
                                     </span>
                                     <span className={`font-black whitespace-nowrap min-w-[60px] ${log.level === 'ERROR' ? 'text-red-500' :
-                                            log.level === 'WARN' ? 'text-yellow-500' : 'text-blue-500'
+                                        log.level === 'WARN' ? 'text-yellow-500' : 'text-blue-500'
                                         }`}>
                                         {log.level}
                                     </span>

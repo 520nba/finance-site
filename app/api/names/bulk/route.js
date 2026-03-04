@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
-import { readDoc, writeDoc, getAssetNamesFromKV, saveAssetNamesToKV, addSystemLog } from '@/lib/storage';
+import { readDoc, writeDoc } from '@/lib/storage/kvClient';
+import { getAssetNamesFromKV, saveAssetNamesToKV } from '@/lib/storage/nameRepo';
+import { addSystemLog } from '@/lib/storage/logRepo';
 
 
 const STORAGE_KEY = 'names_config';
@@ -205,8 +207,8 @@ export async function POST(request) {
     try {
         const { items, allowExternal = false } = await request.json();
         const result = await syncNamesBulk(items, allowExternal);
-        return NextResponse.json(result);
+        return NextResponse.json({ success: true, data: result });
     } catch (e) {
-        return NextResponse.json({ error: e.message }, { status: 500 });
+        return NextResponse.json({ success: false, error: e.message, code: 'INTERNAL_ERROR' }, { status: 500 });
     }
 }

@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
-import { readDoc, writeDoc, getHistoryFromKV, insertDailyPricesBatch, addSystemLog } from '@/lib/storage';
+import { readDoc, writeDoc } from '@/lib/storage/kvClient';
+import { getHistoryFromKV, insertDailyPricesBatch } from '@/lib/storage/historyRepo';
+import { addSystemLog } from '@/lib/storage/logRepo';
 
 function todayStr() {
     return new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' });

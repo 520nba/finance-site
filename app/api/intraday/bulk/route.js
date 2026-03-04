@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
-import { getIntradayFromKV, saveIntradayToKV, getBulkIntradayFromKV, addSystemLog } from '@/lib/storage';
+import { getIntradayFromKV, saveIntradayToKV, getBulkIntradayFromKV } from '@/lib/storage/intradayRepo';
+import { addSystemLog } from '@/lib/storage/logRepo';
 
 function todayStr() {
     return new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' });
@@ -186,9 +187,9 @@ export async function POST(request) {
     try {
         const { items, allowExternal = false } = await request.json();
         const result = await syncIntradayBulk(items, allowExternal);
-        return NextResponse.json(result);
+        return NextResponse.json({ success: true, data: result });
     } catch (e) {
-        return NextResponse.json({ error: e.message }, { status: 500 });
+        return NextResponse.json({ success: false, error: e.message, code: 'INTERNAL_ERROR' }, { status: 500 });
     }
 }
 

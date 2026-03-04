@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { purgeZombieAssets } from '@/lib/storage';
+import { purgeZombieAssets } from '@/lib/storage/maintenanceRepo';
 import { isAdminAuthorized } from '@/lib/auth';
 
 export async function POST(request) {

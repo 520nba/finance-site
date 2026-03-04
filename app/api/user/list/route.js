@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { readDoc } from '@/lib/storage';
+import { readDoc } from '@/lib/storage/kvClient';
 import { isAdminAuthorized } from '@/lib/auth';
 
 const STORAGE_KEY = 'users_config';

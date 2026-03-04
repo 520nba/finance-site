@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
-import { readDoc, addSystemLog } from '@/lib/storage';
+import { readDoc } from '@/lib/storage/kvClient';
+import { addSystemLog } from '@/lib/storage/logRepo';
 import { syncNamesBulk } from '@/app/api/names/bulk/route';
 import { syncHistoryBulk } from '@/app/api/history/bulk/route';
 import { syncIntradayBulk } from '@/app/api/intraday/bulk/route';

@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
-import { getBulkQuotesFromKV, saveQuotesToKV, addSystemLog } from '@/lib/storage';
+import { getBulkQuotesFromKV, saveQuotesToKV } from '@/lib/storage/quoteRepo';
+import { addSystemLog } from '@/lib/storage/logRepo';
 
 const BASE_HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
@@ -96,8 +97,8 @@ export async function POST(request) {
     try {
         const { items, allowExternal = false } = await request.json();
         const result = await syncQuotesBulk(items, allowExternal);
-        return NextResponse.json(result);
+        return NextResponse.json({ success: true, data: result });
     } catch (e) {
-        return NextResponse.json({ error: e.message }, { status: 500 });
+        return NextResponse.json({ success: false, error: e.message, code: 'INTERNAL_ERROR' }, { status: 500 });
     }
 }

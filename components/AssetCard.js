@@ -8,7 +8,8 @@ import IntradayChart from './IntradayChart';
 import LazyChart from './LazyChart';
 import { calculatePerformance } from '@/lib/utils';
 import { useAssetData } from '@/hooks/useAssetData';
-import { fetchBulkHistory, fetchBulkIntradayData } from '@/lib/api';
+import { fetchBulkHistory } from '@/services/api/historyService';
+import { fetchBulkIntradayData } from '@/services/api/intradayService';
 
 // 独立子组件，展示具体时段的表现
 function MetricPanel({ label, value, history = [], days }) {
@@ -71,8 +72,8 @@ function AssetCardComponent({ asset, onRemove, mode = 'volatility' }) {
         }
     );
 
-    const history = historyData?.history ?? [];
-    const summary = historyData?.summary ?? asset.summary ?? { perf5d: 0, perf22d: 0, perf250d: 0 };
+    const history = (historyData?.history?.length > 0) ? historyData.history : (asset.history ?? []);
+    const summary = (historyData?.history?.length > 0) ? historyData.summary : (asset.summary ?? { perf5d: 0, perf22d: 0, perf250d: 0 });
     const intraPoints = intradayData?.points ?? [];
 
 
@@ -80,7 +81,6 @@ function AssetCardComponent({ asset, onRemove, mode = 'volatility' }) {
     const l22 = summary.perf22d;
     const l250 = summary.perf250d;
 
-    const isPositive = (asset.changePercent ?? 0) >= 0;
 
     const isPositiveChange = (asset.changePercent ?? 0) >= 0;
 

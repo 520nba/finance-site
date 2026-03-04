@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getKvStorage } from '@/lib/storage';
+import { getKvStorage } from '@/lib/storage/kvClient';
 import { isAdminAuthorized } from '@/lib/auth';
 
 // 辅助函数：通过前缀分页统计 KV 中的键数量

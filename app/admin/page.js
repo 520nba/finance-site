@@ -18,7 +18,7 @@ export default function AdminPage() {
     useEffect(() => {
         const cachedKey = localStorage.getItem('tracker_admin_secret');
         if (cachedKey) {
-            setSecretKey(cachedKey);
+            setTimeout(() => setSecretKey(cachedKey), 0);
             // 自动不使用缓存自动发送请求，以免弹框
         }
     }, []);

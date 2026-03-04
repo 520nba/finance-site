@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
-import { readDoc, writeDoc, addSystemLog, cleanupSingleAssetIfNotUsed } from '@/lib/storage';
+import { readDoc, writeDoc } from '@/lib/storage/kvClient';
+import { addSystemLog } from '@/lib/storage/logRepo';
+import { cleanupSingleAssetIfNotUsed } from '@/lib/storage/maintenanceRepo';
 
 const LEGACY_STORAGE_KEY = 'users_config';
 const INDEX_KEY = 'users_index';
@@ -9,7 +11,7 @@ export async function GET(request) {
     const userId = searchParams.get('userId');
 
     if (!userId) {
-        return NextResponse.json({ error: 'Missing userId' }, { status: 400 });
+        return NextResponse.json({ success: false, error: 'Missing userId', code: 'BAD_REQUEST' }, { status: 400 });
     }
 
     // 1. 尝试读取独立键 (新格式)
@@ -37,7 +39,7 @@ export async function GET(request) {
         }
     }
 
-    return NextResponse.json(userAssets);
+    return NextResponse.json({ success: true, data: userAssets });
 }
 
 export async function POST(request) {
@@ -45,7 +47,7 @@ export async function POST(request) {
         const { userId, assets } = await request.json();
 
         if (!userId) {
-            return NextResponse.json({ error: 'Missing userId' }, { status: 400 });
+            return NextResponse.json({ success: false, error: 'Missing userId', code: 'BAD_REQUEST' }, { status: 400 });
         }
 
         // 获取用户当前的资产以便比对（寻找被删掉的）
@@ -80,8 +82,8 @@ export async function POST(request) {
             );
         }
 
-        return NextResponse.json({ success: true, cleaned: removedAssets.length });
+        return NextResponse.json({ success: true, data: { cleaned: removedAssets.length } });
     } catch (e) {
-        return NextResponse.json({ error: e.message }, { status: 500 });
+        return NextResponse.json({ success: false, error: e.message, code: 'INTERNAL_ERROR' }, { status: 500 });
     }
 }

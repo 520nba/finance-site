@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
-import { getSystemLogs, cleanupOldData, addSystemLog } from '@/lib/storage';
+import { getSystemLogs, addSystemLog } from '@/lib/storage/logRepo';
+import { cleanupOldData } from '@/lib/storage/maintenanceRepo';
 import { isAdminAuthorized } from '@/lib/auth';
 
 export async function GET(request) {
