@@ -23,17 +23,27 @@ export async function GET(request) {
         const globalData = await readDoc(LEGACY_STORAGE_KEY, {});
         userAssets = globalData[userId];
         if (userAssets) {
-            // 自动触发迁移回填
-            await writeDoc(userKey, userAssets);
+            // 自动触发迁移回填：写入失败只记录错误，不阻止本次数据返回
+            // 即：迁移失败时用户仍能看到数据（降级到旧格式读取），下次登录会再次尝试迁移
+            let migrated = false;
+            try {
+                await writeDoc(userKey, userAssets);
+                migrated = true;
 
-            // 同时也把 ID 加入索引
-            const index = await readDoc(INDEX_KEY, []);
-            if (!index.includes(userId)) {
-                index.push(userId);
-                await writeDoc(INDEX_KEY, index);
+                // 同时也把 ID 加入索引（只有主写入成功才更新索引）
+                const index = await readDoc(INDEX_KEY, []);
+                if (!index.includes(userId)) {
+                    index.push(userId);
+                    await writeDoc(INDEX_KEY, index);
+                }
+            } catch (migErr) {
+                // 迁移写入失败：记录真实错误，避免日志掩盖问题
+                console.error(`[Migration] Failed to write new key for user ${userId}:`, migErr?.message);
             }
 
-            await addSystemLog('INFO', 'Assets', `Migrated assets for user ${userId} to independent key`);
+            if (migrated) {
+                await addSystemLog('INFO', 'Assets', `Migrated assets for user ${userId} to independent key`);
+            }
         } else {
             userAssets = [];
         }

@@ -33,11 +33,11 @@ async function fetchExternalBulkQuotes(stocks) {
                 const match = line.match(/v_([^=]+)="([^"]+)"/);
                 if (!match) continue;
                 const data = match[2].split('~');
-                if (data.length < 6) continue;
+                if (data.length < 33) continue;  // 确保 data[32] (涨跌幅) 可访问
 
                 const code = match[1].toLowerCase();
                 result[code] = {
-                    name: data[1],
+                    name: data[1] || code,
                     code: code,
                     price: parseFloat(data[3]) || 0,
                     change: parseFloat(data[31]) || 0,

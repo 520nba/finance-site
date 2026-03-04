@@ -17,8 +17,14 @@ export function useAssetData(key, fetcher, options = {}) {
         const cached = localStorage.getItem(CACHE_PREFIX + key);
         if (cached) {
             try {
-                return JSON.parse(cached);
+                const parsed = JSON.parse(cached);
+                // 防御：拒绝格式不合法的旧版本缓存（如字符串或 null）
+                // 这类异常数据可能在账号切换或版本升级后残留
+                if (parsed === null || parsed === undefined) return null;
+                return parsed;
             } catch (e) {
+                // JSON 解析失败时清理损坏的缓存
+                localStorage.removeItem(CACHE_PREFIX + key);
                 return null;
             }
         }
@@ -36,9 +42,15 @@ export function useAssetData(key, fetcher, options = {}) {
         setIsValidating(true);
         try {
             const result = await fetcherRef.current();
-            if (result) {
+            // 防御：只有结果非空且可序列化时才更新缓存和状态
+            if (result !== null && result !== undefined) {
                 setData(result);
-                localStorage.setItem(CACHE_PREFIX + key, JSON.stringify(result));
+                try {
+                    localStorage.setItem(CACHE_PREFIX + key, JSON.stringify(result));
+                } catch (storageErr) {
+                    // localStorage 写入失败（如隐私模式或存储满）不影响内存状态
+                    console.warn(`[SWR] localStorage write failed for ${key}:`, storageErr?.message);
+                }
             }
             setError(null);
         } catch (err) {

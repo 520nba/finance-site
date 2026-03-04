@@ -63,11 +63,20 @@ export function useAssetSync({ userId, isLogged }) {
     // 登录后加载服务端数据
     useEffect(() => {
         if (!userId) return;
+
+        // 防竞态：每次 userId 变化创建新的 AbortController
+        // 当 userId 再次变化（快速切换账号），旧的请求会被 abort，防止串户
+        const controller = new AbortController();
+
         const load = async () => {
             setIsSyncing(true);
             setIsSessionReady(false);
+            // 切换账号时立即清空资产，避免短暂显示旧账号数据
+            setAssets([]);
             try {
-                const res = await fetch(`/api/user/assets?userId=${userId}`);
+                const res = await fetch(`/api/user/assets?userId=${userId}`, {
+                    signal: controller.signal
+                });
                 const json = await res.json();
                 // 后端统一返回 { success, data: [] } envelope 格式
                 const list = json?.data ?? json;
@@ -77,14 +86,24 @@ export function useAssetSync({ userId, isLogged }) {
                     setAssets([]);
                 }
             } catch (e) {
-                console.error('Failed to load user assets:', e);
+                // AbortError 是主动取消，不是真正的错误，静默处理
+                if (e?.name !== 'AbortError') {
+                    console.error('Failed to load user assets:', e);
+                }
             }
-            setIsSessionReady(true);
-            setLoadedUserId(userId);
-            setIsSyncing(false);
+            // 只在请求未被取消时更新 Session 状态
+            if (!controller.signal.aborted) {
+                setIsSessionReady(true);
+                setLoadedUserId(userId);
+                setIsSyncing(false);
+            }
         };
+
         load();
         localStorage.setItem('tracker_user_id', userId);
+
+        // Cleanup：当 userId 变化或组件卸载时，取消正在进行的请求
+        return () => controller.abort();
     }, [userId, refreshAssets]);
 
     // 使用 code 拼接的字符串作为依赖，避免轮询引发价格变动导致持续的高频 KV 覆写
