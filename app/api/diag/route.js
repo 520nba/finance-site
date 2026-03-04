@@ -2,23 +2,40 @@ import { NextResponse } from 'next/server';
 import { getCloudflareContext } from "@opennextjs/cloudflare";
 
 export async function GET(request) {
-    let secret = process.env.DIAG_SECRET;
+    const url = new URL(request.url);
+    const token = (request.headers.get('x-diag-token') || url.searchParams.get('token'))?.trim();
+
+    let secret;
+    const envKeys = [];
     try {
         const ctx = await getCloudflareContext();
+        if (ctx?.env) envKeys.push(...Object.keys(ctx.env));
         if (ctx?.env?.DIAG_SECRET) secret = ctx.env.DIAG_SECRET;
     } catch (e) { }
 
-    const token = request.headers.get('x-diag-token') || new URL(request.url).searchParams.get('token');
+    if (typeof process !== 'undefined' && process.env) {
+        envKeys.push(...Object.keys(process.env).filter(k => !envKeys.includes(k)));
+        if (!secret) secret = process.env.DIAG_SECRET;
+    }
 
-    if (!secret) {
+    const cleanSecret = secret?.trim();
+
+    if (!cleanSecret) {
         return NextResponse.json({
             error: 'Unauthorized',
-            hint: 'DIAG_SECRET is not configured.'
+            hint: 'DIAG_SECRET is not configured.',
+            envKeys: envKeys
         }, { status: 403 });
     }
 
-    if (token !== secret) {
-        return NextResponse.json({ error: 'Unauthorized' }, { status: 403 });
+    if (token !== cleanSecret) {
+        return NextResponse.json({
+            error: 'Unauthorized',
+            debug: {
+                secretLength: cleanSecret.length,
+                envKeys: envKeys
+            }
+        }, { status: 403 });
     }
 
     let debugInfo = {

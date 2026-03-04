@@ -6,24 +6,43 @@ import { getCloudflareContext } from "@opennextjs/cloudflare";
  * D1 深度诊断接口
  */
 export async function GET(request) {
-    let secret = process.env.DIAG_SECRET;
+    const url = new URL(request.url);
+    const token = url.searchParams.get('token')?.trim();
 
+    let secret; // Initialize secret
+    // 安全地记录环境键名列表以便调试，不泄露值
+    const envKeys = [];
     try {
         const ctx = await getCloudflareContext();
+        if (ctx?.env) envKeys.push(...Object.keys(ctx.env));
         if (ctx?.env?.DIAG_SECRET) secret = ctx.env.DIAG_SECRET;
-    } catch (e) { /* fallback to process.env */ }
+    } catch (e) { /* ignore */ }
 
-    const token = new URL(request.url).searchParams.get('token');
+    if (typeof process !== 'undefined' && process.env) {
+        envKeys.push(...Object.keys(process.env).filter(k => !envKeys.includes(k)));
+        if (!secret) secret = process.env.DIAG_SECRET;
+    }
 
-    if (!secret) {
+    const cleanSecret = secret?.trim();
+
+    if (!cleanSecret) {
         return NextResponse.json({
             error: 'Unauthorized',
-            hint: 'DIAG_SECRET is not configured in environment variables.'
+            hint: 'DIAG_SECRET is missing or empty in environment.',
+            availableEnvKeys: envKeys
         }, { status: 403 });
     }
 
-    if (token !== secret) {
-        return NextResponse.json({ error: 'Unauthorized' }, { status: 403 });
+    if (token !== cleanSecret) {
+        return NextResponse.json({
+            error: 'Unauthorized',
+            debug: {
+                tokenReceived: !!token,
+                secretLength: cleanSecret.length,
+                match: false,
+                envKeys: envKeys
+            }
+        }, { status: 403 });
     }
 
     const report = {
