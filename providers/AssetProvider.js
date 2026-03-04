@@ -24,7 +24,8 @@ export function AssetProvider({ children }) {
         isSyncing,
         setIsSyncing,
         assetsRef,
-        refreshAssets
+        refreshAssets,
+        syncAssetsToServer
     } = useAssetSync({ userId, isLogged });
 
     // Layer 3: 实时行情轮询（仅在 watchlist tab 下启动）
@@ -53,6 +54,7 @@ export function AssetProvider({ children }) {
         showToast,
         selectedCode,
         setSelectedCode,
+        syncAssetsToServer,
     });
 
     const value = useMemo(() => ({

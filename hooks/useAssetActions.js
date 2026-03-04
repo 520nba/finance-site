@@ -8,7 +8,7 @@ import { fetchBulkHistory } from '@/services/api/historyService';
  * 职责：封装所有会改变 assets 列表的用户操作，
  * 让 AssetProvider 回归到纯粹的状态聚合层。
  */
-export function useAssetActions({ activeTab, setAssets, setIsSyncing, showToast, selectedCode, setSelectedCode }) {
+export function useAssetActions({ activeTab, setAssets, setIsSyncing, showToast, selectedCode, setSelectedCode, syncAssetsToServer }) {
 
     // 内部辅助：获取单个资产的完整描述信息（名称 + 实时报价）
     const getAssetDetails = useCallback(async (code, type) => {
@@ -73,9 +73,14 @@ export function useAssetActions({ activeTab, setAssets, setIsSyncing, showToast,
      * 同步清除侧边栏选中状态
      */
     const removeAsset = useCallback((code) => {
-        setAssets(prev => prev.filter(a => a.code !== code));
+        setAssets(prev => {
+            const newList = prev.filter(a => a.code !== code);
+            // 立即触发强制同步，确保此时后端也删除成功，防止刷新复现
+            syncAssetsToServer(newList);
+            return newList;
+        });
         if (selectedCode === code) setSelectedCode(null);
-    }, [selectedCode, setAssets, setSelectedCode]);
+    }, [selectedCode, setAssets, setSelectedCode, syncAssetsToServer]);
 
     return { addAsset, removeAsset };
 }

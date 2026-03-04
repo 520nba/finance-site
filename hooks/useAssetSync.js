@@ -109,28 +109,29 @@ export function useAssetSync({ userId, isLogged }) {
     // 使用 code 拼接的字符串作为依赖，避免轮询引发价格变动导致持续的高频 KV 覆写
     const assetCodesStr = assets.map(a => `${a.type}:${a.code}`).sort().join(',');
 
-    // 数据变化后同步到服务端（禁止初始化阶段覆盖）
+    // 数据变化后同步到服务端（暴露给外部主动调用）
+    const syncAssetsToServer = useCallback(async (currentAssets) => {
+        if (!isLogged || !userId || !isSessionReady || userId !== loadedUserId) return;
+        const listToSync = currentAssets || assets;
+        const skeleton = listToSync.map(a => ({ code: a.code, type: a.type }));
+        try {
+            await fetch('/api/user/assets', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ userId, assets: skeleton }),
+            });
+            localStorage.setItem('tracker_assets_updated', Date.now().toString());
+        } catch (e) {
+            console.error('Sync failed:', e);
+        }
+    }, [isLogged, userId, isSessionReady, loadedUserId, assets]);
+
+    // 依然保留 useEffect 监听，用于捕获非显式调用的列表变化（如其他副作用）
     useEffect(() => {
         if (!isLogged || !userId || !isSessionReady || userId !== loadedUserId) return;
-        const sync = async () => {
-            const skeleton = assets.map(a => ({ code: a.code, type: a.type }));
-            try {
-                await fetch('/api/user/assets', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ userId, assets: skeleton }),
-                });
-                // 广播事件通知同浏览器的其他 Tab 页面
-                localStorage.setItem('tracker_assets_updated', Date.now().toString());
-            } catch (e) {
-                console.error('Sync failed:', e);
-            }
-        };
-        sync();
-        // assets 对象数组有意省略：assetCodesStr 已精确代表列表的增删变化，
-        // 避免在价格轮询更新时（价格变化 → assets 引用变化）触发不必要的 KV 写回。
+        syncAssetsToServer();
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [assetCodesStr, userId, isLogged, isSessionReady, loadedUserId]);
+    }, [assetCodesStr, userId, isLogged, isSessionReady, loadedUserId, syncAssetsToServer]);
 
     const assetsRef = useRef(assets);
     useEffect(() => {
@@ -155,5 +156,5 @@ export function useAssetSync({ userId, isLogged }) {
         return () => window.removeEventListener('storage', handleStorage);
     }, [isLogged, userId, refreshAssets]);
 
-    return { assets, setAssets, isSyncing, setIsSyncing, assetsRef, refreshAssets };
+    return { assets, setAssets, isSyncing, setIsSyncing, assetsRef, refreshAssets, syncAssetsToServer };
 }
