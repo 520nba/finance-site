@@ -28,7 +28,7 @@ function resolveMarket(code) {
     return { market, clean };
 }
 
-async function fetchSingleIntradayServer(code) {
+async function fetchSingleIntradayServer(code, forcePersist = false) {
     const { market, clean } = resolveMarket(code);
     const today = todayStr();
     const now = Date.now();
@@ -105,7 +105,7 @@ async function fetchSingleIntradayServer(code) {
         console.log(`[Intraday] External Fetch: ${code}`);
 
         // 4. 异步写入持久化层进行持久化 (D1 或内存)
-        await saveIntraday(code, today, { ...result, updated_at: new Date().toISOString() });
+        await saveIntraday(code, today, { ...result, updated_at: new Date().toISOString() }, forcePersist);
 
         return result;
     } catch (e) {
@@ -169,7 +169,7 @@ export async function syncIntradayBulk(items, allowExternal = false) {
                 const chunk = externalFetchList.slice(i, i + CHUNK_SIZE);
                 const chunkResults = await Promise.all(
                     chunk.map(async (item) => {
-                        const data = await fetchSingleIntradayServer(item.code);
+                        const data = await fetchSingleIntradayServer(item.code, true); // Force persist to D1
                         return { code: item.code, data };
                     })
                 );
