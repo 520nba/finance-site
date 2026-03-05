@@ -117,15 +117,7 @@ function AssetCardComponent({ asset, onRemove, mode = 'volatility' }) {
 
             {mode === 'realtime' ? (
                 <div className="mt-2">
-                    <div className="flex justify-between items-center mb-2">
-                        <span className="text-[10px] font-bold uppercase tracking-widest opacity-20">今日分时</span>
-                        <div className="flex gap-3">
-                            <div className="flex items-center gap-1">
-                                <span className="w-1.5 h-1.5 rounded-full bg-blue-500"></span>
-                                <span className="text-[9px] font-bold opacity-30">价格</span>
-                            </div>
-                        </div>
-                    </div>
+
                     <div className="flex-1">
                         {asset.type === 'fund' ? (
                             <div className="h-[120px] flex items-center justify-center text-white/20 text-sm bg-white/5 rounded-xl border border-white/5">

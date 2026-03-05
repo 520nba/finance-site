@@ -103,7 +103,7 @@ export default function IntradayChart({ data, prevClose, height = 300 }) {
                 top: 20,
                 left: 10,
                 right: 50,
-                bottom: 20,
+                bottom: 0,
                 containLabel: true
             },
             xAxis: {
