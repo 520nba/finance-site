@@ -142,7 +142,7 @@ export function useAssetSync({ userId, isLogged }) {
     const syncAssetsToServer = useCallback(async (currentAssets) => {
         if (!isLogged || !userId || !isSessionReady || userId !== loadedUserId) return;
         // 优先使用传入的列表，否则读取 Ref（避免把 assets 列入 useCallback 依赖，防止实时报价更新时重建函数引用）
-        const listToSync = currentAssets || assetsRef.current;
+        const listToSync = Array.isArray(currentAssets) ? currentAssets : assetsRef.current;
         const skeleton = listToSync.map(a => ({ code: a.code, type: a.type }));
         try {
             await fetch('/api/user/assets', {
@@ -159,7 +159,7 @@ export function useAssetSync({ userId, isLogged }) {
     // 依然保留 useEffect 监听，用于捕获非显式调用的列表变化（如其他副作用）
     useEffect(() => {
         if (!isLogged || !userId || !isSessionReady || userId !== loadedUserId) return;
-        syncAssetsToServer();
+        syncAssetsToServer(assets);
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [assetCodesStr, userId, isLogged, isSessionReady, loadedUserId, syncAssetsToServer]);
 
