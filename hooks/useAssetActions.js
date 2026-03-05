@@ -56,17 +56,19 @@ export function useAssetActions({ activeTab, setAssets, setIsSyncing, showToast,
 
         const asset = await getAssetDetails(code, typeHint);
         if (asset) {
-            setAssets(prev => {
-                const list = Array.isArray(prev) ? prev : [];
-                // 去重：已存在则不重复添加
-                if (list.find(a => a.code === code)) return list;
-                return [...list, asset];
-            });
+            const list = Array.isArray(assetsRef.current) ? assetsRef.current : [];
+            // 去重：已存在则不重复添加
+            if (!list.find(a => a.code === code)) {
+                const newList = [...list, asset];
+                setAssets(newList);
+                // 立即触发强制同步，避免依赖 useEffect 引发新旧状态竞态
+                syncAssetsToServer(newList);
+            }
         } else {
             showToast('加载失败，可能代码无效');
         }
         setIsSyncing(false);
-    }, [activeTab, getAssetDetails, setIsSyncing, setAssets, showToast]);
+    }, [activeTab, getAssetDetails, setIsSyncing, setAssets, showToast, assetsRef, syncAssetsToServer]);
 
     /**
      * 从自选列表移除资产
