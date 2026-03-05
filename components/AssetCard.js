@@ -62,7 +62,7 @@ function AssetCardComponent({ asset, onRemove, mode = 'volatility' }) {
     );
 
     // 2. 分时数据获取 (仅在 realtime 模式且可见时启用，开启自动轮询 2 分钟)
-    const { data: intradayData } = useAssetData(
+    const { data: intradayData, isValidating: isIntraValidating } = useAssetData(
         `intra:${asset.type}:${asset.code}`,
         () => fetchBulkIntradayData([{ code: asset.code, type: asset.type }], true).then(res => res[asset.code]),
         {
@@ -137,7 +137,7 @@ function AssetCardComponent({ asset, onRemove, mode = 'volatility' }) {
                                 prevClose={asset.prevClose || intradayData?.prevClose || asset.price}
                                 height={200}
                             />
-                        ) : (
+                        ) : isIntraValidating ? (
                             <div className="h-[200px] flex flex-col items-center justify-center text-white/20 text-sm gap-2 bg-white/5 rounded-xl border border-white/5">
                                 <motion.div
                                     animate={{ rotate: 360 }}
@@ -145,6 +145,10 @@ function AssetCardComponent({ asset, onRemove, mode = 'volatility' }) {
                                     className="w-5 h-5 border-2 border-white/10 border-t-white/40 rounded-full"
                                 />
                                 <span className="italic">行情数据同步中，请稍候...</span>
+                            </div>
+                        ) : (
+                            <div className="h-[200px] flex items-center justify-center text-white/20 text-sm bg-white/5 rounded-xl border border-white/5">
+                                <span className="italic">暂无今日分时数据</span>
                             </div>
                         )}
                     </div>
