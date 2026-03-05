@@ -81,7 +81,8 @@ export default function WatchlistSidebar({ assets, mode = 'volatility', selected
     // 排序：null 值排最后
     const sorted = useMemo(() => {
         return [...rows].sort((a, b) => {
-            const av = a[sortKey], bv = b[sortKey];
+            const av = a[sortKey] ?? null;
+            const bv = b[sortKey] ?? null;
             if (av === null && bv === null) return 0;
             if (av === null) return 1;
             if (bv === null) return -1;
@@ -92,7 +93,6 @@ export default function WatchlistSidebar({ assets, mode = 'volatility', selected
     const scrollToAsset = (code) => {
         if (mode === 'realtime') {
             if (onSelect) onSelect(code);
-            return;
         }
 
         const el = document.getElementById(`asset-${code}`);
@@ -146,7 +146,13 @@ export default function WatchlistSidebar({ assets, mode = 'volatility', selected
                     <div className="flex items-center px-4 py-1.5 border-b border-white/5 gap-3">
                         <span className="flex-1 text-[10px] font-bold uppercase tracking-widest opacity-25">代码名称</span>
                         <span className="w-20 text-right text-[10px] font-bold uppercase tracking-widest opacity-25">现价</span>
-                        <span className="w-16 text-right text-[10px] font-bold uppercase tracking-widest opacity-25">涨跌幅</span>
+                        <button
+                            onClick={() => handleSort('changePercent')}
+                            className="w-16 flex items-center justify-end gap-0.5 text-right text-[10px] font-bold uppercase tracking-widest opacity-40 hover:opacity-80 transition-opacity cursor-pointer"
+                        >
+                            涨跌幅
+                            <SortIcon colKey="changePercent" sortKey={sortKey} sortDesc={sortDesc} />
+                        </button>
                     </div>
                 )}
 
