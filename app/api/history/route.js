@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server';
 import { getHistory, insertDailyPricesBatch } from '@/lib/storage/historyRepo';
 
-function todayStr() {
-    return new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' });
+function todayStr(date = new Date()) {
+    return date.toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' });
 }
 
 const BASE_HEADERS = {
@@ -177,8 +177,15 @@ export async function GET(request) {
         // 1. 优先从 D1 读取
         if (!noCache) {
             const kvHistory = await getHistory(code, type, days);
-            if (kvHistory && kvHistory.length >= days * 0.7) {
-                console.log(`[History] D1 hit: ${code} (${kvHistory.length}pts)`);
+            const hasEnough = kvHistory && kvHistory.length >= days * 0.7;
+
+            // 如果数据量够，或者最新的一条数据就是今天/昨天，说明已经同步过了
+            const lastDate = kvHistory.length > 0 ? kvHistory[kvHistory.length - 1].date : null;
+            const yesterday = todayStr(new Date(Date.now() - 86400000));
+            const isFresh = lastDate && (lastDate === today || lastDate === yesterday);
+
+            if (hasEnough || isFresh) {
+                console.log(`[History] D1 hit ${isFresh ? '(Fresh)' : '(Enough)'}: ${code}`);
                 return NextResponse.json({
                     history: kvHistory,
                     summary: calcStats(kvHistory),

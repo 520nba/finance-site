@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getIntraday, saveIntraday, getBulkIntraday } from '@/lib/storage/intradayRepo';
+import { getIntraday, saveIntraday, getBulkIntraday, saveIntradayBatch } from '@/lib/storage/intradayRepo';
 
 function todayStr() {
     return new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' });
@@ -104,9 +104,6 @@ async function fetchSingleIntradayServer(code, forcePersist = false) {
         INTRADAY_CACHE.set(code, { timestamp: now, data: result });
         console.log(`[Intraday] External Fetch: ${code}`);
 
-        // 4. 异步写入持久化层进行持久化 (D1 或内存)
-        await saveIntraday(code, today, { ...result, updated_at: new Date().toISOString() }, forcePersist);
-
         return result;
     } catch (e) {
         console.error(`[Intraday Bulk] Failed for ${code}:`, e.message);
@@ -114,7 +111,7 @@ async function fetchSingleIntradayServer(code, forcePersist = false) {
     }
 }
 
-export async function syncIntradayBulk(items, allowExternal = false) {
+export async function syncIntradayBulk(items, allowExternal = false, request = null) {
     if (!Array.isArray(items) || items.length === 0) return {};
 
     const today = todayStr();
@@ -145,7 +142,9 @@ export async function syncIntradayBulk(items, allowExternal = false) {
                 const updatedAt = dbData.updated_at ? new Date(dbData.updated_at).getTime() : 0;
 
                 // 1. 如果是今日数据且足够新鲜，直接用
-                if (isToday && (now - updatedAt < 60000)) {
+                // 普通用户请求 (allowExternal=false) 容忍 5 分钟 D1 陈旧度，Cron (allowExternal=true) 容忍 1 分钟
+                const stalenessThreshold = allowExternal ? 60000 : 300000;
+                if (isToday && (now - updatedAt < stalenessThreshold)) {
                     result[item.code] = dbData;
                     continue;
                 }
@@ -163,23 +162,35 @@ export async function syncIntradayBulk(items, allowExternal = false) {
         }
 
         if (externalFetchList.length > 0 && allowExternal) {
-            // 3. 最后才去拉网络，分片串行以保护 Edge（与 history/bulk 保持一致）
+            // 3. 最后才去拉网络，分片串行以保护 Edge
             const CHUNK_SIZE = 10;
+            const recordsToSave = [];
+
             for (let i = 0; i < externalFetchList.length; i += CHUNK_SIZE) {
                 const chunk = externalFetchList.slice(i, i + CHUNK_SIZE);
                 const chunkResults = await Promise.all(
                     chunk.map(async (item) => {
-                        const data = await fetchSingleIntradayServer(item.code, true); // Force persist to D1
+                        const data = await fetchSingleIntradayServer(item.code, allowExternal);
                         return { code: item.code, data };
                     })
                 );
+
                 for (const { code, data } of chunkResults) {
-                    if (data) result[code] = data;
+                    if (data) {
+                        result[code] = data;
+                        recordsToSave.push({ code, date: today, data });
+                    }
                 }
-                // 分片间延迟：减少对东方财富 API 的突发请求压力，防止限流
+
                 if (i + CHUNK_SIZE < externalFetchList.length) {
                     await new Promise(r => setTimeout(r, 100));
                 }
+            }
+
+            // 批量持久化到 D1
+            if (recordsToSave.length > 0) {
+                await saveIntradayBatch(recordsToSave);
+                console.log(`[Intraday] Batch saved ${recordsToSave.length} items to D1`);
             }
         }
     }
@@ -190,7 +201,7 @@ export async function syncIntradayBulk(items, allowExternal = false) {
 export async function POST(request) {
     try {
         const { items, allowExternal = false } = await request.json();
-        const result = await syncIntradayBulk(items, allowExternal);
+        const result = await syncIntradayBulk(items, allowExternal, request);
         return NextResponse.json({ success: true, data: result });
     } catch (e) {
         return NextResponse.json({ success: false, error: e.message, code: 'INTERNAL_ERROR' }, { status: 500 });

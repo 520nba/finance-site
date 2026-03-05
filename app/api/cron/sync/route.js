@@ -35,7 +35,7 @@ export async function GET(request) {
                 results.names_error = e.message;
             }
             try {
-                results.history = await syncHistoryBulk(itemsToSync, 250, true);
+                results.history = await syncHistoryBulk(itemsToSync, 250, true, request);
             } catch (e) {
                 console.error('[Cron] syncHistoryBulk failed:', e.message);
                 results.history_error = e.message;
@@ -46,7 +46,7 @@ export async function GET(request) {
         if (task === 'intraday' || task === 'all') {
             console.log(`[Cron] Starting INTRADAY sync for ${itemsToSync.length} items`);
             try {
-                results.intraday = await syncIntradayBulk(itemsToSync, true);
+                results.intraday = await syncIntradayBulk(itemsToSync, true, request);
             } catch (e) {
                 console.error('[Cron] syncIntradayBulk failed:', e.message);
                 results.intraday_error = e.message;

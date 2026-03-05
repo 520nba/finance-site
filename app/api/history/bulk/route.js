@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server';
 import { insertDailyPricesBatch, getBulkHistory, getHistory } from '@/lib/storage/historyRepo';
 
-function todayStr() {
-    return new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' });
+function todayStr(date = new Date()) {
+    return date.toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' });
 }
 
 // ── 外部数据获取（服务端直连）──────────────────────────────────────
@@ -157,7 +157,7 @@ async function fetchFundHistoryServer(code, days) {
     return null;
 }
 
-export async function syncHistoryBulk(items, days = 250, allowExternal = false) {
+export async function syncHistoryBulk(items, days = 250, allowExternal = false, request = null) {
     if (!Array.isArray(items) || items.length === 0) return {};
 
     const result = {};
@@ -174,14 +174,22 @@ export async function syncHistoryBulk(items, days = 250, allowExternal = false) 
             // 实际上 getBulkHistoryFromKV 返回的是 reverse 后的结果，即正序（最早到最新）。
             const latestDateStr = dbHistory[dbHistory.length - 1].date;
             const latestDate = new Date(latestDateStr);
-            const today = new Date();
-            today.setHours(today.getHours() + 8); // Asia/Shanghai
-            const timeDiff = today.getTime() - latestDate.getTime();
+            const now = new Date();
+            // 粗略计算天数差 (Swedish format 保证了日期字符串的可解析性)
+            const timeDiff = now.getTime() - latestDate.getTime();
             const daysDiff = timeDiff / (1000 * 3600 * 24);
 
-            // 核心隔离逻辑：如果不允许外部访问，直接返回 KV 缓存内容（哪怕是旧的）
-            // 如果允许外部访问且数据足够“新鲜”（小于 2 天），也直接返回缓存
-            if (!allowExternal || daysDiff < 2) {
+            // 如果不允许外部访问，直接返回；
+            // 如果允许外部访问，但数据小于 3 天旧（交易日间隔），或者是用户请求（非 Cron），也倾向于直接返回
+            const isCron = request && (
+                request.headers.get('x-admin-key') ||
+                request.headers.get('x-admin-session') ||
+                new URL(request.url).searchParams.get('token') // Cron 经常带 token
+            );
+            const isUserRequest = !isCron;
+            const skipExternal = !allowExternal || daysDiff < 3 || (isUserRequest && dbHistory.length > 200);
+
+            if (skipExternal) {
                 result[key] = {
                     history: dbHistory,
                     summary: calcStats(dbHistory)
@@ -233,7 +241,7 @@ export async function syncHistoryBulk(items, days = 250, allowExternal = false) 
 export async function POST(request) {
     try {
         const { items, days = 250, allowExternal = false } = await request.json();
-        const result = await syncHistoryBulk(items, days, allowExternal);
+        const result = await syncHistoryBulk(items, days, allowExternal, request);
         return NextResponse.json({ success: true, data: result });
     } catch (e) {
         return NextResponse.json({ success: false, error: e.message, code: 'INTERNAL_ERROR' }, { status: 500 });

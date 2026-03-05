@@ -50,10 +50,19 @@ export async function GET(request) {
 
         // 6. 清理测试数据
         report.steps.push({ name: 'cleanup_test' });
-        await runSql('DELETE FROM users WHERE id = ?', [TEST_USER]);
-        report.steps[5].status = 'success';
+        // D1 写入频率审计
+        const stats = {
+            intraday_1h: await queryOne("SELECT count(*) as c FROM asset_intraday WHERE updated_at > datetime('now', '-1 hour')"),
+            quotes_1h: await queryOne("SELECT count(*) as c FROM asset_quotes WHERE updated_at > datetime('now', '-1 hour')"),
+            history_total: await queryOne("SELECT count(*) as c FROM asset_history"),
+            top_updated_intraday: await queryAll("SELECT code, count(*) as c FROM asset_intraday WHERE updated_at > datetime('now', '-1 hour') GROUP BY code ORDER BY c DESC LIMIT 5")
+        };
+        report.write_stats = stats;
 
-        return NextResponse.json({ success: true, report });
+        return NextResponse.json({
+            success: true,
+            report
+        });
 
     } catch (e) {
         return NextResponse.json({
