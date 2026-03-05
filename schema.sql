@@ -33,7 +33,7 @@ CREATE TABLE IF NOT EXISTS asset_history (
     PRIMARY KEY(code, type, record_date)
 );
 
--- 分时数据
+-- 分时数据 (按天存储的聚合 JSON)
 CREATE TABLE IF NOT EXISTS asset_intraday (
     code TEXT NOT NULL,
     record_date TEXT NOT NULL,
@@ -41,6 +41,16 @@ CREATE TABLE IF NOT EXISTS asset_intraday (
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY(code, record_date)
 );
+
+-- 分时数据点 (颗粒度到分钟)
+CREATE TABLE IF NOT EXISTS asset_intraday_points (
+    code TEXT NOT NULL,
+    time DATETIME NOT NULL,
+    price REAL NOT NULL,
+    vol REAL NOT NULL,
+    PRIMARY KEY(code, time)
+);
+CREATE INDEX IF NOT EXISTS idx_intra_points_code_time ON asset_intraday_points(code, time DESC);
 
 -- 报价缓存 (D1 历史缓存表)
 CREATE TABLE IF NOT EXISTS asset_quotes (

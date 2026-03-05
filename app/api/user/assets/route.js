@@ -1,7 +1,9 @@
 import { NextResponse } from 'next/server';
 import { getUserAssets, saveUserAssets } from '@/lib/storage/userRepo';
 import { cleanupSingleAssetIfNotUsed } from '@/lib/storage/maintenanceRepo';
-import { getD1Storage } from '@/lib/storage/d1Client';
+import { getD1Storage, getCloudflareCtx } from '@/lib/storage/d1Client';
+import { syncHistoryBulk } from '@/app/api/history/bulk/route';
+import { syncNamesBulk } from '@/app/api/names/bulk/route';
 
 export async function GET(request) {
     const { searchParams } = new URL(request.url);
@@ -12,8 +14,6 @@ export async function GET(request) {
     }
 
     try {
-        // [100% D1-Only] 仅从 D1 读取，不再向 KV 回退
-        // 这样用户删除资产后，D1 为空即为空，不会再从旧数据库 “复活”数据
         const userAssets = await getUserAssets(userId);
         return NextResponse.json({ success: true, data: userAssets });
     } catch (e) {
@@ -33,45 +33,64 @@ export async function POST(request) {
             return NextResponse.json({ success: false, error: 'Missing userId', code: 'BAD_REQUEST' }, { status: 400 });
         }
 
-        // [Robustness] 检查 D1 连通性
         const db = await getD1Storage();
         if (!db) {
             return NextResponse.json({ success: false, error: 'Database unavailable', code: 'D1_UNAVAILABLE' }, { status: 503 });
         }
 
-        // 获取旧资产用于比对清理
         const oldAssets = await getUserAssets(userId);
-
-        // [Defensive] 数据清洗与排除无效项
         const cleanAssets = (Array.isArray(assets) ? assets : [])
             .filter(a => a && a.code && a.type)
             .map(a => ({ code: String(a.code).toLowerCase(), type: a.type }));
 
+        const addedAssets = cleanAssets.filter(c => !oldAssets.some(o => o.code === c.code && o.type === c.type));
         const removedAssets = oldAssets.filter(old => !cleanAssets.some(a => a.code === old.code && a.type === old.type));
-        const assetsChanged = removedAssets.length > 0 || cleanAssets.some(c => !oldAssets.some(o => o.code === c.code && o.type === c.type));
 
-        // 写入 D1
+        // 1. 优先写入资产基础关联
         await saveUserAssets(userId, cleanAssets);
 
-        if (assetsChanged) {
-            console.log(`[Assets] User ${userId} assets updated in D1 (${cleanAssets.length} items)`);
+        // 2. 利用 Serverless 异步机制后台静默抓取历史数据与名称
+        if (addedAssets.length > 0) {
+            const cloudflare = await getCloudflareCtx();
+            if (cloudflare?.ctx?.waitUntil) {
+                // 利用 ctx.waitUntil 在响应后继续执行抓取任务
+                cloudflare.ctx.waitUntil((async () => {
+                    try {
+                        console.log(`[Assets] Background Sync starting for ${addedAssets.length} new items of ${userId}`);
+                        // 同步名称
+                        await syncNamesBulk(addedAssets, true);
+                        // 同步 250 天历史数据
+                        await syncHistoryBulk(addedAssets, 250, true);
+                        console.log(`[Assets] Background Sync finished for ${userId}`);
+                    } catch (err) {
+                        console.error(`[Assets] Background Sync failed for ${userId}:`, err.message);
+                    }
+                })());
+            } else {
+                // 非 Edge 环境或不支持 waitUntil 时，还是得稍微挡一下或者忽略（本地开发环境通常不支持 waitUntil）
+                console.log(`[Assets] ctx.waitUntil not available, skipping background sync`);
+            }
         }
 
-        // 立即执行清理 (pulse-less)
         if (removedAssets.length > 0) {
-            await Promise.all(
+            // 背景清理
+            const cloudflare = await getCloudflareCtx();
+            const cleanupTask = Promise.all(
                 removedAssets.map(r => cleanupSingleAssetIfNotUsed(r.type, r.code).catch(() => { }))
             );
+            if (cloudflare?.ctx?.waitUntil) {
+                cloudflare.ctx.waitUntil(cleanupTask);
+            }
         }
 
-        return NextResponse.json({ success: true, data: { cleaned: removedAssets.length } });
+        return NextResponse.json({ success: true, data: { added: addedAssets.length, removed: removedAssets.length } });
     } catch (e) {
         console.error(`[Assets] POST critical failure for ${currentUserId}:`, e.message);
         return NextResponse.json({
             success: false,
             error: e.message,
-            stack: process.env.NODE_ENV !== 'production' ? e.stack : undefined,
             code: 'INTERNAL_ERROR'
         }, { status: 500 });
     }
 }
+
