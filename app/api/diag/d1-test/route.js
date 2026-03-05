@@ -1,10 +1,15 @@
 import { NextResponse } from 'next/server';
 import { getD1Storage, runSql, queryOne, queryAll } from '@/lib/storage/d1Client';
+import { isAdminAuthorized } from '@/lib/auth';
 
 /**
  * D1 深度诊断接口
  */
 export async function GET(request) {
+    if (!(await isAdminAuthorized(request))) {
+        return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+    }
+
     const report = {
         timestamp: new Date().toISOString(),
         steps: []
@@ -54,7 +59,7 @@ export async function GET(request) {
         return NextResponse.json({
             success: false,
             error: e.message,
-            stack: e.stack,
+            // Removed stack for security
             report
         }, { status: 500 });
     }

@@ -16,7 +16,7 @@ export default function AdminPage() {
 
     // 加载缓存密钥（如果有并且依然有效）
     useEffect(() => {
-        const cachedKey = localStorage.getItem('tracker_admin_secret');
+        const cachedKey = sessionStorage.getItem('tracker_admin_secret');
         if (cachedKey) {
             setTimeout(() => setSecretKey(cachedKey), 0);
             // 自动不使用缓存自动发送请求，以免弹框
@@ -46,11 +46,11 @@ export default function AdminPage() {
                 if (statsData.users !== undefined) setStats(statsData);
 
                 setIsAuthenticated(true);
-                localStorage.setItem('tracker_admin_secret', keyToUse);
+                sessionStorage.setItem('tracker_admin_secret', keyToUse);
             } else {
                 showToast('鉴权失败: 密钥无效或无权限');
                 setIsAuthenticated(false);
-                localStorage.removeItem('tracker_admin_secret');
+                sessionStorage.removeItem('tracker_admin_secret');
             }
         } catch (e) {
             showToast('无法连接服务器');
@@ -84,7 +84,7 @@ export default function AdminPage() {
     };
 
     const handleLogout = () => {
-        localStorage.removeItem('tracker_admin_secret');
+        sessionStorage.removeItem('tracker_admin_secret');
         setIsAuthenticated(false);
         setSecretKey('');
     };

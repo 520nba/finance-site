@@ -23,17 +23,13 @@ export const viewport = {
   userScalable: false,
 };
 
-import { AssetProvider } from "@/providers/AssetProvider";
-
 export default function RootLayout({ children }) {
   return (
     <html lang="en">
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
-        <AssetProvider>
-          {children}
-        </AssetProvider>
+        {children}
       </body>
     </html>
   );
