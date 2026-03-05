@@ -144,7 +144,7 @@ export default function WatchlistSidebar({ assets, mode = 'volatility', selected
                 {/* Row Header for realtime mode */}
                 {mode === 'realtime' && (
                     <div className="flex items-center px-4 py-1.5 border-b border-white/5 gap-3">
-                        <span className="flex-1 text-[10px] font-bold uppercase tracking-widest opacity-25">代码名称</span>
+                        <span className="flex-1 text-[10px] font-bold uppercase tracking-widest opacity-25">名称</span>
                         <span className="w-20 text-right text-[10px] font-bold uppercase tracking-widest opacity-25">现价</span>
                         <button
                             onClick={() => handleSort('changePercent')}
@@ -168,7 +168,6 @@ export default function WatchlistSidebar({ assets, mode = 'volatility', selected
                             >
                                 <div className="flex-1 min-w-0">
                                     <p className="text-sm font-bold leading-tight truncate">{row.name}</p>
-                                    <p className="text-[10px] font-mono opacity-30 uppercase tracking-tighter">{row.code}</p>
                                 </div>
                                 {mode === 'volatility' ? (
                                     <>

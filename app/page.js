@@ -128,7 +128,7 @@ export default function Home() {
           />
         )}
 
-        <div className="flex-1 min-w-0 min-h-[400px]">
+        <div className="flex-1 min-w-0 min-h-[400px] w-full">
           <AnimatePresence mode="popLayout">
             {!isLogged ? (
               <motion.div
