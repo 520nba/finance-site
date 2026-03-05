@@ -11,7 +11,7 @@ export function useRealtimeQuotes({ activeTab, isLogged, assets, isSyncing, user
             if (isSyncing) return;
             tickCount++;
 
-            // 1. 每 5 分钟才做一次跨设备检查（节省 4/5 的 KV 读取）
+            // 1. 每 5 分钟才做一次跨设备检查（节省 4/5 的 D1 读取）
             if (tickCount % 5 === 0) {
                 try {
                     const res = await fetch(`/api/user/assets?userId=${userId}`);

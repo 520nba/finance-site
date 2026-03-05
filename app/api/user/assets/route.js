@@ -13,7 +13,7 @@ export async function GET(request) {
 
     try {
         // [100% D1-Only] 仅从 D1 读取，不再向 KV 回退
-        // 这样用户删除资产后，D1 为空即为空，不会再从旧 KV “复活”数据
+        // 这样用户删除资产后，D1 为空即为空，不会再从旧数据库 “复活”数据
         const userAssets = await getUserAssets(userId);
         return NextResponse.json({ success: true, data: userAssets });
     } catch (e) {

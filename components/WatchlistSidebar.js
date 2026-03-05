@@ -41,7 +41,7 @@ export default function WatchlistSidebar({ assets, mode = 'volatility', selected
     const [sortDesc, setSortDesc] = useState(true);
     const [statsData, setStatsData] = useState({});
 
-    // 每次 assets 变化或进入 volatility 模式时，批量拉取服务端 KV 缓存 (极速响应，不请求外部)
+    // 每次 assets 变化或进入 volatility 模式时，批量拉取服务端 D1 缓存 (极速响应，不请求外部)
     useEffect(() => {
         if (mode !== 'volatility' || assets.length === 0) return;
         const itemsToFetch = assets.map(a => ({ code: a.code, type: a.type }));

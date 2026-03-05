@@ -42,7 +42,7 @@ CREATE TABLE IF NOT EXISTS asset_intraday (
     PRIMARY KEY(code, record_date)
 );
 
--- 报价缓存 (仅作为 KV 的 D1 替代方案，TTL 逻辑需应用层处理)
+-- 报价缓存 (D1 历史缓存表)
 CREATE TABLE IF NOT EXISTS asset_quotes (
     code TEXT PRIMARY KEY,
     name TEXT,
@@ -53,7 +53,7 @@ CREATE TABLE IF NOT EXISTS asset_quotes (
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
--- 系统日志 (虽然用户要求禁用 KV 写入，但 D1 写入成本极低，若需要可保留，目前按计划禁用)
+-- 系统日志 (按计划禁用或存入 D1)
 CREATE TABLE IF NOT EXISTS system_logs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     level TEXT NOT NULL,

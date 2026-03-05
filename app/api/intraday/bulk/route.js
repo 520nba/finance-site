@@ -36,7 +36,7 @@ async function fetchSingleIntradayServer(code) {
     try {
         const url = `https://push2.eastmoney.com/api/qt/stock/trends2/get?secid=${market}.${clean}&fields1=f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13&fields2=f51,f52,f53,f54,f55,f56,f57,f58`;
 
-        // 检查内存缓存 (30秒)：命中时只打 console，不写 KV 日志（每分钟30个资产会产生30次冗余 KV 写）
+        // 检查内存缓存 (30秒)：命中时只打 console，不写日志
         const cached = INTRADAY_CACHE.get(code);
         if (cached && (now - cached.timestamp < CACHE_TTL)) {
             console.log(`[Intraday] Memory Cache Hit: ${code}`);
@@ -49,12 +49,12 @@ async function fetchSingleIntradayServer(code) {
             // 如果是今天的数据，检查 1 分钟新鲜度
             const isToday = dbData.points[0]?.time?.includes(':') && !dbData.points[0]?.time?.includes('-');
             const updatedAt = dbData.updated_at ? new Date(dbData.updated_at).getTime() : 0;
-            // KV 缓存命中：同样只打 console，避免每个 KV Hit 都写日志 KV
+            // D1 缓存命中：同样只打 console，避免每个 Hit 都写日志
             if (now - updatedAt < 60000 || !isToday) {
                 if (isToday) {
-                    console.log(`[Intraday] KV Cache Hit: ${code} (Fresh)`);
+                    console.log(`[Intraday] D1 Cache Hit: ${code} (Fresh)`);
                 } else {
-                    console.log(`[Intraday] KV Cache Hit: ${code} (Non-trading day fallback)`);
+                    console.log(`[Intraday] D1 Cache Hit: ${code} (Non-trading day fallback)`);
                 }
                 return dbData;
             }
@@ -64,11 +64,11 @@ async function fetchSingleIntradayServer(code) {
         const timeout = setTimeout(() => controller.abort(), 8000);
 
         const res = await fetch(url, { headers: BASE_HEADERS, signal: controller.signal }).finally(() => clearTimeout(timeout));
-        if (!res.ok) return dbData; // 失败时返回 KV 里的（可能是昨天的）数据
+        if (!res.ok) return dbData; // 失败时返回 D1 里的（可能是昨天的）数据
         const json = await res.json();
         const d = json.data;
         if (!d || !d.trends || !Array.isArray(d.trends) || d.trends.length === 0) {
-            // 如果远程返回空（非交易日），则彻底信任并返回 KV 中的上一个交易日数据
+            // 如果远程返回空（非交易日），则彻底信任并返回 D1 中的上一个交易日数据
             return dbData;
         }
 

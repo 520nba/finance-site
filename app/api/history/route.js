@@ -200,7 +200,7 @@ export async function GET(request) {
             return NextResponse.json({ history: [], summary: { perf5d: 0, perf22d: 0, perf250d: 0 }, source: 'empty' });
         }
 
-        // 4. 写回 KV 缓存 (只用 insertDailyPricesBatch，避免 writeDoc 双重写入)
+        // 4. 写回 D1 缓存 (只用 insertDailyPricesBatch，避免 writeDoc 双重写入)
         const records = history.map(h => ({ code, type, price: h.value, date: h.date }));
         await insertDailyPricesBatch(records);
 

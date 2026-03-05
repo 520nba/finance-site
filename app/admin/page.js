@@ -90,7 +90,7 @@ export default function AdminPage() {
     };
 
     const triggerCleanup = async () => {
-        if (!confirm('确定要扫描全库并删除所有“未被订阅”的僵尸行情数据吗？\n\n此操作会大幅降低 KV 负载并加快 Cron 运行速度。')) return;
+        if (!confirm('确定要扫描全库并删除所有“未被订阅”的僵尸行情数据吗？\n\n此操作会大幅降低 D1 负载并加快 Cron 运行速度。')) return;
         setLoading(true);
         try {
             const res = await fetch('/api/admin/cleanup', {
@@ -214,21 +214,21 @@ export default function AdminPage() {
                         </div>
                     </header>
 
-                    {/* KV 数据大盘 */}
+                    {/* D1 数据大盘 */}
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-12">
                         <div className="bg-gradient-to-b from-indigo-500/10 to-transparent border border-indigo-500/20 p-6 rounded-3xl relative overflow-hidden group">
                             <Users className="absolute -bottom-4 -right-4 text-indigo-500/10 w-32 h-32 transform group-hover:scale-110 transition-transform duration-500" />
-                            <h3 className="text-indigo-400 font-bold text-sm tracking-widest uppercase mb-2">活跃注册账户 (User KV)</h3>
+                            <h3 className="text-indigo-400 font-bold text-sm tracking-widest uppercase mb-2">活跃注册账户 (User D1)</h3>
                             <div className="text-5xl font-black font-mono tracking-tighter">{stats.users}</div>
                         </div>
                         <div className="bg-gradient-to-b from-blue-500/10 to-transparent border border-blue-500/20 p-6 rounded-3xl relative overflow-hidden group">
                             <PieChart className="absolute -bottom-4 -right-4 text-blue-500/10 w-32 h-32 transform group-hover:scale-110 transition-transform duration-500" />
-                            <h3 className="text-blue-400 font-bold text-sm tracking-widest uppercase mb-2">追踪股票条目 (Stock KV)</h3>
+                            <h3 className="text-blue-400 font-bold text-sm tracking-widest uppercase mb-2">追踪股票条目 (Stock D1)</h3>
                             <div className="text-5xl font-black font-mono tracking-tighter">{stats.stocks}</div>
                         </div>
                         <div className="bg-gradient-to-b from-cyan-500/10 to-transparent border border-cyan-500/20 p-6 rounded-3xl relative overflow-hidden group">
                             <TrendingUp className="absolute -bottom-4 -right-4 text-cyan-500/10 w-32 h-32 transform group-hover:scale-110 transition-transform duration-500" />
-                            <h3 className="text-cyan-400 font-bold text-sm tracking-widest uppercase mb-2">追踪基金条目 (Fund KV)</h3>
+                            <h3 className="text-cyan-400 font-bold text-sm tracking-widest uppercase mb-2">追踪基金条目 (Fund D1)</h3>
                             <div className="text-5xl font-black font-mono tracking-tighter">{stats.funds}</div>
                         </div>
                     </div>

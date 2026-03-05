@@ -6,7 +6,7 @@
 
 我们将原先 500+ 行的 `lib/storage.js` 拆分为职责明确的 Repository 模式：
 
-- **kvClient.js**: 底层 KV 交互封装，内置内存 LRU 缓存与 JSON 序列化。
+
 - **quoteRepo.js**: 实时行情专用仓库，优先使用内存缓存。
 - **historyRepo.js**: 历史 K 线数据存储，支持批量写入优化。
 - **intradayRepo.js**: 分时图数据管理，具备市场收盘后的过期保护。
@@ -18,7 +18,7 @@
 ```mermaid
 graph LR
     API[API Routes] --> Repo[Storage Repos]
-    Repo --> KV[(Cloudflare KV)]
+    Repo --> D1[(Cloudflare D1)]
     Repo --> Cache[In-Memory Cache]
 ```
 

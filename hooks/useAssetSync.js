@@ -135,7 +135,7 @@ export function useAssetSync({ userId, isLogged }) {
         return () => controller.abort();
     }, [userId, refreshAssets]);
 
-    // 使用 code 拼接的字符串作为依赖，避免轮询引发价格变动导致持续的高频 KV 覆写
+    // 使用 code 拼接的字符串作为依赖，避免轮询引发价格变动导致持续的高频 D1 覆写
     const assetCodesStr = assets.map(a => `${a.type}:${a.code}`).sort().join(',');
 
     // 数据变化后同步到服务端（暴露给外部主动调用）
