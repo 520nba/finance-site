@@ -128,17 +128,17 @@ function AssetCardComponent({ asset, onRemove, mode = 'volatility' }) {
                     </div>
                     <div className="flex-1">
                         {asset.type === 'fund' ? (
-                            <div className="h-[200px] flex items-center justify-center text-white/20 text-sm bg-white/5 rounded-xl border border-white/5">
+                            <div className="h-[120px] flex items-center justify-center text-white/20 text-sm bg-white/5 rounded-xl border border-white/5">
                                 <span className="italic">场外基金不支持分时数据</span>
                             </div>
                         ) : intraPoints.length > 0 ? (
                             <IntradayChart
                                 data={intraPoints}
                                 prevClose={asset.prevClose || intradayData?.prevClose || asset.price}
-                                height={200}
+                                height={120}
                             />
                         ) : isIntraValidating ? (
-                            <div className="h-[200px] flex flex-col items-center justify-center text-white/20 text-sm gap-2 bg-white/5 rounded-xl border border-white/5">
+                            <div className="h-[120px] flex flex-col items-center justify-center text-white/20 text-sm gap-2 bg-white/5 rounded-xl border border-white/5">
                                 <motion.div
                                     animate={{ rotate: 360 }}
                                     transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
@@ -147,7 +147,7 @@ function AssetCardComponent({ asset, onRemove, mode = 'volatility' }) {
                                 <span className="italic">行情数据同步中，请稍候...</span>
                             </div>
                         ) : (
-                            <div className="h-[200px] flex items-center justify-center text-white/20 text-sm bg-white/5 rounded-xl border border-white/5">
+                            <div className="h-[120px] flex items-center justify-center text-white/20 text-sm bg-white/5 rounded-xl border border-white/5">
                                 <span className="italic">暂无今日分时数据</span>
                             </div>
                         )}
