@@ -156,12 +156,6 @@ export function useAssetSync({ userId, isLogged }) {
         }
     }, [isLogged, userId, isSessionReady, loadedUserId]);
 
-    // 依然保留 useEffect 监听，用于捕获非显式调用的列表变化（如其他副作用）
-    useEffect(() => {
-        if (!isLogged || !userId || !isSessionReady || userId !== loadedUserId) return;
-        syncAssetsToServer(assets);
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [assetCodesStr, userId, isLogged, isSessionReady, loadedUserId, syncAssetsToServer]);
 
     const assetsRef = useRef(assets);
     useEffect(() => {
