@@ -7,7 +7,15 @@ import { useRouter } from 'next/navigation';
 
 export default function AdminPage() {
     const [users, setUsers] = useState([]);
-    const [stats, setStats] = useState({ users: 0, stocks: 0, funds: 0 });
+    const [stats, setStats] = useState({
+        users: 0,
+        stocks: 0,
+        funds: 0,
+        history_points: 0,
+        intraday_points: 0,
+        quotes_count: 0,
+        recent_growth: 0
+    });
     const [loading, setLoading] = useState(false);
     const [secretKey, setSecretKey] = useState('');
     const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -215,21 +223,50 @@ export default function AdminPage() {
                     </header>
 
                     {/* D1 数据大盘 */}
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-12">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
                         <div className="bg-gradient-to-b from-indigo-500/10 to-transparent border border-indigo-500/20 p-6 rounded-3xl relative overflow-hidden group">
                             <Users className="absolute -bottom-4 -right-4 text-indigo-500/10 w-32 h-32 transform group-hover:scale-110 transition-transform duration-500" />
-                            <h3 className="text-indigo-400 font-bold text-sm tracking-widest uppercase mb-2">活跃注册账户 (User D1)</h3>
+                            <h3 className="text-indigo-400 font-bold text-sm tracking-widest uppercase mb-2">活跃注册账户</h3>
                             <div className="text-5xl font-black font-mono tracking-tighter">{stats.users}</div>
                         </div>
                         <div className="bg-gradient-to-b from-blue-500/10 to-transparent border border-blue-500/20 p-6 rounded-3xl relative overflow-hidden group">
                             <PieChart className="absolute -bottom-4 -right-4 text-blue-500/10 w-32 h-32 transform group-hover:scale-110 transition-transform duration-500" />
-                            <h3 className="text-blue-400 font-bold text-sm tracking-widest uppercase mb-2">追踪股票条目 (Stock D1)</h3>
+                            <h3 className="text-blue-400 font-bold text-sm tracking-widest uppercase mb-2">追踪股票条目</h3>
                             <div className="text-5xl font-black font-mono tracking-tighter">{stats.stocks}</div>
                         </div>
                         <div className="bg-gradient-to-b from-cyan-500/10 to-transparent border border-cyan-500/20 p-6 rounded-3xl relative overflow-hidden group">
                             <TrendingUp className="absolute -bottom-4 -right-4 text-cyan-500/10 w-32 h-32 transform group-hover:scale-110 transition-transform duration-500" />
-                            <h3 className="text-cyan-400 font-bold text-sm tracking-widest uppercase mb-2">追踪基金条目 (Fund D1)</h3>
+                            <h3 className="text-cyan-400 font-bold text-sm tracking-widest uppercase mb-2">追踪基金条目</h3>
                             <div className="text-5xl font-black font-mono tracking-tighter">{stats.funds}</div>
+                        </div>
+                    </div>
+
+                    {/* D1 数据库深度统计 */}
+                    <div className="mb-12">
+                        <div className="flex items-center gap-3 mb-6">
+                            <Activity size={20} className="text-emerald-500" />
+                            <h2 className="text-xl font-bold tracking-tight">D1 数据库实时工况</h2>
+                        </div>
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                            <div className="bg-white/5 border border-white/10 p-5 rounded-2xl">
+                                <p className="text-white/40 text-xs font-mono uppercase mb-1">历史 K 线总数</p>
+                                <p className="text-2xl font-black font-mono text-white/90">{(stats.history_points || 0).toLocaleString()}</p>
+                            </div>
+                            <div className="bg-white/5 border border-white/10 p-5 rounded-2xl">
+                                <p className="text-white/40 text-xs font-mono uppercase mb-1">分时高频点位</p>
+                                <p className="text-2xl font-black font-mono text-white/90">{(stats.intraday_points || 0).toLocaleString()}</p>
+                            </div>
+                            <div className="bg-white/5 border border-white/10 p-5 rounded-2xl">
+                                <p className="text-white/40 text-xs font-mono uppercase mb-1">实时报价缓存</p>
+                                <p className="text-2xl font-black font-mono text-white/90">{(stats.quotes_count || 0).toLocaleString()}</p>
+                            </div>
+                            <div className="bg-white/5 border border-emerald-500/30 p-5 rounded-2xl relative overflow-hidden">
+                                <div className="absolute top-0 right-0 w-12 h-12 bg-emerald-500/10 flex items-center justify-center rounded-bl-2xl">
+                                    <TrendingUp size={16} className="text-emerald-500 animate-pulse" />
+                                </div>
+                                <p className="text-emerald-400/60 text-xs font-mono uppercase mb-1">24H 数据增长</p>
+                                <p className="text-2xl font-black font-mono text-emerald-400">+{stats.recent_growth}</p>
+                            </div>
                         </div>
                     </div>
 

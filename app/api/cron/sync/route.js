@@ -133,8 +133,8 @@ export async function GET(request) {
             }
         }
 
-        // 2. 基金北京时间凌晨 3:00 增量刷新
-        if (task === 'fund_update' || (task === 'auto' && bjHour === 3 && bjMinute < 10)) {
+        // 2. 基金北京时间凌晨 3:00 增量刷新 (增加上午 8:00 备份触发)
+        if (task === 'fund_update' || (task === 'auto' && (bjHour === 3 || bjHour === 8) && bjMinute < 10)) {
             results.task_executed.push('fund_update');
             const funds = itemsToSync.filter(i => i.type === 'fund');
             for (const f of funds) {

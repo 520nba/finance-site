@@ -1,0 +1,37 @@
+C:\Users\DT\.gemini\antigravity\scratch\stock-tracker\node_modules\workerd\lib\main.js:96
+          throw new Error(`
+          ^
+
+Error: 
+You installed workerd on another platform than the one you're currently using.
+This won't work because workerd is written with native code and needs to
+install a platform-specific binary executable.
+
+Specifically the "@cloudflare/workerd-linux-64" package is present but this platform
+needs the "@cloudflare/workerd-windows-64" package instead. People often get into this
+situation by installing workerd on macOS and copying "node_modules"
+into a Docker image that runs Linux.
+
+If you are installing with npm, you can try not copying the "node_modules"
+directory when you copy the files over, and running "npm ci" or "npm install"
+on the destination platform after the copy. Or you could consider using yarn
+instead which has built-in support for installing a package on multiple
+platforms simultaneously.
+
+If you are installing with yarn, you can try listing both this platform and the
+other platform in your ".yarnrc.yml" file using the "supportedArchitectures"
+feature: https://yarnpkg.com/configuration/yarnrc/#supportedArchitectures
+Keep in mind that this means multiple copies of workerd will be present.
+
+    at generateBinPath (C:\Users\DT\.gemini\antigravity\scratch\stock-tracker\node_modules\workerd\lib\main.js:96:17)
+    at Object.<anonymous> (C:\Users\DT\.gemini\antigravity\scratch\stock-tracker\node_modules\workerd\lib\main.js:152:19)
+    at Module._compile (node:internal/modules/cjs/loader:1761:14)
+    at Object..js (node:internal/modules/cjs/loader:1893:10)
+    at Module.load (node:internal/modules/cjs/loader:1481:32)
+    at Module._load (node:internal/modules/cjs/loader:1300:12)
+    at TracingChannel.traceSync (node:diagnostics_channel:328:14)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:245:24)
+    at Module.require (node:internal/modules/cjs/loader:1504:12)
+    at require (node:internal/modules/helpers:152:16)
+
+Node.js v24.13.0
