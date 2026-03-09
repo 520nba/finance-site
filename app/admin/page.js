@@ -16,6 +16,7 @@ export default function AdminPage() {
         quotes_count: 0,
         recent_growth: 0
     });
+    const [logs, setLogs] = useState([]);
     const [loading, setLoading] = useState(false);
     const [secretKey, setSecretKey] = useState('');
     const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -26,8 +27,11 @@ export default function AdminPage() {
     useEffect(() => {
         const cachedKey = sessionStorage.getItem('tracker_admin_secret');
         if (cachedKey) {
-            setTimeout(() => setSecretKey(cachedKey), 0);
-            // 自动不使用缓存自动发送请求，以免弹框
+            setTimeout(() => {
+                setSecretKey(cachedKey);
+                // 自动刷新
+                fetchAllData(cachedKey);
+            }, 0);
         }
     }, []);
 
@@ -41,9 +45,10 @@ export default function AdminPage() {
         setLoading(true);
 
         try {
-            const [usersRes, statsRes] = await Promise.all([
+            const [usersRes, statsRes, logsRes] = await Promise.all([
                 fetch('/api/user/list', { headers: { 'x-admin-key': keyToUse } }),
-                fetch('/api/admin/stats', { headers: { 'x-admin-key': keyToUse } })
+                fetch('/api/admin/stats', { headers: { 'x-admin-key': keyToUse } }),
+                fetch('/api/admin/logs?hours=72', { headers: { 'x-admin-key': keyToUse } })
             ]);
 
             if (usersRes.ok && statsRes.ok) {
@@ -52,6 +57,11 @@ export default function AdminPage() {
 
                 setUsers(usersData);
                 if (statsData.users !== undefined) setStats(statsData);
+
+                if (logsRes.ok) {
+                    const logsData = await logsRes.json();
+                    setLogs(logsData.logs || []);
+                }
 
                 setIsAuthenticated(true);
                 sessionStorage.setItem('tracker_admin_secret', keyToUse);
@@ -266,6 +276,44 @@ export default function AdminPage() {
                                 </div>
                                 <p className="text-emerald-400/60 text-xs font-mono uppercase mb-1">24H 数据增长</p>
                                 <p className="text-2xl font-black font-mono text-emerald-400">+{stats.recent_growth}</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* 日志监控区 */}
+                    <div className="mb-12">
+                        <div className="flex items-center justify-between mb-6">
+                            <div className="flex items-center gap-3">
+                                <FileText size={20} className="text-blue-500" />
+                                <h2 className="text-xl font-bold tracking-tight">System Logs (72H)</h2>
+                            </div>
+                            <div className="px-3 py-1 bg-blue-500/10 border border-blue-500/20 rounded-full text-[10px] font-mono text-blue-400 uppercase tracking-wider">
+                                Backend Pulse Enabled
+                            </div>
+                        </div>
+
+                        <div className="bg-black/30 border border-white/5 rounded-2xl overflow-hidden backdrop-blur-sm">
+                            <div className="max-h-[400px] overflow-y-auto scrollbar-thin scrollbar-thumb-white/10">
+                                {logs.length > 0 ? (
+                                    <div className="divide-y divide-white/5 font-mono text-xs">
+                                        {logs.map((log, idx) => (
+                                            <div key={idx} className="p-4 flex gap-4 hover:bg-white/[0.02] transition-colors">
+                                                <span className="text-white/20 whitespace-nowrap">{new Date(log.timestamp).toLocaleString()}</span>
+                                                <span className={`font-bold px-1.5 py-0.5 rounded text-[10px] h-fit ${log.level === 'INFO' ? 'bg-blue-500/20 text-blue-400' :
+                                                        log.level === 'WARN' ? 'bg-orange-500/20 text-orange-400' :
+                                                            'bg-red-500/20 text-red-400'
+                                                    }`}>{log.level}</span>
+                                                <span className="text-white/40 whitespace-nowrap border-r border-white/5 pr-4">[{log.module}]</span>
+                                                <span className="text-white/80 break-all">{log.message}</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                ) : (
+                                    <div className="py-20 flex flex-col items-center justify-center text-white/20 italic">
+                                        <Activity size={32} className="mb-4 opacity-10 animate-pulse" />
+                                        <p>聆听后端信号中... 暂无关键事件</p>
+                                    </div>
+                                )}
                             </div>
                         </div>
                     </div>
