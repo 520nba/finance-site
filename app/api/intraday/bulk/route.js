@@ -68,8 +68,7 @@ async function fetchSingleIntradayServer(code, forcePersist = false) {
         try {
             res = await fetch(url, {
                 headers: BASE_HEADERS,
-                signal: controller.signal,
-                keepalive: true // 开启 HTTP Keep-Alive 减少建连开销
+                signal: controller.signal
             });
         } catch (fetchError) {
             if (fetchError.name === 'AbortError') {
@@ -79,8 +78,7 @@ async function fetchSingleIntradayServer(code, forcePersist = false) {
                 try {
                     res = await fetch(url, {
                         headers: BASE_HEADERS,
-                        signal: retryController.signal,
-                        keepalive: true
+                        signal: retryController.signal
                     });
                 } catch (retryError) {
                     throw retryError;
