@@ -43,9 +43,9 @@ export default function AdminPage() {
         try {
             const headers = { 'x-admin-key': keyToUse };
             const [usersRes, statsRes, logsRes] = await Promise.all([
-                fetch('/api/user/list', { headers }),
-                fetch('/api/admin/stats', { headers }),
-                fetch('/api/admin/logs?hours=72', { headers })
+                fetch(`/api/user/list?token=${keyToUse}`, { headers }),
+                fetch(`/api/admin/stats?token=${keyToUse}`, { headers }),
+                fetch(`/api/admin/logs?hours=72&token=${keyToUse}`, { headers })
             ]);
 
             if (usersRes.ok && statsRes.ok) {
@@ -78,7 +78,7 @@ export default function AdminPage() {
         if (!confirm(`!! 危险操作 !!\n\n您即将删除用户 "${targetUserId}" 及其所有定制化的自选关联数据。\n\n确认执行吗？（不可逆）`)) return;
 
         try {
-            const res = await fetch('/api/user/delete', {
+            const res = await fetch(`/api/user/delete?token=${secretKey}`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -108,7 +108,7 @@ export default function AdminPage() {
         if (!confirm('确定要扫描全库并删除所有“未被订阅”的僵尸行情数据吗？\n\n此操作会大幅降低 D1 负载并加快 Cron 运行速度。')) return;
         setLoading(true);
         try {
-            const res = await fetch('/api/admin/cleanup', {
+            const res = await fetch(`/api/admin/cleanup?token=${secretKey}`, {
                 method: 'POST',
                 headers: { 'x-admin-key': secretKey }
             });
