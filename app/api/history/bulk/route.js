@@ -38,6 +38,14 @@ function todayStr() {
     return bjDate().toISOString().slice(0, 10)
 }
 
+function daysBetween(d1, d2) {
+    if (!d1 || !d2) return 0;
+    const date1 = new Date(d1);
+    const date2 = new Date(d2);
+    const diffTime = date2 - date1;
+    return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+}
+
 /**
  * =============================
  * fetch 工具
@@ -240,27 +248,46 @@ export async function syncHistoryBulk(items, days = HISTORY_DAYS) {
     const result = {}
     const dbHistoryMap = await getBulkHistory(items, days)
     const toFetch = []
+    const today = todayStr()
 
     for (const item of items) {
         const key = `${item.type}:${item.code}`
-        const dbHistory = dbHistoryMap[key]
-        if (dbHistory && dbHistory.length > 200) {
-            result[key] = {
-                history: dbHistory,
-                summary: calcStats(dbHistory)
+        const dbHistory = dbHistoryMap[key] || []
+
+        // 获取本地最新日期
+        const latestDate = dbHistory.length > 0 ? dbHistory[dbHistory.length - 1].date : null
+
+        if (latestDate) {
+            const gap = daysBetween(latestDate, today)
+            // 如果最新日期就是今天，或者 gap 极小且已经有足够数据，则跳过
+            if (gap <= 0) {
+                result[key] = {
+                    history: dbHistory,
+                    summary: calcStats(dbHistory)
+                }
+                continue
             }
-            continue
+            // 增量同步：拉取 gap 天的数据（加点 buffer）
+            toFetch.push({ ...item, latestDate, daysToFetch: Math.max(gap + 5, 10) })
+        } else {
+            // 全量同步
+            toFetch.push({ ...item, latestDate: null, daysToFetch: days })
         }
-        toFetch.push(item)
     }
 
-    const fetched = await Promise.all(
+    if (toFetch.length === 0) return result
+
+    const fetchedItems = await Promise.all(
         toFetch.map(item =>
             LIMIT(async () => {
                 let history = null
-                if (item.type === 'stock')
-                    history = await fetchStockHistory(item.code, days)
-                else history = await fetchFundHistory(item.code, days)
+                try {
+                    if (item.type === 'stock')
+                        history = await fetchStockHistory(item.code, item.daysToFetch)
+                    else history = await fetchFundHistory(item.code, item.daysToFetch)
+                } catch (e) {
+                    console.error(`Fetch failed for ${item.code}:`, e.message)
+                }
                 return { ...item, history }
             })
         )
@@ -269,14 +296,16 @@ export async function syncHistoryBulk(items, days = HISTORY_DAYS) {
     const dbRecords = []
     const seen = new Set()
 
-    for (const item of fetched) {
+    for (const item of fetchedItems) {
         const key = `${item.type}:${item.code}`
-        if (item.history?.length) {
-            result[key] = {
-                history: item.history,
-                summary: calcStats(item.history)
-            }
-            for (const h of item.history) {
+        const dbHistory = dbHistoryMap[key] || []
+        const latestDate = item.latestDate
+
+        // 过滤：仅保留日期晚于数据库最新日期的记录
+        const newRecords = (item.history || []).filter(h => !latestDate || h.date > latestDate)
+
+        if (newRecords.length > 0) {
+            for (const h of newRecords) {
                 const k = `${item.code}-${item.type}-${h.date}`
                 if (seen.has(k)) continue
                 seen.add(k)
@@ -287,16 +316,19 @@ export async function syncHistoryBulk(items, days = HISTORY_DAYS) {
                     date: h.date
                 })
             }
-        } else {
-            result[key] = {
-                history: [],
-                summary: { perf5d: 0, perf22d: 0, perf250d: 0 }
-            }
+        }
+
+        // 合并数据用于计算统计和返回
+        const combinedHistory = [...dbHistory, ...newRecords].slice(-days)
+        result[key] = {
+            history: combinedHistory,
+            summary: calcStats(combinedHistory)
         }
     }
 
-    if (dbRecords.length) {
+    if (dbRecords.length > 0) {
         await insertDailyPricesBatch(dbRecords)
+        await addSystemLog('INFO', 'HistorySync', `Incremental Sync: Added ${dbRecords.length} points for ${toFetch.length} assets.`);
     }
 
     return result
