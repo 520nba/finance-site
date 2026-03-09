@@ -104,6 +104,26 @@ export default function AdminPage() {
         setSecretKey('');
     };
 
+    const triggerSync = async () => {
+        const secret = prompt('请输入 CRON_SECRET 以触发同步任务：', secretKey);
+        if (!secret) return;
+
+        setLoading(true);
+        try {
+            const res = await fetch(`/api/cron/sync?token=${secret}&task=auto`);
+            const data = await res.json();
+            if (res.ok) {
+                showToast(`同步任务已执行！\n任务列表: ${data.results?.task_executed?.join(', ') || '无'}`, 'success');
+                fetchAllData();
+            } else {
+                showToast(data.error || '同步任务被拒绝');
+            }
+        } catch (e) {
+            showToast('请求同步接口异常');
+        }
+        setLoading(false);
+    };
+
     const triggerCleanup = async () => {
         if (!confirm('确定要扫描全库并删除所有“未被订阅”的僵尸行情数据吗？\n\n此操作会大幅降低 D1 负载并加快 Cron 运行速度。')) return;
         setLoading(true);
@@ -195,7 +215,10 @@ export default function AdminPage() {
                             <button onClick={() => fetchAllData()} className="flex items-center gap-2 px-6 py-2 rounded-full hover:bg-white/10 transition-all font-bold text-sm">
                                 <RefreshCcw size={16} className={loading ? 'animate-spin' : ''} /> <span className="hidden sm:inline">强制刷新数据</span>
                             </button>
-                            <button onClick={triggerCleanup} disabled={loading} className="flex items-center gap-2 px-6 py-2 rounded-full hover:bg-orange-500/20 hover:text-orange-400 transition-all font-bold text-sm border-x border-white/5">
+                            <button onClick={triggerSync} disabled={loading} className="flex items-center gap-2 px-6 py-2 rounded-full hover:bg-emerald-500/20 hover:text-emerald-400 transition-all font-bold text-sm border-x border-white/5">
+                                <Activity size={16} className={loading ? 'animate-pulse' : ''} /> <span className="hidden sm:inline">立即拉取同步</span>
+                            </button>
+                            <button onClick={triggerCleanup} disabled={loading} className="flex items-center gap-2 px-6 py-2 rounded-full hover:bg-orange-500/20 hover:text-orange-400 transition-all font-bold text-sm border-r border-white/5">
                                 <Activity size={16} className={loading ? 'animate-pulse' : ''} /> <span className="hidden sm:inline">深度大扫除</span>
                             </button>
                             <button onClick={handleLogout} className="flex items-center gap-2 px-6 py-2 rounded-full hover:bg-red-500/20 hover:text-red-400 transition-all font-bold text-sm">
