@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import pLimit from 'p-limit';
 import { getIntraday, saveIntraday, getBulkIntraday, saveIntradayBatch } from '@/lib/storage/intradayRepo';
 
 function todayStr() {
@@ -65,14 +66,22 @@ async function fetchSingleIntradayServer(code, forcePersist = false) {
 
         let res;
         try {
-            res = await fetch(url, { headers: BASE_HEADERS, signal: controller.signal });
+            res = await fetch(url, {
+                headers: BASE_HEADERS,
+                signal: controller.signal,
+                keepalive: true // 开启 HTTP Keep-Alive 减少建连开销
+            });
         } catch (fetchError) {
             if (fetchError.name === 'AbortError') {
                 // 第一次超时，尝试最后一次重试 (10s)
                 const retryController = new AbortController();
                 const retryTimeout = setTimeout(() => retryController.abort(), 10000);
                 try {
-                    res = await fetch(url, { headers: BASE_HEADERS, signal: retryController.signal });
+                    res = await fetch(url, {
+                        headers: BASE_HEADERS,
+                        signal: retryController.signal,
+                        keepalive: true
+                    });
                 } catch (retryError) {
                     throw retryError;
                 } finally {
@@ -183,28 +192,26 @@ export async function syncIntradayBulk(items, allowExternal = false, request = n
         }
 
         if (externalFetchList.length > 0 && allowExternal) {
-            // 3. 最后才去拉网络，分片串行以保护 Edge (减小并发压力)
-            const CHUNK_SIZE = 5;
+            // 3. 最后才去拉网络，使用 p-limit 提供匀速并发，不再通过 Chunk 产生波峰波动
+            const limit = pLimit(5);
             const recordsToSave = [];
 
-            for (let i = 0; i < externalFetchList.length; i += CHUNK_SIZE) {
-                const chunk = externalFetchList.slice(i, i + CHUNK_SIZE);
-                const chunkResults = await Promise.all(
-                    chunk.map(async (item) => {
-                        const data = await fetchSingleIntradayServer(item.code, allowExternal);
-                        return { code: item.code, data };
-                    })
-                );
-
-                for (const { code, data } of chunkResults) {
+            const fetchPromises = externalFetchList.map(item =>
+                limit(async () => {
+                    const data = await fetchSingleIntradayServer(item.code, allowExternal);
                     if (data) {
-                        result[code] = data;
-                        recordsToSave.push({ code, date: today, data });
+                        return { code: item.code, data };
                     }
-                }
+                    return null;
+                })
+            );
 
-                if (i + CHUNK_SIZE < externalFetchList.length) {
-                    await new Promise(r => setTimeout(r, 100));
+            const fetchedResults = await Promise.all(fetchPromises);
+
+            for (const res of fetchedResults) {
+                if (res && res.data) {
+                    result[res.code] = res.data;
+                    recordsToSave.push({ code: res.code, date: today, data: res.data });
                 }
             }
 
