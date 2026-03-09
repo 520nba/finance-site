@@ -61,10 +61,31 @@ async function fetchSingleIntradayServer(code, forcePersist = false) {
         }
 
         const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 8000);
+        const timeout = setTimeout(() => controller.abort(), 15000); // 增加到 15s
 
-        const res = await fetch(url, { headers: BASE_HEADERS, signal: controller.signal }).finally(() => clearTimeout(timeout));
-        if (!res.ok) return dbData; // 失败时返回 D1 里的（可能是昨天的）数据
+        let res;
+        try {
+            res = await fetch(url, { headers: BASE_HEADERS, signal: controller.signal });
+        } catch (fetchError) {
+            if (fetchError.name === 'AbortError') {
+                // 第一次超时，尝试最后一次重试 (10s)
+                const retryController = new AbortController();
+                const retryTimeout = setTimeout(() => retryController.abort(), 10000);
+                try {
+                    res = await fetch(url, { headers: BASE_HEADERS, signal: retryController.signal });
+                } catch (retryError) {
+                    throw retryError;
+                } finally {
+                    clearTimeout(retryTimeout);
+                }
+            } else {
+                throw fetchError;
+            }
+        } finally {
+            clearTimeout(timeout);
+        }
+
+        if (!res || !res.ok) return dbData;
         const json = await res.json();
         const d = json.data;
         if (!d || !d.trends || !Array.isArray(d.trends) || d.trends.length === 0) {
@@ -162,8 +183,8 @@ export async function syncIntradayBulk(items, allowExternal = false, request = n
         }
 
         if (externalFetchList.length > 0 && allowExternal) {
-            // 3. 最后才去拉网络，分片串行以保护 Edge
-            const CHUNK_SIZE = 10;
+            // 3. 最后才去拉网络，分片串行以保护 Edge (减小并发压力)
+            const CHUNK_SIZE = 5;
             const recordsToSave = [];
 
             for (let i = 0; i < externalFetchList.length; i += CHUNK_SIZE) {
