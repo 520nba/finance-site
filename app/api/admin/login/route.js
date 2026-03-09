@@ -1,16 +1,27 @@
 import { NextResponse } from 'next/server';
-import { runSql } from '@/lib/storage/d1Client';
+import { runSql, getCloudflareCtx } from '@/lib/storage/d1Client';
 
 export async function POST(request) {
     try {
         const { password } = await request.json();
-        const envKey = process.env.ADMIN_API_KEY;
+
+        // 获取环境变量密钥：先查 process.env，再查 Cloudflare context
+        let envKey = process.env.ADMIN_API_KEY;
+        if (!envKey) {
+            try {
+                const ctx = await getCloudflareCtx();
+                envKey = ctx?.env?.ADMIN_API_KEY;
+            } catch (e) {
+                console.error('[Login] Fail to get env from context:', e.message);
+            }
+        }
 
         if (!envKey) {
             return NextResponse.json({ success: false, error: 'ADMIN_API_KEY not configured' }, { status: 500 });
         }
 
-        if (password !== envKey) {
+        // 增加 trim 容错
+        if (password?.trim() !== envKey.trim()) {
             return NextResponse.json({ success: false, error: 'Invalid password' }, { status: 401 });
         }
 
