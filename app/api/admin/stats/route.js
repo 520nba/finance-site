@@ -8,26 +8,37 @@ export async function GET(request) {
     }
 
     try {
-        // 利用 SQL 聚合查询，获取更全面的 D1 统计
-        const stats = await Promise.all([
-            queryOne('SELECT COUNT(*) as count FROM users'),
-            queryOne('SELECT COUNT(*) as count FROM asset_names WHERE type = "stock"'),
-            queryOne('SELECT COUNT(*) as count FROM asset_names WHERE type = "fund"'),
-            queryOne('SELECT COUNT(*) as count FROM asset_history'),
-            queryOne('SELECT COUNT(*) as count FROM asset_intraday_points'),
-            queryOne('SELECT COUNT(*) as count FROM asset_quotes'),
-            // 过去 24 小时的新记录数
-            queryOne("SELECT COUNT(*) as count FROM asset_history WHERE created_at > datetime('now', '-24 hours')"),
+        const wrapQuery = async (sql) => {
+            try { return (await queryOne(sql))?.count || 0; }
+            catch (e) { console.warn(`[Stats] Query failed for [${sql}]:`, e.message); return 0; }
+        };
+
+        const [
+            userCount,
+            stockCount,
+            fundCount,
+            histCount,
+            intraPointsCount,
+            quotesCount,
+            growthCount
+        ] = await Promise.all([
+            wrapQuery('SELECT COUNT(*) as count FROM users'),
+            wrapQuery('SELECT COUNT(*) as count FROM asset_names WHERE type = "stock"'),
+            wrapQuery('SELECT COUNT(*) as count FROM asset_names WHERE type = "fund"'),
+            wrapQuery('SELECT COUNT(*) as count FROM asset_history'),
+            wrapQuery('SELECT COUNT(*) as count FROM asset_intraday_points'),
+            wrapQuery('SELECT COUNT(*) as count FROM asset_quotes'),
+            wrapQuery("SELECT COUNT(*) as count FROM asset_history WHERE created_at > datetime('now', '-24 hours')")
         ]);
 
         return NextResponse.json({
-            users: stats[0]?.count || 0,
-            stocks: stats[1]?.count || 0,
-            funds: stats[2]?.count || 0,
-            history_points: stats[3]?.count || 0,
-            intraday_points: stats[4]?.count || 0,
-            quotes_count: stats[5]?.count || 0,
-            recent_growth: stats[6]?.count || 0,
+            users: userCount,
+            stocks: stockCount,
+            funds: fundCount,
+            history_points: histCount,
+            intraday_points: intraPointsCount,
+            quotes_count: quotesCount,
+            recent_growth: growthCount,
             db_engine: 'Cloudflare D1 (SQLite)'
         });
     } catch (e) {
