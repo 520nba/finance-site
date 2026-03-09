@@ -1,25 +1,33 @@
 import { NextResponse } from 'next/server';
 import { getCloudflareCtx } from '@/lib/storage/d1Client';
 
-export async function GET() {
-    let envKey = process.env.ADMIN_API_KEY;
-    let source = 'process.env';
+export async function GET(request) {
+    const { searchParams } = new URL(request.url);
+    const token = searchParams.get('token');
 
-    if (!envKey) {
-        try {
-            const ctx = await getCloudflareCtx();
-            envKey = ctx?.env?.ADMIN_API_KEY;
-            source = 'cloudflare.context';
-        } catch (e) {
-            source = 'error: ' + e.message;
-        }
-    }
+    let envKey = process.env.ADMIN_API_KEY;
+    let envSource = 'process.env';
+
+    let ctxEnvKey = null;
+    try {
+        const ctx = await getCloudflareCtx();
+        ctxEnvKey = ctx?.env?.ADMIN_API_KEY;
+    } catch (e) { }
+
+    // 如果 process.env 不对，看看 ctx.env 是不是对的
+    const matchProcess = token && envKey && token.trim() === envKey.trim();
+    const matchCtx = token && ctxEnvKey && token.trim() === ctxEnvKey.trim();
 
     return NextResponse.json({
-        configured: !!envKey,
-        source: source,
-        keyLength: envKey ? envKey.length : 0,
-        // D1 Check
-        d1Configured: !!(await getCloudflareCtx())?.env?.DB
+        configured: !!envKey || !!ctxEnvKey,
+        source: envSource,
+        envKeyLen: envKey?.length || 0,
+        ctxEnvKeyLen: ctxEnvKey?.length || 0,
+        tokenLen: token?.length || 0,
+        matchProcess,
+        matchCtx,
+        envPrefix: envKey?.slice(0, 3),
+        ctxEnvPrefix: ctxEnvKey?.slice(0, 3),
+        tokenPrefix: token?.slice(0, 3)
     });
 }
