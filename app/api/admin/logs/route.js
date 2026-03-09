@@ -1,12 +1,14 @@
 import { NextResponse } from 'next/server';
 import { getSystemLogs } from '@/lib/storage/logRepo';
+import { isAdminAuthorized } from '@/lib/auth';
 
 export async function GET(request) {
+    if (!(await isAdminAuthorized(request))) {
+        return NextResponse.json({ error: 'Unauthorized' }, { status: 403 });
+    }
+
     const { searchParams } = new URL(request.url);
     const hours = parseInt(searchParams.get('hours') || '72');
-
-    // 简单的鉴权检查 (可以根据你的 admin 登录逻辑集成)
-    // 这里假设 admin session 已通过 cookie 或 header 处理
 
     try {
         const logs = await getSystemLogs(hours);
