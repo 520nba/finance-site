@@ -61,27 +61,27 @@ export default function AdminPage() {
                 fetch(`/api/admin/logs?hours=72&token=${keyToUse}`, { headers })
             ]);
 
-            if (usersRes.ok && statsRes.ok) {
-                const usersData = await usersRes.json();
+            if (statsRes.ok) {
                 const statsData = await statsRes.json();
-
-                setUsers(usersData);
-                if (statsData.users !== undefined) {
-                    setStats(statsData);
-                }
-
-                if (logsRes.ok) {
-                    const logsData = await logsRes.json();
-                    setLogs(logsData.logs || []);
-                }
-
+                setStats(prev => ({ ...prev, ...statsData }));
                 setIsAuthenticated(true);
                 sessionStorage.setItem('tracker_admin_secret', keyToUse);
-            } else {
+            }
+
+            if (usersRes.ok) {
+                const usersData = await usersRes.json();
+                setUsers(usersData);
+            }
+
+            if (logsRes.ok) {
+                const logsData = await logsRes.json();
+                setLogs(logsData.logs || []);
+            }
+
+            if (!statsRes.ok && !usersRes.ok) {
                 if (keyToUse === secretKey) {
                     showToast('鉴权失败: 密钥无效或无权限');
                     setIsAuthenticated(false);
-                    sessionStorage.removeItem('tracker_admin_secret');
                 }
             }
         } catch (e) {
