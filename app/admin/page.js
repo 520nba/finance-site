@@ -33,10 +33,14 @@ export default function AdminPage() {
     const router = useRouter();
 
     useEffect(() => {
+        const urlParams = new URL(window.location.href).searchParams;
+        const urlKey = urlParams.get('key') || urlParams.get('token');
         const cachedKey = sessionStorage.getItem('tracker_admin_secret');
-        if (cachedKey) {
-            setSecretKey(cachedKey);
-            fetchAllData(cachedKey);
+
+        const finalKey = urlKey || cachedKey;
+        if (finalKey) {
+            setSecretKey(finalKey);
+            fetchAllData(finalKey);
         }
     }, []);
 
@@ -46,7 +50,7 @@ export default function AdminPage() {
     };
 
     const fetchAllData = async (keyToUse = secretKey) => {
-        if (!keyToUse) return showToast('请输入 Server Admin Key');
+        if (!keyToUse) return;
         setLoading(true);
 
         try {
@@ -62,7 +66,9 @@ export default function AdminPage() {
                 const statsData = await statsRes.json();
 
                 setUsers(usersData);
-                if (statsData.users !== undefined) setStats(statsData);
+                if (statsData.users !== undefined) {
+                    setStats(statsData);
+                }
 
                 if (logsRes.ok) {
                     const logsData = await logsRes.json();
@@ -72,13 +78,14 @@ export default function AdminPage() {
                 setIsAuthenticated(true);
                 sessionStorage.setItem('tracker_admin_secret', keyToUse);
             } else {
-                showToast('鉴权失败: 密钥无效或无权限');
-                setIsAuthenticated(false);
-                sessionStorage.removeItem('tracker_admin_secret');
+                if (keyToUse === secretKey) {
+                    showToast('鉴权失败: 密钥无效或无权限');
+                    setIsAuthenticated(false);
+                    sessionStorage.removeItem('tracker_admin_secret');
+                }
             }
         } catch (e) {
             showToast('无法连接服务器');
-            setIsAuthenticated(false);
         }
         setLoading(false);
     };
