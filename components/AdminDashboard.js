@@ -11,7 +11,11 @@ export default function AdminDashboard({ isOpen, onClose }) {
     const fetchStats = async () => {
         setLoading(true);
         try {
-            const res = await fetch('/api/admin/stats');
+            const url = new URL(window.location.href);
+            const key = url.searchParams.get('key') || url.searchParams.get('token');
+            const headers = key ? { 'x-admin-key': key } : {};
+
+            const res = await fetch('/api/admin/stats', { headers });
             if (res.ok) {
                 const data = await res.json();
                 setStats(data);
