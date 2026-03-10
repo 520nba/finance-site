@@ -36,6 +36,7 @@ export async function GET(request) {
             intraPointsCount,
             quotesCount,
             growthCount,
+            queueCount,
             healthData
         ] = await Promise.all([
             wrapQuery('SELECT COUNT(*) as count FROM users'),
@@ -45,6 +46,7 @@ export async function GET(request) {
             wrapQuery('SELECT COUNT(*) as count FROM asset_intraday_points'),
             wrapQuery('SELECT COUNT(*) as count FROM asset_quotes'),
             wrapQuery("SELECT COUNT(*) as count FROM asset_history WHERE created_at > datetime('now', '-24 hours')"),
+            wrapQuery('SELECT COUNT(*) as count FROM sync_queue'),
             getAllApiHealth()
         ]);
 
@@ -56,8 +58,9 @@ export async function GET(request) {
             intraday_points: intraPointsCount,
             quotes_count: quotesCount,
             recent_growth: growthCount,
+            queue_count: queueCount,
             db_engine: 'Cloudflare D1 (SQLite)',
-            api_health: healthData || [] // 确保始终返回数组，防止前端 map 报错
+            api_health: healthData || []
         });
     } catch (e) {
         console.error('[AdminStats] Global Critical Failure:', e.message);
