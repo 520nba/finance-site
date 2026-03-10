@@ -277,52 +277,79 @@ export async function syncHistoryBulk(items, days = HISTORY_DAYS) {
 
     if (toFetch.length === 0) return result
 
-    const fetchedItems = await Promise.all(
-        toFetch.map(item =>
-            LIMIT(async () => {
-                let history = null
-                try {
-                    if (item.type === 'stock')
-                        history = await fetchStockHistory(item.code, item.daysToFetch)
-                    else history = await fetchFundHistory(item.code, item.daysToFetch)
-                } catch (e) {
-                    console.error(`Fetch failed for ${item.code}:`, e.message)
-                }
-                return { ...item, history }
-            })
-        )
+    // 安全限制：避免大量 fetch 导致子请求超限 (40个以内)
+    const safeToFetch = toFetch.slice(0, 40);
+    if (toFetch.length > 40) {
+        console.warn(`[History Bulk] toFetch list too long (${toFetch.length}). Truncated to 40.`);
+    }
+
+    const fetchPromises = safeToFetch.map(item =>
+        LIMIT(async () => {
+            let history = null
+            try {
+                if (item.type === 'stock')
+                    history = await fetchStockHistory(item.code, item.daysToFetch)
+                else history = await fetchFundHistory(item.code, item.daysToFetch)
+            } catch (e) {
+                console.error(`Fetch failed for ${item.code}:`, e.message)
+            }
+            return { ...item, history }
+        })
     )
+
+    // 全局超时熔断：防止历史任务过重导致 Worker 卡死
+    const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('GLOBAL_HISTORY_TIMEOUT')), 25000)
+    );
+
+    let fetchedItems = [];
+    try {
+        fetchedItems = await Promise.race([
+            Promise.all(fetchPromises),
+            timeoutPromise
+        ]);
+    } catch (err) {
+        if (err.message === 'GLOBAL_HISTORY_TIMEOUT') {
+            console.warn(`[History Bulk] Global timeout reached. Returning partial data for syncing.`);
+            // 超时后，fetchedItems 保持为空数组，防止后续逻辑循环 null
+        } else {
+            throw err;
+        }
+    }
 
     const dbRecords = []
     const seen = new Set()
 
-    for (const item of fetchedItems) {
-        const key = `${item.type}:${item.code}`
-        const dbHistory = dbHistoryMap[key] || []
-        const latestDate = item.latestDate
+    // 确保 fetchedItems 是数组
+    if (Array.isArray(fetchedItems)) {
+        for (const item of fetchedItems) {
+            const key = `${item.type}:${item.code}`
+            const dbHistory = dbHistoryMap[key] || []
+            const latestDate = item.latestDate
 
-        // 过滤：仅保留日期晚于数据库最新日期的记录
-        const newRecords = (item.history || []).filter(h => !latestDate || h.date > latestDate)
+            // 过滤：仅保留日期晚于数据库最新日期的记录
+            const newRecords = (item.history || []).filter(h => !latestDate || h.date > latestDate)
 
-        if (newRecords.length > 0) {
-            for (const h of newRecords) {
-                const k = `${item.code}-${item.type}-${h.date}`
-                if (seen.has(k)) continue
-                seen.add(k)
-                dbRecords.push({
-                    code: item.code,
-                    type: item.type,
-                    price: h.value,
-                    date: h.date
-                })
+            if (newRecords.length > 0) {
+                for (const h of newRecords) {
+                    const k = `${item.code}-${item.type}-${h.date}`
+                    if (seen.has(k)) continue
+                    seen.add(k)
+                    dbRecords.push({
+                        code: item.code,
+                        type: item.type,
+                        price: h.value,
+                        date: h.date
+                    })
+                }
             }
-        }
 
-        // 合并数据用于计算统计和返回
-        const combinedHistory = [...dbHistory, ...newRecords].slice(-days)
-        result[key] = {
-            history: combinedHistory,
-            summary: calcStats(combinedHistory)
+            // 合并数据用于计算统计和返回
+            const combinedHistory = [...dbHistory, ...newRecords].slice(-days)
+            result[key] = {
+                history: combinedHistory,
+                summary: calcStats(combinedHistory)
+            }
         }
     }
 

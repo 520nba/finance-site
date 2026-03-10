@@ -29,7 +29,7 @@ function resolveMarket(code) {
     return { market, clean };
 }
 
-async function fetchSingleIntradayServer(code, forcePersist = false) {
+async function fetchSingleIntradayServer(code, forcePersist = false, preFetchedDbData = null) {
     const { market, clean } = resolveMarket(code);
     const today = todayStr();
     const now = Date.now();
@@ -37,15 +37,15 @@ async function fetchSingleIntradayServer(code, forcePersist = false) {
     try {
         const url = `https://push2.eastmoney.com/api/qt/stock/trends2/get?secid=${market}.${clean}&fields1=f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13&fields2=f51,f52,f53,f54,f55,f56,f57,f58`;
 
-        // 检查内存缓存 (30秒)：命中时只打 console，不写日志
+        // 检查内存缓存 (30秒)
         const cached = INTRADAY_CACHE.get(code);
         if (cached && (now - cached.timestamp < CACHE_TTL)) {
-            console.log(`[Intraday] Memory Cache Hit: ${code}`);
             return cached.data;
         }
 
         // 2. 优先尝试从持久化层获取 (有效期 1 分钟)
-        const dbData = await getIntraday(code, today, true); // 开启 fallbackToLatest
+        // 如果外部已经查过了并传进来，直接用，节省一个 D1 子请求
+        const dbData = preFetchedDbData || (await getIntraday(code, today, true));
         if (dbData && dbData.points && dbData.points.length > 0) {
             // 如果是今天的数据，检查 1 分钟新鲜度
             const isToday = dbData.points[0]?.time?.includes(':') && !dbData.points[0]?.time?.includes('-');
@@ -190,13 +190,21 @@ export async function syncIntradayBulk(items, allowExternal = false, request = n
         }
 
         if (externalFetchList.length > 0 && allowExternal) {
-            // 3. 最后才去拉网络，使用 p-limit 提供匀速并发，不再通过 Chunk 产生波峰波动
+            // 安全限制：Cloudflare Subrequest Limit 是 50。
+            // 除去日志、D1 读取写入，给 fetch 留出的安全空间约为 40。
+            const safeFetchList = externalFetchList.slice(0, 40);
+            if (externalFetchList.length > 40) {
+                console.warn(`[Intraday Bulk] External fetch list too long (${externalFetchList.length}). Truncated to 40 to avoid subrequest limit.`);
+            }
+
+            // 3. 最后才去拉网络，使用 p-limit 提供匀速并发
             const limit = pLimit(5);
             const recordsToSave = [];
 
-            const fetchPromises = externalFetchList.map(item =>
+            const fetchPromises = safeFetchList.map(item =>
                 limit(async () => {
-                    const data = await fetchSingleIntradayServer(item.code, allowExternal);
+                    // 传入之前在 dbDataMap 中查到的旧数据，避免 fetchSingleIntradayServer 重复查 D1
+                    const data = await fetchSingleIntradayServer(item.code, allowExternal, dbDataMap[item.code]);
                     if (data) {
                         return { code: item.code, data };
                     }
@@ -204,19 +212,35 @@ export async function syncIntradayBulk(items, allowExternal = false, request = n
                 })
             );
 
-            const fetchedResults = await Promise.all(fetchPromises);
+            // 为整个并发任务增加全局 25s 超时，防止 Worker 被 Cloudflare 判定为 Hang 而强制取消
+            const timeoutPromise = new Promise((_, reject) =>
+                setTimeout(() => reject(new Error('GLOBAL_FETCH_TIMEOUT')), 25000)
+            );
 
-            for (const res of fetchedResults) {
-                if (res && res.data) {
-                    result[res.code] = res.data;
-                    recordsToSave.push({ code: res.code, date: today, data: res.data });
+            try {
+                const fetchedResults = await Promise.race([
+                    Promise.all(fetchPromises),
+                    timeoutPromise
+                ]);
+
+                for (const res of fetchedResults) {
+                    if (res && res.data) {
+                        result[res.code] = res.data;
+                        recordsToSave.push({ code: res.code, date: today, data: res.data });
+                    }
                 }
-            }
 
-            // 批量持久化到 D1
-            if (recordsToSave.length > 0) {
-                await saveIntradayBatch(recordsToSave);
-                console.log(`[Intraday] Batch saved ${recordsToSave.length} items to D1`);
+                // 批量持久化到 D1
+                if (recordsToSave.length > 0) {
+                    await saveIntradayBatch(recordsToSave);
+                    console.log(`[Intraday] Batch saved ${recordsToSave.length} items to D1`);
+                }
+            } catch (err) {
+                if (err.message === 'GLOBAL_FETCH_TIMEOUT') {
+                    console.error(`[Intraday Bulk] Global timeout reached for ${externalFetchList.length} items. Returning partial results.`);
+                } else {
+                    throw err;
+                }
             }
         }
     }
