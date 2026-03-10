@@ -1,10 +1,10 @@
 import { NextResponse } from 'next/server';
 export const runtime = 'edge';
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
 import { updateApiHealth } from '@/lib/storage/healthRepo';
 import { fetchStockEastmoney, fetchStockTencent, fetchStockSina, fetchFundHistory } from '@/lib/services/historyFetcher';
 import { addSystemLog } from '@/lib/storage/logRepo';
-
-export const dynamic = 'force-dynamic';
 
 /**
  * API 定时健康巡检 (Cron 触发)
