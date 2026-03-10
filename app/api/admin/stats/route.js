@@ -19,7 +19,6 @@ export async function GET(request) {
                 return { count: res?.count || 0, error: null };
             }
             catch (e) {
-                console.error(`[Stats] Query error for ${sql}:`, e.message);
                 return { count: 0, error: e.message };
             }
         };
@@ -35,10 +34,6 @@ export async function GET(request) {
             wrapQuery('SELECT COUNT(*) as count FROM api_health')
         ]);
 
-        // 强阻塞式日志，确保调试信息必定入库
-        const debugMsg = `HealthNodes: ${healthData?.length || 0}, TableRows: ${healthCountInfo.count}, Error: ${healthCountInfo.error || 'None'}`;
-        await addSystemLog('DEBUG', 'AdminStats', debugMsg);
-
         return NextResponse.json({
             users: userCount.count,
             stocks: stockCount.count,
@@ -49,7 +44,11 @@ export async function GET(request) {
                 health_query: healthCountInfo.error,
                 user_query: userCount.error
             },
-            _debug: { health_table_count: healthCountInfo.count }
+            _debug: {
+                health_table_count: healthCountInfo.count,
+                health_data_len: healthData?.length || 0,
+                health_data_type: typeof healthData
+            }
         });
     } catch (e) {
         return NextResponse.json({ error: e.message || 'INTERNAL_ERROR' }, { status: 500 });
