@@ -14,11 +14,57 @@ export async function GET() {
     const STOCK_TEST = 'sh600036';
     const FUND_TEST = '110020';
 
+    const BASE_HEADERS = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    };
+
     const healthTasks = [
-        { name: 'EastMoney', fn: () => fetchStockEastmoney(STOCK_TEST, 1) },
-        { name: 'Tencent', fn: () => fetchStockTencent(STOCK_TEST, 1) },
-        { name: 'Sina', fn: () => fetchStockSina(STOCK_TEST, 1) },
-        { name: 'Fund API', fn: () => fetchFundHistory(FUND_TEST, 1) }
+        // 1. 历史 K 线系列
+        { name: 'Hist: EastMoney (Stock)', fn: () => fetchStockEastmoney(STOCK_TEST, 1) },
+        { name: 'Hist: Tencent (Stock)', fn: () => fetchStockTencent(STOCK_TEST, 1) },
+        { name: 'Hist: Sina (Stock)', fn: () => fetchStockSina(STOCK_TEST, 1) },
+        { name: 'Hist: EastMoney (Fund)', fn: () => fetchFundHistory(FUND_TEST, 1) },
+
+        // 2. 实时行情系列
+        {
+            name: 'Quote: Tencent (Realtime)',
+            fn: async () => {
+                const res = await fetch(`https://qt.gtimg.cn/q=${STOCK_TEST}`, { headers: { 'Referer': 'https://gu.qq.com/' } });
+                return res.ok ? [1] : null;
+            }
+        },
+
+        // 3. 分时趋势系列
+        {
+            name: 'Intra: EastMoney (Trends)',
+            fn: async () => {
+                const res = await fetch(`https://push2.eastmoney.com/api/qt/stock/trends2/get?secid=1.600036&fields1=f1&fields2=f51`, { headers: { 'Referer': 'https://quote.eastmoney.com/' } });
+                return res.ok ? [1] : null;
+            }
+        },
+
+        // 4. 名称获取系列 (用于 Search/Update)
+        {
+            name: 'Name: EastMoney (Query)',
+            fn: async () => {
+                const res = await fetch(`https://push2.eastmoney.com/api/qt/stock/get?secid=1.600036&fields=f58`, { headers: { 'Referer': 'https://quote.eastmoney.com/' } });
+                return res.ok ? [1] : null;
+            }
+        },
+        {
+            name: 'Name: Tencent (Fund Spec)',
+            fn: async () => {
+                const res = await fetch(`https://qt.gtimg.cn/q=s_jj${FUND_TEST}`, { headers: BASE_HEADERS });
+                return res.ok ? [1] : null;
+            }
+        },
+        {
+            name: 'Name: EastMoney (Fund HTML)',
+            fn: async () => {
+                const res = await fetch(`https://fund.eastmoney.com/${FUND_TEST}.html`, { headers: { ...BASE_HEADERS, 'Accept': 'text/html' } });
+                return res.ok ? [1] : null;
+            }
+        }
     ];
 
     const results = [];
@@ -32,10 +78,10 @@ export async function GET() {
         try {
             const data = await task.fn();
             latency = Date.now() - start;
-            if (data && data.length > 0) {
+            if (data && (Array.isArray(data) ? data.length > 0 : true)) {
                 success = true;
             } else {
-                errorMsg = 'Empty data returned';
+                errorMsg = 'Protocol Mismatch';
             }
         } catch (e) {
             latency = Date.now() - start;
@@ -43,17 +89,17 @@ export async function GET() {
         }
 
         const stats = {
-            status: success ? (latency < 1000 ? 'healthy' : 'wary') : 'down',
-            successRate: success ? 100 : 0, // 这里的逻辑可以优化为在 Repo 层聚合历史
+            status: success ? (latency < 1200 ? 'healthy' : 'wary') : 'down',
+            successRate: success ? 100 : 0,
             avgLatency: latency,
-            errorMsg: success ? '' : (errorMsg || 'Connection reset')
+            errorMsg: success ? '' : (errorMsg || 'IO Error')
         };
 
         await updateApiHealth(task.name, stats);
         results.push({ name: task.name, ...stats });
     }
 
-    await addSystemLog('INFO', 'HealthCron', `API Check results: ${results.length} tested.`);
+    await addSystemLog('INFO', 'HealthCron', `Sentinel: ${results.length} nodes verified.`);
 
     return NextResponse.json({ success: true, data: results });
 }

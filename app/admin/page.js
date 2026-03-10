@@ -366,12 +366,12 @@ export default function AdminPage() {
                                                     <Wifi size={24} />
                                                 </div>
                                                 <div>
-                                                    <h2 className="text-2xl font-black italic uppercase tracking-tighter">API Sentinel Feedback</h2>
-                                                    <p className="text-[10px] text-white/20 font-bold uppercase tracking-[0.2em]">Real-time Interface Latency & Success Matrix</p>
+                                                    <h2 className="text-2xl font-black italic uppercase tracking-tighter">Full Stack Sentinel Feedback</h2>
+                                                    <p className="text-[10px] text-white/20 font-bold uppercase tracking-[0.2em]">All External Financial Protocol Heartbeats ({stats.api_health.length} Nodes detected)</p>
                                                 </div>
                                             </div>
                                             <div className="flex items-center gap-2 px-4 py-2 bg-white/5 border border-white/5 rounded-2xl text-[10px] font-black uppercase tracking-widest text-cyan-500/60">
-                                                <Clock size={12} /> Sampling: 5m
+                                                <Clock size={12} /> Live Matrix
                                             </div>
                                         </div>
 
@@ -379,7 +379,7 @@ export default function AdminPage() {
                                             <table className="w-full text-left border-collapse">
                                                 <thead>
                                                     <tr className="border-b border-white/5 bg-white/[0.01]">
-                                                        <th className="px-10 py-6 text-[10px] font-black uppercase tracking-[0.3em] text-white/30">Protocol Name</th>
+                                                        <th className="px-10 py-6 text-[10px] font-black uppercase tracking-[0.3em] text-white/30">Protocol & Channel</th>
                                                         <th className="px-10 py-6 text-[10px] font-black uppercase tracking-[0.3em] text-white/30 text-center">Status</th>
                                                         <th className="px-10 py-6 text-[10px] font-black uppercase tracking-[0.3em] text-white/30 text-right">Success</th>
                                                         <th className="px-10 py-6 text-[10px] font-black uppercase tracking-[0.3em] text-white/30 text-right">Latency</th>
@@ -387,43 +387,63 @@ export default function AdminPage() {
                                                 </thead>
                                                 <tbody className="divide-y divide-white/[0.02]">
                                                     {stats?.api_health && stats.api_health.length > 0 ? (
-                                                        stats.api_health.map((api) => (
-                                                            <tr key={api.api_name} className="group hover:bg-white/[0.02] transition-colors">
-                                                                <td className="px-10 py-8">
-                                                                    <div className="flex flex-col">
-                                                                        <span className="font-bold text-lg text-white/80 group-hover:text-cyan-400 transition-colors tracking-tight">{api.api_name}</span>
-                                                                        <span className="text-[9px] text-white/20 mt-1 uppercase font-mono tracking-widest">{api.error_msg || 'Standard Handshake Confirmed'}</span>
-                                                                    </div>
-                                                                </td>
-                                                                <td className="px-10 py-8">
-                                                                    <div className="flex justify-center">
-                                                                        {api.status === 'healthy' ? (
-                                                                            <div className="flex items-center gap-2 px-4 py-1.5 bg-emerald-500/10 text-emerald-400 rounded-full text-[10px] font-black uppercase tracking-tighter border border-emerald-500/20">
-                                                                                <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                                                                                Optimal
+                                                        stats.api_health.map((api) => {
+                                                            const parts = api.api_name.split(':');
+                                                            const type = parts.length > 1 ? parts[0] : 'Other';
+                                                            const mainName = parts.length > 1 ? parts[1].trim() : api.api_name;
+                                                            const typeColor =
+                                                                type === 'Hist' ? 'from-purple-500/20 text-purple-400' :
+                                                                    type === 'Quote' ? 'from-emerald-500/20 text-emerald-400' :
+                                                                        type === 'Intra' ? 'from-blue-500/20 text-blue-400' :
+                                                                            type === 'Name' ? 'from-orange-500/20 text-orange-400' : 'from-gray-500/20 text-gray-400';
+
+                                                            return (
+                                                                <tr key={api.api_name} className="group hover:bg-white/[0.02] transition-colors">
+                                                                    <td className="px-10 py-6">
+                                                                        <div className="flex items-center gap-4">
+                                                                            <div className={`px-2 py-0.5 rounded bg-gradient-to-r ${typeColor} text-[8px] font-black uppercase tracking-widest border border-white/5`}>
+                                                                                {type}
                                                                             </div>
-                                                                        ) : api.status === 'wary' ? (
-                                                                            <div className="flex items-center gap-2 px-4 py-1.5 bg-yellow-500/10 text-yellow-500 rounded-full text-[10px] font-black uppercase tracking-tighter border border-yellow-500/20">
-                                                                                <div className="w-1.5 h-1.5 rounded-full bg-yellow-500" />
-                                                                                Degraded
+                                                                            <div className="flex flex-col">
+                                                                                <span className="font-bold text-base text-white/80 group-hover:text-cyan-400 transition-colors tracking-tight truncate max-w-[240px]">
+                                                                                    {mainName}
+                                                                                </span>
+                                                                                <span className="text-[9px] text-white/20 mt-0.5 uppercase font-mono tracking-widest truncate max-w-[200px] italic">
+                                                                                    {api.error_msg || 'Heartbeat Optimal'}
+                                                                                </span>
                                                                             </div>
-                                                                        ) : (
-                                                                            <div className="flex items-center gap-2 px-4 py-1.5 bg-red-500/10 text-red-500 rounded-full text-[10px] font-black uppercase tracking-tighter border border-red-500/20">
-                                                                                <div className="w-1.5 h-1.5 rounded-full bg-red-500" />
-                                                                                Critical
-                                                                            </div>
-                                                                        )}
-                                                                    </div>
-                                                                </td>
-                                                                <td className="px-10 py-8 text-right">
-                                                                    <span className="font-mono font-black text-2xl text-white/50">{api.success_rate}<span className="text-xs opacity-40 ml-0.5">%</span></span>
-                                                                </td>
-                                                                <td className="px-10 py-8 text-right font-mono">
-                                                                    <span className={`font-black text-lg ${api.avg_latency > 3000 ? 'text-red-400' : api.avg_latency > 1500 ? 'text-yellow-400' : 'text-white/30'}`}>{api.avg_latency}</span>
-                                                                    <span className="text-[10px] opacity-20 ml-1 font-black">ms</span>
-                                                                </td>
-                                                            </tr>
-                                                        ))
+                                                                        </div>
+                                                                    </td>
+                                                                    <td className="px-10 py-6">
+                                                                        <div className="flex justify-center">
+                                                                            {api.status === 'healthy' ? (
+                                                                                <div className="flex items-center gap-2 px-3 py-1 bg-emerald-500/10 text-emerald-400 rounded-full text-[9px] font-black uppercase tracking-tighter border border-emerald-500/20">
+                                                                                    <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                                                                                    Optimal
+                                                                                </div>
+                                                                            ) : api.status === 'wary' ? (
+                                                                                <div className="flex items-center gap-2 px-3 py-1 bg-yellow-500/10 text-yellow-500 rounded-full text-[9px] font-black uppercase tracking-tighter border border-yellow-500/20">
+                                                                                    <div className="w-1.5 h-1.5 rounded-full bg-yellow-500" />
+                                                                                    Wary
+                                                                                </div>
+                                                                            ) : (
+                                                                                <div className="flex items-center gap-2 px-3 py-1 bg-red-500/10 text-red-500 rounded-full text-[9px] font-black uppercase tracking-tighter border border-red-500/20">
+                                                                                    <div className="w-1.5 h-1.5 rounded-full bg-red-500" />
+                                                                                    Down
+                                                                                </div>
+                                                                            )}
+                                                                        </div>
+                                                                    </td>
+                                                                    <td className="px-10 py-6 text-right">
+                                                                        <span className="font-mono font-black text-xl text-white/50 group-hover:text-white transition-colors">{api.success_rate}<span className="text-[10px] opacity-40 ml-0.5">%</span></span>
+                                                                    </td>
+                                                                    <td className="px-10 py-6 text-right font-mono">
+                                                                        <span className={`font-black text-base ${api.avg_latency > 3000 ? 'text-red-400' : api.avg_latency > 1500 ? 'text-yellow-400' : 'text-white/40 group-hover:text-white/80'}`}>{api.avg_latency}</span>
+                                                                        <span className="text-[9px] opacity-20 ml-1 font-black">ms</span>
+                                                                    </td>
+                                                                </tr>
+                                                            );
+                                                        })
                                                     ) : (
                                                         <tr><td colSpan="4" className="px-10 py-32 text-center text-white/10 italic font-medium uppercase tracking-[0.3em] text-sm group">Waiting for sentinel heartbeat<span className="inline-block animate-bounce ml-2">...</span></td></tr>
                                                     )}
