@@ -8,10 +8,8 @@ import { addSystemLog } from '@/lib/storage/logRepo';
 
 /**
  * API 定时健康巡检 (Cron 触发)
- * 每 5-10 分钟运行一次。尝试拉取一个固定测试资产的数据并统计指标。
  */
 export async function GET() {
-    // 测试资产：招商银行 (600036/sh600036) 和 沪深300ETF联接A (110020)
     const STOCK_TEST = 'sh600036';
     const FUND_TEST = '110020';
 
@@ -20,13 +18,10 @@ export async function GET() {
     };
 
     const healthTasks = [
-        // 1. 历史 K 线系列
         { name: 'Hist: EastMoney (Stock)', fn: () => fetchStockEastmoney(STOCK_TEST, 1) },
         { name: 'Hist: Tencent (Stock)', fn: () => fetchStockTencent(STOCK_TEST, 1) },
         { name: 'Hist: Sina (Stock)', fn: () => fetchStockSina(STOCK_TEST, 1) },
         { name: 'Hist: EastMoney (Fund)', fn: () => fetchFundHistory(FUND_TEST, 1) },
-
-        // 2. 实时行情系列
         {
             name: 'Quote: Tencent (Realtime)',
             fn: async () => {
@@ -34,8 +29,6 @@ export async function GET() {
                 return res.ok ? [1] : null;
             }
         },
-
-        // 3. 分时趋势系列
         {
             name: 'Intra: EastMoney (Trends)',
             fn: async () => {
@@ -43,8 +36,6 @@ export async function GET() {
                 return res.ok ? [1] : null;
             }
         },
-
-        // 4. 名称获取系列 (用于 Search/Update)
         {
             name: 'Name: EastMoney (Query)',
             fn: async () => {
@@ -70,6 +61,7 @@ export async function GET() {
 
     const results = [];
 
+    // 重要：必须逐个/批量 AWAIT 写入操作，在 Cloudflare Workers 环境下不能有悬空的 Promise
     for (const task of healthTasks) {
         const start = Date.now();
         let success = false;
@@ -96,15 +88,12 @@ export async function GET() {
             errorMsg: success ? '' : (errorMsg || 'IO Error')
         };
 
-        // 异步更新健康信息，增加适当错误捕获
-        updateApiHealth(task.name, stats).catch(err => {
-            console.warn(`[HealthCron] Async update failed for ${task.name}:`, err.message);
-        });
-
+        // 同步等待写入 D1，确保任务上下文不被过早杀死
+        await updateApiHealth(task.name, stats);
         results.push({ name: task.name, ...stats });
     }
 
-    addSystemLog('INFO', 'HealthCron', `Sentinel: ${results.length} nodes verified.`).catch(() => { });
+    await addSystemLog('INFO', 'HealthCron', `Sentinel: ${results.length} nodes verified.`);
 
     return NextResponse.json({ success: true, data: results });
 }
