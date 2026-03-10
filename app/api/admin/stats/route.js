@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
-import { queryOne } from '@/lib/storage/d1Client';
+import { queryOne, queryAll } from '@/lib/storage/d1Client';
 import { isAdminAuthorized } from '@/lib/auth';
 import { getAllApiHealth } from '@/lib/storage/healthRepo';
 import { addSystemLog } from '@/lib/storage/logRepo';
@@ -16,42 +16,42 @@ export async function GET(request) {
         const wrapQuery = async (sql) => {
             try {
                 const res = await queryOne(sql);
-                return res?.count || 0;
+                return { count: res?.count || 0, error: null };
             }
             catch (e) {
                 console.error(`[Stats] Query error for ${sql}:`, e.message);
-                return 0;
+                return { count: 0, error: e.message };
             }
         };
 
         const [
             userCount, stockCount, fundCount,
-            histCount, intraPointsCount, quotesCount,
-            growthCount, healthData
+            healthData, healthCountInfo
         ] = await Promise.all([
             wrapQuery('SELECT COUNT(*) as count FROM users'),
             wrapQuery('SELECT COUNT(*) as count FROM asset_names WHERE type = "stock"'),
             wrapQuery('SELECT COUNT(*) as count FROM asset_names WHERE type = "fund"'),
-            wrapQuery('SELECT COUNT(*) as count FROM asset_history'),
-            wrapQuery('SELECT COUNT(*) as count FROM asset_intraday_points'),
-            wrapQuery('SELECT COUNT(*) as count FROM asset_quotes'),
-            wrapQuery("SELECT COUNT(*) as count FROM asset_history WHERE created_at > datetime('now', '-24 hours')"),
-            getAllApiHealth()
+            getAllApiHealth(),
+            wrapQuery('SELECT COUNT(*) as count FROM api_health')
         ]);
 
+        // 强阻塞式日志，确保调试信息必定入库
+        const debugMsg = `HealthNodes: ${healthData?.length || 0}, TableRows: ${healthCountInfo.count}, Error: ${healthCountInfo.error || 'None'}`;
+        await addSystemLog('DEBUG', 'AdminStats', debugMsg);
+
         return NextResponse.json({
-            users: userCount,
-            stocks: stockCount,
-            funds: fundCount,
-            history_points: histCount,
-            intraday_points: intraPointsCount,
-            quotes_count: quotesCount,
-            recent_growth: growthCount,
+            users: userCount.count,
+            stocks: stockCount.count,
+            funds: fundCount.count,
             db_engine: 'Cloudflare D1 (SQLite)',
-            api_health: healthData || []
+            api_health: healthData || [],
+            _errors: {
+                health_query: healthCountInfo.error,
+                user_query: userCount.error
+            },
+            _debug: { health_table_count: healthCountInfo.count }
         });
     } catch (e) {
-        console.error('[AdminStats] Global Error:', e.message);
         return NextResponse.json({ error: e.message || 'INTERNAL_ERROR' }, { status: 500 });
     }
 }
