@@ -73,6 +73,7 @@ function AssetCardComponent({ asset, onRemove, mode = 'volatility' }) {
 
     const history = (historyData?.history?.length > 0) ? historyData.history : (asset.history ?? []);
     const summary = (historyData?.summary) ?? (asset.summary ?? { perf5d: 0, perf22d: 0, perf250d: 0 });
+    const isHistorySyncing = historyData?.status === 'syncing';
 
     const intraPoints = intradayData?.points ?? [];
     const isPositiveChange = (asset.changePercent ?? 0) >= 0;
@@ -138,6 +139,17 @@ function AssetCardComponent({ asset, onRemove, mode = 'volatility' }) {
                             </div>
                         )}
                     </div>
+                </div>
+            ) : isHistorySyncing ? (
+                <div className="h-[100px] flex flex-col items-center justify-center gap-3 bg-white/5 rounded-xl border border-dashed border-white/10">
+                    <motion.div
+                        animate={{ rotate: 360 }}
+                        transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
+                        className="w-5 h-5 border-2 border-cyan-500/20 border-t-cyan-500 rounded-full"
+                    />
+                    <span className="text-xs font-bold text-cyan-500/60 uppercase tracking-widest italic animate-pulse">
+                        历史行情同步中 (后台任务)...
+                    </span>
                 </div>
             ) : (
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-6 pt-2 border-t border-white/5">

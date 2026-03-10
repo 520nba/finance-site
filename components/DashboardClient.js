@@ -2,17 +2,20 @@
 
 import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { TrendingUp, PieChart, RefreshCw, X, Activity } from 'lucide-react';
+import { TrendingUp, PieChart, RefreshCw, X, Activity, ShieldCheck } from 'lucide-react';
 import SearchBar from '@/components/SearchBar';
 import AssetCard from '@/components/AssetCard';
 import WatchlistSidebar from '@/components/WatchlistSidebar';
 import LogsModal from '@/components/LogsModal';
+import AdminDashboard from '@/components/AdminDashboard';
 import { useAsset } from '@/providers/AssetProvider';
 
 export default function DashboardClient() {
     const [showLogs, setShowLogs] = useState(false);
+    const [showAdmin, setShowAdmin] = useState(false);
 
     const {
+        // ... (保持现有解构)
         userId,
         isLogged,
         loginInput,
@@ -96,6 +99,14 @@ export default function DashboardClient() {
                     </div>
                     <div className="flex items-center gap-2">
                         <button
+                            onClick={() => setShowAdmin(true)}
+                            className="p-2.5 rounded-full border border-white/10 opacity-20 hover:opacity-100 transition-all hover:bg-cyan-500/10 hover:border-cyan-500/30"
+                            title="Admin Dashboard"
+                        >
+                            <ShieldCheck size={14} className="text-cyan-400" />
+                        </button>
+
+                        <button
                             onClick={() => setShowLogs(true)}
                             className="flex items-center gap-2 px-4 py-2 rounded-full border border-white/10 opacity-40 hover:opacity-100 transition-all"
                         >
@@ -115,6 +126,7 @@ export default function DashboardClient() {
             </div>
 
             <LogsModal isOpen={showLogs} onClose={() => setShowLogs(false)} />
+            <AdminDashboard isOpen={showAdmin} onClose={() => setShowAdmin(false)} />
 
             <div className="flex flex-col lg:flex-row gap-6 lg:gap-8 items-start">
                 {isLogged && assets.length > 0 && (

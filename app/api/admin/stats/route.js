@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { queryOne } from '@/lib/storage/d1Client';
 import { isAdminAuthorized } from '@/lib/auth';
+import { getAllApiHealth } from '@/lib/storage/healthRepo';
 
 export async function GET(request) {
     if (!(await isAdminAuthorized(request))) {
@@ -20,7 +21,8 @@ export async function GET(request) {
             histCount,
             intraPointsCount,
             quotesCount,
-            growthCount
+            growthCount,
+            healthData
         ] = await Promise.all([
             wrapQuery('SELECT COUNT(*) as count FROM users'),
             wrapQuery('SELECT COUNT(*) as count FROM asset_names WHERE type = "stock"'),
@@ -28,7 +30,8 @@ export async function GET(request) {
             wrapQuery('SELECT COUNT(*) as count FROM asset_history'),
             wrapQuery('SELECT COUNT(*) as count FROM asset_intraday_points'),
             wrapQuery('SELECT COUNT(*) as count FROM asset_quotes'),
-            wrapQuery("SELECT COUNT(*) as count FROM asset_history WHERE created_at > datetime('now', '-24 hours')")
+            wrapQuery("SELECT COUNT(*) as count FROM asset_history WHERE created_at > datetime('now', '-24 hours')"),
+            getAllApiHealth()
         ]);
 
         return NextResponse.json({
@@ -39,7 +42,8 @@ export async function GET(request) {
             intraday_points: intraPointsCount,
             quotes_count: quotesCount,
             recent_growth: growthCount,
-            db_engine: 'Cloudflare D1 (SQLite)'
+            db_engine: 'Cloudflare D1 (SQLite)',
+            api_health: healthData
         });
     } catch (e) {
         return NextResponse.json({ error: e.message }, { status: 500 });

@@ -79,4 +79,25 @@ CREATE TABLE IF NOT EXISTS admin_sessions (
     expires_at DATETIME NOT NULL
 );
 
+-- 同步队列 (异步抓取任务)
+CREATE TABLE IF NOT EXISTS sync_queue (
+    code TEXT NOT NULL,
+    type TEXT NOT NULL,
+    status TEXT DEFAULT 'pending', -- pending, syncing, done, error
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY(code, type)
+);
+CREATE INDEX IF NOT EXISTS idx_sync_queue_status ON sync_queue(status);
+
+-- 外部 API 健康监控
+CREATE TABLE IF NOT EXISTS api_health (
+    api_name TEXT PRIMARY KEY,
+    status TEXT DEFAULT 'unknown', -- healthy, wary, down
+    success_rate REAL DEFAULT 0,
+    avg_latency INTEGER DEFAULT 0,
+    last_check DATETIME DEFAULT CURRENT_TIMESTAMP,
+    error_msg TEXT
+);
+
 CREATE INDEX IF NOT EXISTS idx_logs_timestamp ON system_logs(timestamp);
