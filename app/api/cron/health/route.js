@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+export const runtime = 'edge';
 import { updateApiHealth } from '@/lib/storage/healthRepo';
 import { fetchStockEastmoney, fetchStockTencent, fetchStockSina, fetchFundHistory } from '@/lib/services/historyFetcher';
 import { addSystemLog } from '@/lib/storage/logRepo';
