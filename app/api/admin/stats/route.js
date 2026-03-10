@@ -20,19 +20,22 @@ export async function GET(request) {
             fundCount,
             histCount,
             intraPointsCount,
-            quotesCount,
-            growthCount,
-            healthData
+            quotesCount
         ] = await Promise.all([
             wrapQuery('SELECT COUNT(*) as count FROM users'),
             wrapQuery('SELECT COUNT(*) as count FROM asset_names WHERE type = "stock"'),
             wrapQuery('SELECT COUNT(*) as count FROM asset_names WHERE type = "fund"'),
             wrapQuery('SELECT COUNT(*) as count FROM asset_history'),
             wrapQuery('SELECT COUNT(*) as count FROM asset_intraday_points'),
-            wrapQuery('SELECT COUNT(*) as count FROM asset_quotes'),
-            wrapQuery("SELECT COUNT(*) as count FROM asset_history WHERE created_at > datetime('now', '-24 hours')"),
-            getAllApiHealth()
+            wrapQuery('SELECT COUNT(*) as count FROM asset_quotes')
         ]);
+
+        // 分离出来以避免 UTC/Local 时间偏移带来的统计偏差
+        const growthCount = await wrapQuery("SELECT COUNT(*) as count FROM asset_history WHERE created_at > datetime('now', '-24 hours')");
+        const healthData = await getAllApiHealth();
+
+        // [Debug] 在服务端日志中打印健康检查数据状态
+        console.log(`[AdminStats] Health Check Nodes: ${healthData?.length || 0}`);
 
         return NextResponse.json({
             users: userCount,
@@ -43,7 +46,7 @@ export async function GET(request) {
             quotes_count: quotesCount,
             recent_growth: growthCount,
             db_engine: 'Cloudflare D1 (SQLite)',
-            api_health: healthData
+            api_health: healthData || []
         });
     } catch (e) {
         return NextResponse.json({ error: e.message }, { status: 500 });
