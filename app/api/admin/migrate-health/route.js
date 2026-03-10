@@ -9,15 +9,12 @@ export async function GET(request) {
     }
 
     try {
-        console.log('[Migrate] Upgrading api_health schema...');
+        console.log('[Migrate] Upgrading api_health schema for heartbeat_ts...');
 
-        // Add missing columns to api_health table
-        await runSql("ALTER TABLE api_health ADD COLUMN success_count INTEGER DEFAULT 0;").catch(e => console.log(e.message));
-        await runSql("ALTER TABLE api_health ADD COLUMN fail_count INTEGER DEFAULT 0;").catch(e => console.log(e.message));
-        await runSql("ALTER TABLE api_health ADD COLUMN total_count INTEGER DEFAULT 0;").catch(e => console.log(e.message));
-        await runSql("ALTER TABLE api_health ADD COLUMN heartbeat_ts DATETIME DEFAULT CURRENT_TIMESTAMP;").catch(e => console.log(e.message));
+        // Add missing column heartbeat_ts WITHOUT dynamic DEFAULT
+        await runSql("ALTER TABLE api_health ADD COLUMN heartbeat_ts DATETIME;").catch(e => console.log(e.message));
 
-        return NextResponse.json({ success: true, message: 'api_health table upgraded successfully.' });
+        return NextResponse.json({ success: true, message: 'api_health heartbeat_ts upgraded successfully.' });
     } catch (e) {
         console.error('[Migrate] Failure:', e.message);
         return NextResponse.json({ success: false, error: e.message }, { status: 500 });
