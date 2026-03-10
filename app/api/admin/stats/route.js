@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { queryOne } from '@/lib/storage/d1Client';
+import { queryOne, queryAll } from '@/lib/storage/d1Client';
 import { isAdminAuthorized } from '@/lib/auth';
 import { getAllApiHealth } from '@/lib/storage/healthRepo';
 
@@ -30,12 +30,12 @@ export async function GET(request) {
             wrapQuery('SELECT COUNT(*) as count FROM asset_quotes')
         ]);
 
-        // 分离出来以避免 UTC/Local 时间偏移带来的统计偏差
         const growthCount = await wrapQuery("SELECT COUNT(*) as count FROM asset_history WHERE created_at > datetime('now', '-24 hours')");
         const healthData = await getAllApiHealth();
+        const rawHealthCount = await wrapQuery("SELECT COUNT(*) as count FROM api_health");
 
-        // [Debug] 在服务端日志中打印健康检查数据状态
-        console.log(`[AdminStats] Health Check Nodes: ${healthData?.length || 0}`);
+        // [Debug] Log to Cloudflare Workers Logs
+        console.log(`[AdminStats] Health Check Nodes: ${healthData?.length || 0}, Table Row Count: ${rawHealthCount}`);
 
         return NextResponse.json({
             users: userCount,
@@ -46,7 +46,8 @@ export async function GET(request) {
             quotes_count: quotesCount,
             recent_growth: growthCount,
             db_engine: 'Cloudflare D1 (SQLite)',
-            api_health: healthData || []
+            api_health: healthData || [],
+            _debug: { health_table_count: rawHealthCount }
         });
     } catch (e) {
         return NextResponse.json({ error: e.message }, { status: 500 });
