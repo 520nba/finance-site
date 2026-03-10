@@ -76,7 +76,7 @@ export async function GET() {
             fn: async (signal) => {
                 const res = await fetch(`https://qt.gtimg.cn/q=${STOCK_TEST}`, { headers: { 'Referer': 'https://gu.qq.com/' }, signal });
                 const text = await res.text();
-                return res.ok && text.includes('招商银行') && text.split('~').length > 10;
+                return res.ok && text.includes('600036') && text.split('~').length > 10;
             }
         },
         {
@@ -100,7 +100,7 @@ export async function GET() {
             fn: async (signal) => {
                 const res = await fetch(`https://qt.gtimg.cn/q=s_jj${FUND_TEST}`, { headers: BASE_HEADERS, signal });
                 const text = await res.text();
-                return res.ok && text.includes('沪深300');
+                return res.ok && text.includes('110020');
             }
         },
         {
@@ -108,7 +108,7 @@ export async function GET() {
             fn: async (signal) => {
                 const res = await fetch(`https://fund.eastmoney.com/${FUND_TEST}.html`, { headers: { ...BASE_HEADERS, 'Accept': 'text/html' }, signal });
                 const text = await res.text();
-                return res.ok && text.includes('易方达');
+                return res.ok && text.includes(FUND_TEST);
             }
         }
     ];
