@@ -5,10 +5,8 @@ export const revalidate = 0;
 import { updateApiHealth } from '@/lib/storage/healthRepo';
 import { fetchStockEastmoney, fetchStockTencent, fetchStockSina, fetchFundHistory } from '@/lib/services/historyFetcher';
 import { addSystemLog } from '@/lib/storage/logRepo';
+import { queryOne } from '@/lib/storage/d1Client';
 
-/**
- * API 定时健康巡检 (Cron 触发)
- */
 export async function GET() {
     const STOCK_TEST = 'sh600036';
     const FUND_TEST = '110020';
@@ -61,7 +59,6 @@ export async function GET() {
 
     const results = [];
 
-    // 重要：必须逐个/批量 AWAIT 写入操作，在 Cloudflare Workers 环境下不能有悬空的 Promise
     for (const task of healthTasks) {
         const start = Date.now();
         let success = false;
@@ -88,12 +85,12 @@ export async function GET() {
             errorMsg: success ? '' : (errorMsg || 'IO Error')
         };
 
-        // 同步等待写入 D1，确保任务上下文不被过早杀死
         await updateApiHealth(task.name, stats);
         results.push({ name: task.name, ...stats });
     }
 
-    await addSystemLog('INFO', 'HealthCron', `Sentinel: ${results.length} nodes verified.`);
+    const verifyCount = (await queryOne('SELECT COUNT(*) as count FROM api_health'))?.count || 0;
+    await addSystemLog('INFO', 'HealthCron', `Sentinel: ${results.length} nodes verified. Post-Write Table Size: ${verifyCount}`);
 
-    return NextResponse.json({ success: true, data: results });
+    return NextResponse.json({ success: true, count: results.length, table_size: verifyCount });
 }
