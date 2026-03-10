@@ -6,6 +6,10 @@ import { queryOne } from '@/lib/storage/d1Client';
 import { isAdminAuthorized } from '@/lib/auth';
 import { getAllApiHealth } from '@/lib/storage/healthRepo';
 
+/**
+ * 管理后台核心统计接口
+ * 获取用户数、资产数、数据库量级以及外部 API 健康巡检结果。
+ */
 export async function GET(request) {
     if (!(await isAdminAuthorized(request))) {
         return NextResponse.json({ error: 'Unauthorized' }, { status: 403 });
@@ -18,15 +22,21 @@ export async function GET(request) {
                 return res?.count || 0;
             }
             catch (e) {
-                console.error(`[Stats] Query error for ${sql}:`, e.message);
+                console.error(`[AdminStats] DB Query Failure [${sql}]:`, e.message);
                 return 0;
             }
         };
 
+        // 并行获取所有统计维度，极大缩短响应时长
         const [
-            userCount, stockCount, fundCount,
-            histCount, intraPointsCount, quotesCount,
-            growthCount, healthData
+            userCount,
+            stockCount,
+            fundCount,
+            histCount,
+            intraPointsCount,
+            quotesCount,
+            growthCount,
+            healthData
         ] = await Promise.all([
             wrapQuery('SELECT COUNT(*) as count FROM users'),
             wrapQuery('SELECT COUNT(*) as count FROM asset_names WHERE type = "stock"'),
@@ -47,9 +57,10 @@ export async function GET(request) {
             quotes_count: quotesCount,
             recent_growth: growthCount,
             db_engine: 'Cloudflare D1 (SQLite)',
-            api_health: healthData || []
+            api_health: healthData || [] // 确保始终返回数组，防止前端 map 报错
         });
     } catch (e) {
-        return NextResponse.json({ error: e.message || 'INTERNAL_ERROR' }, { status: 500 });
+        console.error('[AdminStats] Global Critical Failure:', e.message);
+        return NextResponse.json({ error: 'INTERNAL_SERVER_ERROR' }, { status: 500 });
     }
 }
