@@ -2,9 +2,16 @@
 
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Trash2, Users, ShieldAlert, Activity, PieChart, TrendingUp, RefreshCcw, LogOut, Code, FileText } from 'lucide-react';
+import {
+    Trash2, Users, ShieldAlert, Activity, PieChart, TrendingUp, RefreshCcw,
+    LogOut, Code, FileText, Wifi, Zap, Database, BarChart3, Clock, LayoutGrid
+} from 'lucide-react';
 import { useRouter } from 'next/navigation';
 
+/**
+ * Admin Dashboard - Integrated Command Center
+ * 整合了用户管理、数据库统计、系统日志以及外部 API 健康监控。
+ */
 export default function AdminPage() {
     const [users, setUsers] = useState([]);
     const [stats, setStats] = useState({
@@ -14,13 +21,15 @@ export default function AdminPage() {
         history_points: 0,
         intraday_points: 0,
         quotes_count: 0,
-        recent_growth: 0
+        recent_growth: 0,
+        api_health: []
     });
     const [logs, setLogs] = useState([]);
     const [loading, setLoading] = useState(false);
     const [secretKey, setSecretKey] = useState('');
     const [isAuthenticated, setIsAuthenticated] = useState(false);
     const [toast, setToast] = useState(null);
+    const [activeSection, setActiveSection] = useState('overview'); // overview, users, logs, health
     const router = useRouter();
 
     useEffect(() => {
@@ -146,189 +155,367 @@ export default function AdminPage() {
     };
 
     return (
-        <main className="min-h-screen bg-[#050510] relative text-white selection:bg-red-500/30 font-sans overflow-x-hidden pt-8">
+        <main className="min-h-screen bg-[#050510] relative text-white selection:bg-cyan-500/30 font-sans overflow-x-hidden">
+            {/* 背景装饰 */}
+            <div className="fixed inset-0 overflow-hidden pointer-events-none">
+                <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-blue-600/10 blur-[120px] rounded-full" />
+                <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-cyan-600/10 blur-[120px] rounded-full" />
+            </div>
+
             <AnimatePresence>
                 {toast && (
                     <motion.div
                         initial={{ opacity: 0, y: -20, scale: 0.9 }}
                         animate={{ opacity: 1, y: 0, scale: 1 }}
                         exit={{ opacity: 0, y: -20, scale: 0.9 }}
-                        className={`fixed top-8 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 px-6 py-4 rounded-xl shadow-[0_10px_40px_-10px_rgba(0,0,0,0.5)] font-mono text-sm border-l-4 backdrop-blur-md
-                            ${toast.type === 'error' ? 'bg-red-950/80 border-red-500 text-red-200' : 'bg-green-950/80 border-green-500 text-green-200'}`}
+                        className={`fixed top-8 left-1/2 -translate-x-1/2 z-[100] flex items-center gap-3 px-6 py-4 rounded-2xl shadow-[0_10px_40px_-10px_rgba(0,0,0,0.5)] font-mono text-sm border border-white/10 backdrop-blur-xl
+                            ${toast.type === 'error' ? 'bg-red-500/10 text-red-400' : 'bg-emerald-500/10 text-emerald-400'}`}
                     >
+                        <div className={`w-2 h-2 rounded-full animate-pulse ${toast.type === 'error' ? 'bg-red-500' : 'bg-emerald-500'}`} />
                         {toast.msg}
                     </motion.div>
                 )}
             </AnimatePresence>
 
             {!isAuthenticated ? (
-                <div className="flex flex-col items-center justify-center min-h-[85vh] px-4">
+                <div className="flex flex-col items-center justify-center min-h-screen px-4">
                     <motion.div
-                        initial={{ opacity: 0, scale: 0.95 }}
-                        animate={{ opacity: 1, scale: 1 }}
-                        className="w-full max-w-md p-10 bg-black/40 border border-white/5 rounded-3xl backdrop-blur-xl shadow-2xl relative overflow-hidden"
+                        initial={{ opacity: 0, y: 30 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        className="w-full max-w-lg p-12 bg-black/40 border border-white/5 rounded-[3rem] backdrop-blur-3xl shadow-2xl relative overflow-hidden"
                     >
-                        <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-red-600 to-orange-500" />
+                        <div className="absolute top-0 left-0 w-full h-1.5 bg-gradient-to-r from-blue-600 via-cyan-500 to-indigo-600" />
                         <div className="flex flex-col items-center text-center">
-                            <div className="w-20 h-20 bg-red-500/10 rounded-full flex items-center justify-center mb-6">
-                                <ShieldAlert size={36} className="text-red-500" />
+                            <div className="w-24 h-24 bg-blue-500/10 rounded-3xl flex items-center justify-center mb-8 rotate-12 group-hover:rotate-0 transition-transform duration-500">
+                                <ShieldAlert size={42} className="text-blue-500 shadow-[0_0_30px_rgba(59,130,246,0.3)]" />
                             </div>
-                            <h2 className="text-2xl font-black tracking-tight mb-2">最高授权终端 (Admin)</h2>
-                            <p className="text-white/40 text-sm mb-8 leading-relaxed">
-                                访问控制面需要出示 <code className="text-white/60 text-xs bg-white/5 px-2 py-0.5 rounded">ADMIN_API_KEY</code>。<br />
-                                任何非特权探针将被拦截。
+                            <h2 className="text-3xl font-black tracking-tighter italic uppercase mb-3">Chief Command Center</h2>
+                            <p className="text-white/30 text-sm mb-10 leading-relaxed font-medium uppercase tracking-[0.2em]">
+                                Infrastructure & API Health Sentinel<br />
+                                <span className="opacity-50 font-mono">[Classified Access Only]</span>
                             </p>
-                            <div className="w-full space-y-4">
-                                <input
-                                    type="password"
-                                    placeholder="输入服务端配置的 API 密钥"
-                                    value={secretKey}
-                                    onChange={(e) => setSecretKey(e.target.value)}
-                                    className="w-full bg-white/5 border border-white/10 rounded-xl px-5 py-3.5 outline-none focus:border-red-500/50 focus:bg-white/10 transition-all font-mono text-center text-lg tracking-[0.2em]"
-                                    onKeyDown={(e) => e.key === 'Enter' && fetchAllData()}
-                                />
+                            <div className="w-full space-y-6">
+                                <div className="space-y-2 text-left">
+                                    <label className="text-[10px] font-black uppercase tracking-[0.3em] text-white/20 ml-2">Authorization Secret</label>
+                                    <input
+                                        type="password"
+                                        placeholder="••••••••••••••••"
+                                        value={secretKey}
+                                        onChange={(e) => setSecretKey(e.target.value)}
+                                        className="w-full bg-white/[0.03] border border-white/5 rounded-2xl px-6 py-5 outline-none focus:border-cyan-500/50 focus:bg-white/5 transition-all font-mono text-center text-xl tracking-[0.3em]"
+                                        onKeyDown={(e) => e.key === 'Enter' && fetchAllData()}
+                                    />
+                                </div>
                                 <button
                                     onClick={() => fetchAllData()}
                                     disabled={loading}
-                                    className="w-full bg-gradient-to-r from-red-600 to-red-500 hover:from-red-500 hover:to-orange-500 text-white rounded-xl py-3.5 font-bold shadow-lg shadow-red-500/20 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex justify-center items-center gap-2"
+                                    className="w-full bg-blue-600 hover:bg-cyan-500 text-white rounded-2xl py-5 font-black uppercase tracking-widest shadow-xl shadow-blue-500/10 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex justify-center items-center gap-3"
                                 >
-                                    {loading ? <RefreshCcw size={18} className="animate-spin" /> : '发起验证通信'}
+                                    {loading ? <RefreshCcw size={20} className="animate-spin" /> : 'Initial Communication'}
                                 </button>
-                                <button onClick={() => router.push('/')} className="w-full py-3 text-white/30 hover:text-white/70 text-sm font-bold transition-all">
-                                    &larr; 返回普通模式
+                                <button onClick={() => router.push('/')} className="w-full py-4 text-white/20 hover:text-white/60 text-[10px] font-black uppercase tracking-[0.4em] transition-all">
+                                    &larr; Return to Matrix
                                 </button>
                             </div>
                         </div>
                     </motion.div>
                 </div>
             ) : (
-                <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="max-w-[1200px] mx-auto px-4 pb-20">
-                    <header className="flex flex-col md:flex-row items-center justify-between gap-6 mb-12 pb-6 border-b border-white/10">
-                        <div className="flex items-center gap-4">
-                            <div className="p-3 bg-red-500/20 text-red-400 rounded-xl"><Code size={24} /></div>
-                            <div>
-                                <h1 className="text-2xl font-black italic tracking-tighter uppercase whitespace-nowrap">Admin Dashboard</h1>
-                                <p className="text-xs font-mono opacity-50 uppercase tracking-[0.2em] mt-1 text-red-300">Classified Access Level</p>
+                <div className="flex h-screen overflow-hidden">
+                    {/* Sidebar Navigation */}
+                    <aside className="w-20 md:w-72 border-r border-white/5 bg-black/20 backdrop-blur-xl flex flex-col pt-10">
+                        <div className="px-6 mb-12 flex items-center gap-4">
+                            <div className="w-10 h-10 bg-cyan-600 rounded-xl flex items-center justify-center shadow-[0_0_20px_rgba(8,145,178,0.4)]">
+                                <Code size={20} className="text-white" />
+                            </div>
+                            <div className="hidden md:block">
+                                <h1 className="text-lg font-black italic tracking-tighter uppercase leading-none">Command</h1>
+                                <p className="text-[9px] font-bold opacity-30 uppercase tracking-[0.2em] mt-1">Sentinel v2.0</p>
                             </div>
                         </div>
-                        <div className="flex border border-white/10 rounded-full p-1 bg-white/5">
-                            <button onClick={() => fetchAllData()} className="flex items-center gap-2 px-6 py-2 rounded-full hover:bg-white/10 transition-all font-bold text-sm">
-                                <RefreshCcw size={16} className={loading ? 'animate-spin' : ''} /> <span className="hidden sm:inline">强制刷新数据</span>
-                            </button>
-                            <button onClick={triggerSync} disabled={loading} className="flex items-center gap-2 px-6 py-2 rounded-full hover:bg-emerald-500/20 hover:text-emerald-400 transition-all font-bold text-sm border-x border-white/5">
-                                <Activity size={16} className={loading ? 'animate-pulse' : ''} /> <span className="hidden sm:inline">立即拉取同步</span>
-                            </button>
-                            <button onClick={triggerCleanup} disabled={loading} className="flex items-center gap-2 px-6 py-2 rounded-full hover:bg-orange-500/20 hover:text-orange-400 transition-all font-bold text-sm border-r border-white/5">
-                                <Activity size={16} className={loading ? 'animate-pulse' : ''} /> <span className="hidden sm:inline">深度大扫除</span>
-                            </button>
-                            <button onClick={handleLogout} className="flex items-center gap-2 px-6 py-2 rounded-full hover:bg-red-500/20 hover:text-red-400 transition-all font-bold text-sm">
-                                <LogOut size={16} /> <span className="hidden sm:inline">退出登录</span>
-                            </button>
-                        </div>
-                    </header>
 
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-                        <div className="bg-gradient-to-b from-indigo-500/10 to-transparent border border-indigo-500/20 p-6 rounded-3xl relative overflow-hidden group">
-                            <Users className="absolute -bottom-4 -right-4 text-indigo-500/10 w-32 h-32 transform group-hover:scale-110 transition-transform duration-500" />
-                            <h3 className="text-indigo-400 font-bold text-sm tracking-widest uppercase mb-2">活跃注册账户</h3>
-                            <div className="text-5xl font-black font-mono tracking-tighter">{stats.users}</div>
-                        </div>
-                        <div className="bg-gradient-to-b from-blue-500/10 to-transparent border border-blue-500/20 p-6 rounded-3xl relative overflow-hidden group">
-                            <PieChart className="absolute -bottom-4 -right-4 text-blue-500/10 w-32 h-32 transform group-hover:scale-110 transition-transform duration-500" />
-                            <h3 className="text-blue-400 font-bold text-sm tracking-widest uppercase mb-2">追踪股票条目</h3>
-                            <div className="text-5xl font-black font-mono tracking-tighter">{stats.stocks}</div>
-                        </div>
-                        <div className="bg-gradient-to-b from-cyan-500/10 to-transparent border border-cyan-500/20 p-6 rounded-3xl relative overflow-hidden group">
-                            <TrendingUp className="absolute -bottom-4 -right-4 text-cyan-500/10 w-32 h-32 transform group-hover:scale-110 transition-transform duration-500" />
-                            <h3 className="text-cyan-400 font-bold text-sm tracking-widest uppercase mb-2">追踪基金条目</h3>
-                            <div className="text-5xl font-black font-mono tracking-tighter">{stats.funds}</div>
-                        </div>
-                    </div>
+                        <nav className="flex-1 px-4 space-y-2">
+                            {[
+                                { id: 'overview', icon: <LayoutGrid size={20} />, label: '概览面板' },
+                                { id: 'health', icon: <Wifi size={20} />, label: '接口哨兵' },
+                                { id: 'users', icon: <Users size={20} />, label: '用户审计' },
+                                { id: 'logs', icon: <FileText size={20} />, label: '系统日志' },
+                            ].map(item => (
+                                <button
+                                    key={item.id}
+                                    onClick={() => setActiveSection(item.id)}
+                                    className={`w-full flex items-center gap-4 px-4 py-4 rounded-2xl transition-all group ${activeSection === item.id ? 'bg-cyan-600 text-white shadow-lg shadow-cyan-600/20' : 'text-white/40 hover:bg-white/5 hover:text-white/80'}`}
+                                >
+                                    <div className={`${activeSection === item.id ? 'text-white' : 'text-white/20 group-hover:text-white/60'}`}>
+                                        {item.icon}
+                                    </div>
+                                    <span className="hidden md:block font-bold text-sm tracking-tight">{item.label}</span>
+                                </button>
+                            ))}
+                        </nav>
 
-                    <div className="mb-12">
-                        <div className="flex items-center gap-3 mb-6">
-                            <Activity size={20} className="text-emerald-500" />
-                            <h2 className="text-xl font-bold tracking-tight">D1 数据库实时工况</h2>
+                        <div className="p-4 border-t border-white/5 mb-6">
+                            <button onClick={handleLogout} className="w-full flex items-center gap-4 px-4 py-4 rounded-2xl text-red-500/50 hover:bg-red-500/10 hover:text-red-500 transition-all font-bold">
+                                <LogOut size={20} />
+                                <span className="hidden md:block text-sm">注销通信</span>
+                            </button>
                         </div>
-                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                            <div className="bg-white/5 border border-white/10 p-5 rounded-2xl">
-                                <p className="text-white/40 text-xs font-mono uppercase mb-1">历史 K 线总数</p>
-                                <p className="text-2xl font-black font-mono text-white/90">{(stats.history_points || 0).toLocaleString()}</p>
-                            </div>
-                            <div className="bg-white/5 border border-white/10 p-5 rounded-2xl">
-                                <p className="text-white/40 text-xs font-mono uppercase mb-1">分时高频点位</p>
-                                <p className="text-2xl font-black font-mono text-white/90">{(stats.intraday_points || 0).toLocaleString()}</p>
-                            </div>
-                            <div className="bg-white/5 border border-white/10 p-5 rounded-2xl">
-                                <p className="text-white/40 text-xs font-mono uppercase mb-1">实时报价缓存</p>
-                                <p className="text-2xl font-black font-mono text-white/90">{(stats.quotes_count || 0).toLocaleString()}</p>
-                            </div>
-                            <div className="bg-white/5 border border-emerald-500/30 p-5 rounded-2xl relative overflow-hidden">
-                                <div className="absolute top-0 right-0 w-12 h-12 bg-emerald-500/10 flex items-center justify-center rounded-bl-2xl"><TrendingUp size={16} className="text-emerald-500 animate-pulse" /></div>
-                                <p className="text-emerald-400/60 text-xs font-mono uppercase mb-1">24H 数据增长</p>
-                                <p className="text-2xl font-black font-mono text-emerald-400">+{stats.recent_growth}</p>
-                            </div>
-                        </div>
-                    </div>
+                    </aside>
 
-                    <div className="mb-12">
-                        <div className="flex items-center justify-between mb-6">
-                            <div className="flex items-center gap-3">
-                                <FileText size={20} className="text-blue-500" />
-                                <h2 className="text-xl font-bold tracking-tight">System Logs (72H)</h2>
+                    {/* Main Content Area */}
+                    <main className="flex-1 overflow-y-auto bg-[#050510] custom-scrollbar">
+                        <header className="sticky top-0 z-50 flex items-center justify-between px-10 py-6 bg-[#050510]/80 backdrop-blur-md border-b border-white/5">
+                            <div className="flex items-center gap-4">
+                                <div className="p-2 bg-emerald-500/10 rounded-full">
+                                    <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse" />
+                                </div>
+                                <span className="text-xs font-mono font-black uppercase tracking-widest text-white/40">Node Status: Operational</span>
                             </div>
-                            <div className="px-3 py-1 bg-blue-500/10 border border-blue-500/20 rounded-full text-[10px] font-mono text-blue-400 uppercase tracking-wider">Backend Pulse Enabled</div>
-                        </div>
-                        <div className="bg-black/30 border border-white/5 rounded-2xl overflow-hidden backdrop-blur-sm">
-                            <div className="max-h-[400px] overflow-y-auto scrollbar-thin scrollbar-thumb-white/10">
-                                {logs.length > 0 ? (
-                                    <div className="divide-y divide-white/5 font-mono text-xs">
-                                        {logs.map((log, idx) => (
-                                            <div key={idx} className="p-4 flex gap-4 hover:bg-white/[0.02] transition-colors">
-                                                <span className="text-white/20 whitespace-nowrap">{new Date(log.timestamp).toLocaleString()}</span>
-                                                <span className={`font-bold px-1.5 py-0.5 rounded text-[10px] h-fit ${log.level === 'INFO' ? 'bg-blue-500/20 text-blue-400' : log.level === 'WARN' ? 'bg-orange-500/20 text-orange-400' : 'bg-red-500/20 text-red-400'}`}>{log.level}</span>
-                                                <span className="text-white/40 whitespace-nowrap border-r border-white/5 pr-4">[{log.module}]</span>
-                                                <span className="text-white/80 break-all">{log.message}</span>
+
+                            <div className="flex items-center gap-4">
+                                <div className="hidden lg:flex items-center gap-1 border border-white/5 px-4 py-2 rounded-xl bg-white/[0.02]">
+                                    <span className="text-[10px] font-black uppercase tracking-widest text-white/20 mr-2">Quick Actions:</span>
+                                    <button onClick={() => fetchAllData()} title="刷新" className="p-1.5 hover:text-cyan-400 transition-colors"><RefreshCcw size={16} /></button>
+                                    <div className="w-px h-3 bg-white/10 mx-1" />
+                                    <button onClick={triggerSync} title="强制同步" className="p-1.5 hover:text-emerald-400 transition-colors"><Activity size={16} /></button>
+                                    <div className="w-px h-3 bg-white/10 mx-1" />
+                                    <button onClick={triggerCleanup} title="全量大扫除" className="p-1.5 hover:text-orange-400 transition-colors"><Zap size={16} /></button>
+                                </div>
+                                <div className="text-[10px] font-mono font-bold text-white/20 bg-white/5 px-4 py-2 rounded-xl border border-white/5">
+                                    {new Date().toLocaleTimeString()}
+                                </div>
+                            </div>
+                        </header>
+
+                        <div className="p-10 max-w-[1200px] mx-auto">
+                            <AnimatePresence mode="wait">
+                                {activeSection === 'overview' && (
+                                    <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }} key="overview" className="space-y-12">
+                                        {/* Key Stats Grid */}
+                                        <div className="grid grid-cols-2 lg:grid-cols-4 gap-6">
+                                            {[
+                                                { label: '注册账户', value: stats.users, icon: <Users size={18} />, color: 'text-blue-400', bg: 'from-blue-500/10' },
+                                                { label: '自选资产', value: (stats.stocks + stats.funds), icon: <Zap size={18} />, color: 'text-yellow-400', bg: 'from-yellow-500/10' },
+                                                { label: '历史点位', value: (stats.history_points / 1000).toFixed(1) + 'K', icon: <Database size={18} />, color: 'text-purple-400', bg: 'from-purple-500/10' },
+                                                { label: '24H 增长', value: '+' + stats.recent_growth, icon: <TrendingUp size={18} />, color: 'text-emerald-400', bg: 'from-emerald-500/10' }
+                                            ].map((kpi, i) => (
+                                                <div key={i} className={`bg-gradient-to-br ${kpi.bg} to-transparent border border-white/5 p-8 rounded-[2.5rem] relative overflow-hidden group hover:border-white/10 transition-all`}>
+                                                    <div className={`p-3 w-fit rounded-2xl bg-white/5 mb-6 ${kpi.color}`}>
+                                                        {kpi.icon}
+                                                    </div>
+                                                    <div className="text-4xl font-black italic tracking-tighter mb-1 font-mono">{kpi.value}</div>
+                                                    <div className="text-[10px] text-white/30 font-bold uppercase tracking-[0.2em]">{kpi.label}</div>
+                                                </div>
+                                            ))}
+                                        </div>
+
+                                        {/* D1 Infrastructure Details */}
+                                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                                            <div className="bg-white/[0.02] border border-white/5 p-8 rounded-[3rem]">
+                                                <div className="flex items-center gap-3 mb-8">
+                                                    <Database size={20} className="text-blue-500" />
+                                                    <h3 className="text-sm font-black italic uppercase tracking-widest text-white/60">D1 Storage Integrity</h3>
+                                                </div>
+                                                <div className="space-y-6">
+                                                    {[
+                                                        { label: '分时行情点位', value: stats.intraday_points, max: 200000, color: 'bg-blue-500' },
+                                                        { label: '历史 K 线索引', value: stats.history_points, max: 500000, color: 'bg-indigo-500' },
+                                                        { label: '实时报价缓存', value: stats.quotes_count, max: 5000, color: 'bg-cyan-500' }
+                                                    ].map((row, i) => (
+                                                        <div key={i} className="space-y-2">
+                                                            <div className="flex justify-between text-[10px] uppercase font-black tracking-widest text-white/20">
+                                                                <span>{row.label}</span>
+                                                                <span>{row.value.toLocaleString()} / {row.max.toLocaleString()}</span>
+                                                            </div>
+                                                            <div className="h-2 w-full bg-white/5 rounded-full overflow-hidden">
+                                                                <motion.div initial={{ width: 0 }} animate={{ width: `${Math.min((row.value / row.max) * 100, 100)}%` }} className={`h-full ${row.color}`} />
+                                                            </div>
+                                                        </div>
+                                                    ))}
+                                                </div>
                                             </div>
-                                        ))}
-                                    </div>
-                                ) : (
-                                    <div className="py-20 flex flex-col items-center justify-center text-white/20 italic">
-                                        <Activity size={32} className="mb-4 opacity-10 animate-pulse" /><p>聆听后端信号中... 暂无关键事件</p>
-                                    </div>
-                                )}
-                            </div>
-                        </div>
-                    </div>
 
-                    <div className="mb-4 flex items-center gap-3">
-                        <Activity size={20} className="text-red-500" /><h2 className="text-xl font-bold tracking-tight">实体用户名单稽查区</h2>
-                    </div>
-                    <div className="bg-white/5 border border-white/10 rounded-2xl overflow-hidden">
-                        {users.length > 0 ? (
-                            <div className="divide-y divide-white/5">
-                                {users.map(u => (
-                                    <div key={u} className="flex flex-col sm:flex-row items-start sm:items-center justify-between p-6 hover:bg-white/[0.03] transition-colors group">
-                                        <div className="flex items-center gap-4 mb-4 sm:mb-0">
-                                            <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-gray-700 to-gray-500 flex items-center justify-center font-bold text-lg shadow-lg">{u.charAt(0).toUpperCase()}</div>
-                                            <div>
-                                                <div className="font-mono text-lg font-bold tracking-tight">{u}</div>
-                                                <div className="text-xs text-white/30 font-mono uppercase">User ID Hash Reference</div>
+                                            <div className="bg-white/[0.02] border border-white/5 p-8 rounded-[3rem] flex flex-col justify-center items-center text-center relative overflow-hidden group">
+                                                <div className="absolute inset-0 bg-emerald-500/[0.02] animate-pulse pointer-events-none" />
+                                                <div className="w-20 h-20 bg-emerald-500/10 rounded-full flex items-center justify-center mb-6 shadow-[0_0_40px_rgba(16,185,129,0.1)]">
+                                                    <BarChart3 size={32} className="text-emerald-500" />
+                                                </div>
+                                                <h3 className="text-xl font-black italic uppercase tracking-tighter mb-2">High Efficiency Engine</h3>
+                                                <p className="text-xs text-white/30 font-medium uppercase tracking-widest max-w-[200px]">Active Data Sharding and Pruning Policy Engaged</p>
+                                                <div className="mt-8 flex gap-3">
+                                                    <div className="px-5 py-2 bg-white/5 border border-white/5 rounded-full text-[10px] font-black uppercase text-white/40">D1/SQLite</div>
+                                                    <div className="px-5 py-2 bg-white/5 border border-white/5 rounded-full text-[10px] font-black uppercase text-white/40">V8 Edge</div>
+                                                </div>
                                             </div>
                                         </div>
-                                        <button onClick={() => deleteUser(u)} className="flex items-center gap-2 px-5 py-2.5 bg-red-500/10 text-red-400 hover:bg-red-500 hover:text-white rounded-lg transition-all font-bold text-sm shrink-0 border border-red-500/20 hover:border-red-400">
-                                            <Trash2 size={16} /><span>清理账户</span>
-                                        </button>
-                                    </div>
-                                ))}
-                            </div>
-                        ) : (
-                            <div className="py-24 flex flex-col items-center justify-center text-white/30">
-                                <FileText size={48} className="mb-4 opacity-20" /><p className="font-mono uppercase tracking-widest text-sm">暂无活跃挂载账户</p>
-                            </div>
-                        )}
-                    </div>
-                </motion.div>
+                                    </motion.div>
+                                )}
+
+                                {activeSection === 'health' && (
+                                    <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }} key="health">
+                                        <div className="flex items-center justify-between mb-8 px-2">
+                                            <div className="flex items-center gap-4">
+                                                <div className="p-3 bg-cyan-500/10 rounded-2xl text-cyan-400">
+                                                    <Wifi size={24} />
+                                                </div>
+                                                <div>
+                                                    <h2 className="text-2xl font-black italic uppercase tracking-tighter">API Sentinel Feedback</h2>
+                                                    <p className="text-[10px] text-white/20 font-bold uppercase tracking-[0.2em]">Real-time Interface Latency & Success Matrix</p>
+                                                </div>
+                                            </div>
+                                            <div className="flex items-center gap-2 px-4 py-2 bg-white/5 border border-white/5 rounded-2xl text-[10px] font-black uppercase tracking-widest text-cyan-500/60">
+                                                <Clock size={12} /> Sampling: 5m
+                                            </div>
+                                        </div>
+
+                                        <div className="bg-white/[0.02] border border-white/5 rounded-[3rem] overflow-hidden backdrop-blur-3xl shadow-2xl">
+                                            <table className="w-full text-left border-collapse">
+                                                <thead>
+                                                    <tr className="border-b border-white/5 bg-white/[0.01]">
+                                                        <th className="px-10 py-6 text-[10px] font-black uppercase tracking-[0.3em] text-white/30">Protocol Name</th>
+                                                        <th className="px-10 py-6 text-[10px] font-black uppercase tracking-[0.3em] text-white/30 text-center">Status</th>
+                                                        <th className="px-10 py-6 text-[10px] font-black uppercase tracking-[0.3em] text-white/30 text-right">Success</th>
+                                                        <th className="px-10 py-6 text-[10px] font-black uppercase tracking-[0.3em] text-white/30 text-right">Latency</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody className="divide-y divide-white/[0.02]">
+                                                    {stats?.api_health && stats.api_health.length > 0 ? (
+                                                        stats.api_health.map((api) => (
+                                                            <tr key={api.api_name} className="group hover:bg-white/[0.02] transition-colors">
+                                                                <td className="px-10 py-8">
+                                                                    <div className="flex flex-col">
+                                                                        <span className="font-bold text-lg text-white/80 group-hover:text-cyan-400 transition-colors tracking-tight">{api.api_name}</span>
+                                                                        <span className="text-[9px] text-white/20 mt-1 uppercase font-mono tracking-widest">{api.error_msg || 'Standard Handshake Confirmed'}</span>
+                                                                    </div>
+                                                                </td>
+                                                                <td className="px-10 py-8">
+                                                                    <div className="flex justify-center">
+                                                                        {api.status === 'healthy' ? (
+                                                                            <div className="flex items-center gap-2 px-4 py-1.5 bg-emerald-500/10 text-emerald-400 rounded-full text-[10px] font-black uppercase tracking-tighter border border-emerald-500/20">
+                                                                                <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                                                                                Optimal
+                                                                            </div>
+                                                                        ) : api.status === 'wary' ? (
+                                                                            <div className="flex items-center gap-2 px-4 py-1.5 bg-yellow-500/10 text-yellow-500 rounded-full text-[10px] font-black uppercase tracking-tighter border border-yellow-500/20">
+                                                                                <div className="w-1.5 h-1.5 rounded-full bg-yellow-500" />
+                                                                                Degraded
+                                                                            </div>
+                                                                        ) : (
+                                                                            <div className="flex items-center gap-2 px-4 py-1.5 bg-red-500/10 text-red-500 rounded-full text-[10px] font-black uppercase tracking-tighter border border-red-500/20">
+                                                                                <div className="w-1.5 h-1.5 rounded-full bg-red-500" />
+                                                                                Critical
+                                                                            </div>
+                                                                        )}
+                                                                    </div>
+                                                                </td>
+                                                                <td className="px-10 py-8 text-right">
+                                                                    <span className="font-mono font-black text-2xl text-white/50">{api.success_rate}<span className="text-xs opacity-40 ml-0.5">%</span></span>
+                                                                </td>
+                                                                <td className="px-10 py-8 text-right font-mono">
+                                                                    <span className={`font-black text-lg ${api.avg_latency > 3000 ? 'text-red-400' : api.avg_latency > 1500 ? 'text-yellow-400' : 'text-white/30'}`}>{api.avg_latency}</span>
+                                                                    <span className="text-[10px] opacity-20 ml-1 font-black">ms</span>
+                                                                </td>
+                                                            </tr>
+                                                        ))
+                                                    ) : (
+                                                        <tr><td colSpan="4" className="px-10 py-32 text-center text-white/10 italic font-medium uppercase tracking-[0.3em] text-sm group">Waiting for sentinel heartbeat<span className="inline-block animate-bounce ml-2">...</span></td></tr>
+                                                    )}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </motion.div>
+                                )}
+
+                                {activeSection === 'users' && (
+                                    <motion.div initial={{ opacity: 0, scale: 0.98 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.98 }} key="users">
+                                        <div className="flex items-center gap-4 mb-8">
+                                            <div className="p-3 bg-red-500/10 rounded-2xl text-red-400">
+                                                <Users size={24} />
+                                            </div>
+                                            <div>
+                                                <h2 className="text-2xl font-black italic uppercase tracking-tighter">Subject Audit & Management</h2>
+                                                <p className="text-[10px] text-white/20 font-bold uppercase tracking-[0.2em]">Registered Entities Database Scrubbing</p>
+                                            </div>
+                                        </div>
+
+                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                            {users.length > 0 ? (
+                                                users.map(u => (
+                                                    <div key={u} className="group p-8 bg-white/[0.02] border border-white/5 rounded-[2.5rem] flex items-center justify-between hover:border-red-500/30 transition-all hover:bg-white/[0.04]">
+                                                        <div className="flex items-center gap-5">
+                                                            <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-gray-800 to-gray-900 border border-white/5 flex items-center justify-center font-black text-xl italic text-white/40 shadow-xl group-hover:from-gray-700 group-hover:text-cyan-400 transition-all">
+                                                                {u.charAt(0).toUpperCase()}
+                                                            </div>
+                                                            <div>
+                                                                <div className="font-mono text-xl font-bold tracking-tight text-white/80 group-hover:text-white transition-colors">{u}</div>
+                                                                <div className="text-[9px] text-white/20 font-bold uppercase tracking-widest mt-1">Hash Verification Active</div>
+                                                            </div>
+                                                        </div>
+                                                        <button
+                                                            onClick={() => deleteUser(u)}
+                                                            className="p-4 bg-red-500/5 text-red-500/30 hover:bg-red-500 hover:text-white rounded-2xl transition-all shadow-xl shadow-red-500/0 hover:shadow-red-500/20"
+                                                            title="粉碎账户"
+                                                        >
+                                                            <Trash2 size={20} />
+                                                        </button>
+                                                    </div>
+                                                ))
+                                            ) : (
+                                                <div className="col-span-full py-40 flex flex-col items-center justify-center text-white/10 italic group">
+                                                    <FileText size={64} className="mb-4 opacity-5 group-hover:opacity-10 transition-opacity" />
+                                                    <p className="uppercase tracking-[0.4em] font-black text-xs">No active subjects identified in sector</p>
+                                                </div>
+                                            )}
+                                        </div>
+                                    </motion.div>
+                                )}
+
+                                {activeSection === 'logs' && (
+                                    <motion.div initial={{ opacity: 0, y: 30 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 30 }} key="logs">
+                                        <div className="flex items-center justify-between mb-8">
+                                            <div className="flex items-center gap-4">
+                                                <div className="p-3 bg-blue-500/10 rounded-2xl text-blue-400">
+                                                    <FileText size={24} />
+                                                </div>
+                                                <div>
+                                                    <h2 className="text-2xl font-black italic uppercase tracking-tighter">System Pulse Records</h2>
+                                                    <p className="text-[10px] text-white/20 font-bold uppercase tracking-[0.2em]">Temporal Activity Tracking (72H Window)</p>
+                                                </div>
+                                            </div>
+                                            <div className="px-5 py-2 bg-blue-500/10 border border-blue-500/20 rounded-full text-[10px] font-black text-blue-400 uppercase tracking-widest animate-pulse">Telemetry Live</div>
+                                        </div>
+
+                                        <div className="bg-white/[0.01] border border-white/5 rounded-[3rem] overflow-hidden backdrop-blur-3xl lg:p-4">
+                                            <div className="max-h-[600px] overflow-y-auto custom-scrollbar px-6 py-4">
+                                                {logs.length > 0 ? (
+                                                    <div className="space-y-3">
+                                                        {logs.map((log, idx) => (
+                                                            <div key={idx} className="group flex flex-col md:flex-row gap-4 p-5 rounded-3xl hover:bg-white/[0.02] border border-transparent hover:border-white/5 transition-all">
+                                                                <div className="flex items-center gap-4 min-w-[150px]">
+                                                                    <div className={`w-1.5 h-1.5 rounded-full ${log.level === 'INFO' ? 'bg-blue-500' : log.level === 'WARN' ? 'bg-orange-500' : 'bg-red-500'}`} />
+                                                                    <span className="text-[10px] font-mono font-bold text-white/20">{new Date(log.timestamp).toLocaleTimeString()}</span>
+                                                                </div>
+                                                                <div className="flex-1 flex gap-4">
+                                                                    <span className="text-[9px] font-black px-3 py-1 bg-white/5 rounded-lg text-white/40 uppercase tracking-widest h-fit">[{log.module}]</span>
+                                                                    <p className="text-xs font-medium text-white/60 leading-relaxed group-hover:text-white/90 transition-colors uppercase tracking-tight">{log.message}</p>
+                                                                </div>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                ) : (
+                                                    <div className="py-40 flex flex-col items-center justify-center text-white/10 italic">
+                                                        <Activity size={48} className="mb-4 opacity-5 animate-pulse" />
+                                                        <p className="font-black uppercase tracking-[0.5em] text-xs">Awaiting signal from backplane...</p>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
+                                    </motion.div>
+                                )}
+                            </AnimatePresence>
+                        </div>
+                    </main>
+                </div>
             )}
         </main>
     );
