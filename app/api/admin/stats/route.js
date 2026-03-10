@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server';
-export const runtime = 'edge';
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
@@ -35,13 +34,8 @@ export async function GET(request) {
         const healthData = await getAllApiHealth();
         const rawHealthCount = await wrapQuery("SELECT COUNT(*) as count FROM api_health");
 
-        // 将调试信息持久化到系统日志表，直接在 UI 侧可见
-        try {
-            const debugMsg = `SentinelNodes: ${healthData?.length || 0}, DBRows: ${rawHealthCount}`;
-            await addSystemLog('DEBUG', 'AdminStats', debugMsg);
-        } catch (logErr) {
-            console.error('[AdminStats] Log persistence failed:', logErr.message);
-        }
+        // 异步尝试持久化调试日志，但不阻塞返回结果
+        addSystemLog('DEBUG', 'AdminStats', `Nodes: ${healthData?.length || 0}, DBRows: ${rawHealthCount}`).catch(() => { });
 
         return NextResponse.json({
             users: userCount,

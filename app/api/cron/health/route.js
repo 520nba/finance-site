@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
-export const runtime = 'edge';
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
+
 import { updateApiHealth } from '@/lib/storage/healthRepo';
 import { fetchStockEastmoney, fetchStockTencent, fetchStockSina, fetchFundHistory } from '@/lib/services/historyFetcher';
 import { addSystemLog } from '@/lib/storage/logRepo';
@@ -96,11 +96,15 @@ export async function GET() {
             errorMsg: success ? '' : (errorMsg || 'IO Error')
         };
 
-        await updateApiHealth(task.name, stats);
+        // 异步更新健康信息，增加适当错误捕获
+        updateApiHealth(task.name, stats).catch(err => {
+            console.warn(`[HealthCron] Async update failed for ${task.name}:`, err.message);
+        });
+
         results.push({ name: task.name, ...stats });
     }
 
-    await addSystemLog('INFO', 'HealthCron', `Sentinel: ${results.length} nodes verified.`);
+    addSystemLog('INFO', 'HealthCron', `Sentinel: ${results.length} nodes verified.`).catch(() => { });
 
     return NextResponse.json({ success: true, data: results });
 }
