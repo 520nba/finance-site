@@ -72,15 +72,9 @@ function AssetCardComponent({ asset, onRemove, mode = 'volatility' }) {
     );
 
     const history = (historyData?.history?.length > 0) ? historyData.history : (asset.history ?? []);
-    const summary = (historyData?.history?.length > 0) ? historyData.summary : (asset.summary ?? { perf5d: 0, perf22d: 0, perf250d: 0 });
+    const summary = (historyData?.summary) ?? (asset.summary ?? { perf5d: 0, perf22d: 0, perf250d: 0 });
+
     const intraPoints = intradayData?.points ?? [];
-
-
-    const l5 = summary.perf5d;
-    const l22 = summary.perf22d;
-    const l250 = summary.perf250d;
-
-
     const isPositiveChange = (asset.changePercent ?? 0) >= 0;
 
     return (

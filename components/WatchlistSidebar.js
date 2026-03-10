@@ -69,7 +69,7 @@ export default function WatchlistSidebar({ assets, mode = 'volatility', selected
     const rows = useMemo(() => assets.map(asset => {
         const key = `${asset.type}:${asset.code}`;
         const summary = statsData[key] || asset.summary;
-        const h = asset.history ?? [];
+        const h = (statsData[key]?.history) || asset.history || [];
         return {
             ...asset,
             d5: summary?.perf5d ?? lastPerf(h, 5),
