@@ -2,9 +2,11 @@ import { NextResponse } from 'next/server';
 export const runtime = 'edge';
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
-import { queryOne, queryAll } from '@/lib/storage/d1Client';
+
+import { queryOne } from '@/lib/storage/d1Client';
 import { isAdminAuthorized } from '@/lib/auth';
 import { getAllApiHealth } from '@/lib/storage/healthRepo';
+import { addSystemLog } from '@/lib/storage/logRepo';
 
 export async function GET(request) {
     if (!(await isAdminAuthorized(request))) {
@@ -14,16 +16,12 @@ export async function GET(request) {
     try {
         const wrapQuery = async (sql) => {
             try { return (await queryOne(sql))?.count || 0; }
-            catch (e) { console.warn(`[Stats] Query failed for [${sql}]:`, e.message); return 0; }
+            catch (e) { return 0; }
         };
 
         const [
-            userCount,
-            stockCount,
-            fundCount,
-            histCount,
-            intraPointsCount,
-            quotesCount
+            userCount, stockCount, fundCount,
+            histCount, intraPointsCount, quotesCount
         ] = await Promise.all([
             wrapQuery('SELECT COUNT(*) as count FROM users'),
             wrapQuery('SELECT COUNT(*) as count FROM asset_names WHERE type = "stock"'),
@@ -37,8 +35,13 @@ export async function GET(request) {
         const healthData = await getAllApiHealth();
         const rawHealthCount = await wrapQuery("SELECT COUNT(*) as count FROM api_health");
 
-        // [Debug] Log to Cloudflare Workers Logs
-        console.log(`[AdminStats] Health Check Nodes: ${healthData?.length || 0}, Table Row Count: ${rawHealthCount}`);
+        // 将调试信息持久化到系统日志表，直接在 UI 侧可见
+        try {
+            const debugMsg = `SentinelNodes: ${healthData?.length || 0}, DBRows: ${rawHealthCount}`;
+            await addSystemLog('DEBUG', 'AdminStats', debugMsg);
+        } catch (logErr) {
+            console.error('[AdminStats] Log persistence failed:', logErr.message);
+        }
 
         return NextResponse.json({
             users: userCount,
@@ -53,6 +56,6 @@ export async function GET(request) {
             _debug: { health_table_count: rawHealthCount }
         });
     } catch (e) {
-        return NextResponse.json({ error: e.message }, { status: 500 });
+        return NextResponse.json({ error: e.message || 'INTERNAL_ERROR' }, { status: 500 });
     }
 }
