@@ -8,8 +8,7 @@ import { addSystemLog } from '@/lib/storage/logRepo';
 import { queryOne } from '@/lib/storage/d1Client';
 
 /**
- * 外部 API 深度巡检器 (Deep Sentinel Feedback)
- * 验证逻辑：不仅检查 HTTP 200，还要验证业务数据结构是否符合预期，从而防御频率限制、验证码或空结果。
+ * 外部 API 深度巡检器 (Sentinel V2: Parallel, Tiny Logs, Status Logic Optimized)
  */
 export async function GET() {
     const STOCK_TEST = 'sh600036';
@@ -19,8 +18,31 @@ export async function GET() {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     };
 
+    /**
+     * Timeout 封装：防止单个 API 挂起导致整个 Sentinel 被杀死
+     */
+    async function safeFetchWithVerify(taskFn, timeout = 5000) {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), timeout);
+        try {
+            return await taskFn(controller.signal);
+        } finally {
+            clearTimeout(timeoutId);
+        }
+    }
+
+    /**
+     * 健康状态判别逻辑 (精细化视角)
+     */
+    function computeStatus(success, latency) {
+        if (!success) return 'down';
+        if (latency < 800) return 'healthy'; // 1500->800, 真正的健康
+        if (latency < 1500) return 'wary';    // 超过 800 开始略显疲态
+        if (latency < 3000) return 'slow';    // 极慢
+        return 'warning';
+    }
+
     const healthTasks = [
-        // 1. 历史数据校验
         {
             name: 'Hist: EastMoney (Stock)',
             fn: async () => {
@@ -49,87 +71,80 @@ export async function GET() {
                 return data && data.length > 0 && typeof data[0].value === 'number';
             }
         },
-
-        // 2. 实时行情与报价结构校验
         {
             name: 'Quote: Tencent (Realtime)',
-            fn: async () => {
-                const res = await fetch(`https://qt.gtimg.cn/q=${STOCK_TEST}`, { headers: { 'Referer': 'https://gu.qq.com/' } });
+            fn: async (signal) => {
+                const res = await fetch(`https://qt.gtimg.cn/q=${STOCK_TEST}`, { headers: { 'Referer': 'https://gu.qq.com/' }, signal });
                 const text = await res.text();
-                // 腾讯接口返回 v_sh600036="..." 包含股票名和价格
                 return res.ok && text.includes('招商银行') && text.split('~').length > 10;
             }
         },
-
-        // 3. 分时趋势校验
         {
             name: 'Intra: EastMoney (Trends)',
-            fn: async () => {
-                const res = await fetch(`https://push2.eastmoney.com/api/qt/stock/trends2/get?secid=1.600036&fields1=f1&fields2=f51`, { headers: { 'Referer': 'https://quote.eastmoney.com/' } });
+            fn: async (signal) => {
+                const res = await fetch(`https://push2.eastmoney.com/api/qt/stock/trends2/get?secid=1.600036&fields1=f1&fields2=f51`, { headers: { 'Referer': 'https://quote.eastmoney.com/' }, signal });
                 const d = await res.json();
                 return res.ok && d?.data?.trends?.length > 0;
             }
         },
-
-        // 4. 信息查询接口校验
         {
             name: 'Name: EastMoney (Query)',
-            fn: async () => {
-                const res = await fetch(`https://push2.eastmoney.com/api/qt/stock/get?secid=1.600036&fields=f58`, { headers: { 'Referer': 'https://quote.eastmoney.com/' } });
+            fn: async (signal) => {
+                const res = await fetch(`https://push2.eastmoney.com/api/qt/stock/get?secid=1.600036&fields=f58`, { headers: { 'Referer': 'https://quote.eastmoney.com/' }, signal });
                 const d = await res.json();
                 return res.ok && d?.data?.f58 === '招商银行';
             }
         },
         {
             name: 'Name: Tencent (Fund Spec)',
-            fn: async () => {
-                const res = await fetch(`https://qt.gtimg.cn/q=s_jj${FUND_TEST}`, { headers: BASE_HEADERS });
+            fn: async (signal) => {
+                const res = await fetch(`https://qt.gtimg.cn/q=s_jj${FUND_TEST}`, { headers: BASE_HEADERS, signal });
                 const text = await res.text();
                 return res.ok && text.includes('沪深300');
             }
         },
         {
             name: 'Name: EastMoney (Fund HTML)',
-            fn: async () => {
-                const res = await fetch(`https://fund.eastmoney.com/${FUND_TEST}.html`, { headers: { ...BASE_HEADERS, 'Accept': 'text/html' } });
+            fn: async (signal) => {
+                const res = await fetch(`https://fund.eastmoney.com/${FUND_TEST}.html`, { headers: { ...BASE_HEADERS, 'Accept': 'text/html' }, signal });
                 const text = await res.text();
                 return res.ok && text.includes('易方达');
             }
         }
     ];
 
-    const results = [];
-
-    for (const task of healthTasks) {
+    // 并行执行：巡检速度从 15s+ 缩短至 1s~2s 左右
+    const results = await Promise.all(healthTasks.map(async (task) => {
         const start = Date.now();
         let success = false;
         let latency = 0;
         let errorMsg = '';
 
         try {
-            success = await task.fn();
+            success = await safeFetchWithVerify(task.fn, 6000);
             latency = Date.now() - start;
-            if (!success) {
-                errorMsg = 'Data Integrity Mocked / Empty Response';
-            }
+            if (!success) errorMsg = 'Data Integrity Error';
         } catch (e) {
             latency = Date.now() - start;
-            errorMsg = e.message;
+            errorMsg = e.name === 'AbortError' ? 'Timeout (6s)' : e.message;
         }
 
         const stats = {
-            status: success ? (latency < 1500 ? 'healthy' : 'wary') : 'down',
-            successRate: success ? 100 : 0,
+            status: computeStatus(success, latency),
+            successRate: success ? 100 : 0, // HealthRepo 会根据此值进行滚动累计计算
             avgLatency: latency,
             errorMsg: success ? '' : (errorMsg || 'IO Error')
         };
 
+        // 异步写入 D1，由于 HealthRepo 内部没有进行耗时读操作，可以并行
         await updateApiHealth(task.name, stats);
-        results.push({ name: task.name, ...stats });
-    }
+        return { name: task.name, ...stats };
+    }));
 
     const verifyCount = (await queryOne('SELECT COUNT(*) as count FROM api_health'))?.count || 0;
-    await addSystemLog('INFO', 'HealthCron', `Sentinel Deep Check: ${results.length} nodes verified. Post-Write Table Size: ${verifyCount}`);
 
-    return NextResponse.json({ success: true, count: results.length, table_size: verifyCount, details: results });
+    // 只有在全部任务完成后才记录一次系统汇总日志
+    console.log(`[Sentinel] All ${results.length} nodes verified.`);
+
+    return NextResponse.json({ success: true, count: results.length, data: results });
 }
