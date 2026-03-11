@@ -120,16 +120,23 @@ export default function AdminPage() {
         setSecretKey('');
     };
 
-    const triggerSync = async () => {
-        const secret = prompt('请输入 CRON_SECRET 以触发同步任务：', secretKey);
-        if (!secret) return;
+    const triggerForceSync = async (type) => {
+        const typeZh = type === 'fund' ? '基金' : '股票';
+        if (!confirm(`!! 强制重置同步 !!\n\n系统将去外部接口拉取所有自选 ${typeZh} 的最新 250 条数据，并彻底【替换】数据库中的历史记录。\n\n此操作耗费 D1 资源，确认执行吗？`)) return;
 
         setLoading(true);
         try {
-            const res = await fetch(`/api/cron/sync?token=${secret}&task=auto`);
+            const res = await fetch(`/api/admin/force-sync?token=${secretKey}`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'x-admin-key': secretKey
+                },
+                body: JSON.stringify({ type })
+            });
             const data = await res.json();
             if (res.ok) {
-                showToast(`同步任务已执行！\n任务列表: ${data.results?.task_executed?.join(', ') || '无'}`, 'success');
+                showToast(`强制同步完成！\n${data.message}`, 'success');
                 fetchAllData();
             } else {
                 showToast(data.error || '同步任务被拒绝');
@@ -284,9 +291,17 @@ export default function AdminPage() {
                                     <span className="text-[10px] font-black uppercase tracking-widest text-white/20 mr-2">Quick Actions:</span>
                                     <button onClick={() => fetchAllData()} title="刷新" className="p-1.5 hover:text-cyan-400 transition-colors"><RefreshCcw size={16} /></button>
                                     <div className="w-px h-3 bg-white/10 mx-1" />
-                                    <button onClick={triggerSync} title="强制同步" className="p-1.5 hover:text-emerald-400 transition-colors"><Activity size={16} /></button>
+                                    <button onClick={() => triggerForceSync('stock')} title="重刷所有股票历史数据" className="p-1.5 hover:text-emerald-400 transition-colors flex items-center gap-1.5">
+                                        <TrendingUp size={16} />
+                                        <span className="text-[9px] font-black uppercase tracking-tighter hidden xl:inline">股票</span>
+                                    </button>
                                     <div className="w-px h-3 bg-white/10 mx-1" />
-                                    <button onClick={triggerCleanup} title="全量大扫除" className="p-1.5 hover:text-orange-400 transition-colors"><Zap size={16} /></button>
+                                    <button onClick={() => triggerForceSync('fund')} title="重刷所有基金历史数据" className="p-1.5 hover:text-blue-400 transition-colors flex items-center gap-1.5">
+                                        <PieChart size={16} />
+                                        <span className="text-[9px] font-black uppercase tracking-tighter hidden xl:inline">基金</span>
+                                    </button>
+                                    <div className="w-px h-3 bg-white/10 mx-1" />
+                                    <button onClick={triggerCleanup} title="环境全量大扫除" className="p-1.5 hover:text-orange-400 transition-colors"><Zap size={16} /></button>
                                 </div>
                                 <div className="text-[10px] font-mono font-bold text-white/20 bg-white/5 px-4 py-2 rounded-xl border border-white/5">
                                     {new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })}
@@ -299,12 +314,10 @@ export default function AdminPage() {
                                 {activeSection === 'overview' && (
                                     <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }} key="overview" className="space-y-12">
                                         {/* Key Stats Grid */}
-                                        <div className="grid grid-cols-2 lg:grid-cols-4 gap-6">
+                                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                                             {[
                                                 { label: '注册账户', value: stats.users, icon: <Users size={18} />, color: 'text-blue-400', bg: 'from-blue-500/10' },
                                                 { label: '自选资产', value: (stats.stocks + stats.funds), icon: <Zap size={18} />, color: 'text-yellow-400', bg: 'from-yellow-500/10' },
-                                                { label: '历史点位', value: (stats.history_points / 1000).toFixed(1) + 'K', icon: <Database size={18} />, color: 'text-purple-400', bg: 'from-purple-500/10' },
-                                                { label: '24H 增长', value: '+' + stats.recent_growth, icon: <TrendingUp size={18} />, color: 'text-emerald-400', bg: 'from-emerald-500/10' }
                                             ].map((kpi, i) => (
                                                 <div key={i} className={`bg-gradient-to-br ${kpi.bg} to-transparent border border-white/5 p-8 rounded-[2.5rem] relative overflow-hidden group hover:border-white/10 transition-all`}>
                                                     <div className={`p-3 w-fit rounded-2xl bg-white/5 mb-6 ${kpi.color}`}>
@@ -314,46 +327,6 @@ export default function AdminPage() {
                                                     <div className="text-[10px] text-white/30 font-bold uppercase tracking-[0.2em]">{kpi.label}</div>
                                                 </div>
                                             ))}
-                                        </div>
-
-                                        {/* D1 Infrastructure Details */}
-                                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                                            <div className="bg-white/[0.02] border border-white/5 p-8 rounded-[3rem]">
-                                                <div className="flex items-center gap-3 mb-8">
-                                                    <Database size={20} className="text-blue-500" />
-                                                    <h3 className="text-sm font-black italic uppercase tracking-widest text-white/60">D1 Storage Integrity</h3>
-                                                </div>
-                                                <div className="space-y-6">
-                                                    {[
-                                                        { label: '分时行情点位', value: stats.intraday_points, max: 200000, color: 'bg-blue-500' },
-                                                        { label: '历史 K 线索引', value: stats.history_points, max: 500000, color: 'bg-indigo-500' },
-                                                        { label: '实时报价缓存', value: stats.quotes_count, max: 5000, color: 'bg-cyan-500' }
-                                                    ].map((row, i) => (
-                                                        <div key={i} className="space-y-2">
-                                                            <div className="flex justify-between text-[10px] uppercase font-black tracking-widest text-white/20">
-                                                                <span>{row.label}</span>
-                                                                <span>{row.value.toLocaleString()} / {row.max.toLocaleString()}</span>
-                                                            </div>
-                                                            <div className="h-2 w-full bg-white/5 rounded-full overflow-hidden">
-                                                                <motion.div initial={{ width: 0 }} animate={{ width: `${Math.min((row.value / row.max) * 100, 100)}%` }} className={`h-full ${row.color}`} />
-                                                            </div>
-                                                        </div>
-                                                    ))}
-                                                </div>
-                                            </div>
-
-                                            <div className="bg-white/[0.02] border border-white/5 p-8 rounded-[3rem] flex flex-col justify-center items-center text-center relative overflow-hidden group">
-                                                <div className="absolute inset-0 bg-emerald-500/[0.02] animate-pulse pointer-events-none" />
-                                                <div className="w-20 h-20 bg-emerald-500/10 rounded-full flex items-center justify-center mb-6 shadow-[0_0_40px_rgba(16,185,129,0.1)]">
-                                                    <BarChart3 size={32} className="text-emerald-500" />
-                                                </div>
-                                                <h3 className="text-xl font-black italic uppercase tracking-tighter mb-2">High Efficiency Engine</h3>
-                                                <p className="text-xs text-white/30 font-medium uppercase tracking-widest max-w-[200px]">Active Data Sharding and Pruning Policy Engaged</p>
-                                                <div className="mt-8 flex gap-3">
-                                                    <div className="px-5 py-2 bg-white/5 border border-white/5 rounded-full text-[10px] font-black uppercase text-white/40">D1/SQLite</div>
-                                                    <div className="px-5 py-2 bg-white/5 border border-white/5 rounded-full text-[10px] font-black uppercase text-white/40">V8 Edge</div>
-                                                </div>
-                                            </div>
                                         </div>
                                     </motion.div>
                                 )}
