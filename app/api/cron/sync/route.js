@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getSyncTasks, updateSyncStatus, insertDailyPricesBatch } from '@/lib/storage/historyRepo';
+import { grabAndLockSyncTasks, updateSyncStatus, insertDailyPricesBatch } from '@/lib/storage/historyRepo';
 import { fetchStockHistory, fetchFundHistory } from '@/lib/services/historyFetcher';
 import { addSystemLog } from '@/lib/storage/logRepo';
 
@@ -14,8 +14,8 @@ export async function GET(request) {
     // 这里简单处理，返回执行结果
 
     try {
-        // 1. 获取本批次任务 (限制 50 条，确保每日消化速度大于产出)
-        const tasks = await getSyncTasks(50);
+        // 1. 原子化提取并锁定本批次任务 (防止 Worker 并发抢占)
+        const tasks = await grabAndLockSyncTasks(50);
         if (tasks.length === 0) {
             return NextResponse.json({ success: true, message: 'No pending sync tasks' });
         }
@@ -26,8 +26,7 @@ export async function GET(request) {
         for (const task of tasks) {
             const { code, type } = task;
             try {
-                // 2. 标记状态为正在同步
-                await updateSyncStatus(code, type, 'syncing');
+                // 2. 任务已在 grabAndLockSyncTasks 中原子化锁定，直接开始执行业务
 
                 // 3. 执行抓取 (默认同步最近 250 天)
                 let history = null;

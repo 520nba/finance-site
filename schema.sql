@@ -101,3 +101,10 @@ CREATE TABLE IF NOT EXISTS api_health (
 );
 
 CREATE INDEX IF NOT EXISTS idx_logs_timestamp ON system_logs(timestamp);
+
+-- [Optimization] 提升历史查询和去重写入速度
+CREATE INDEX IF NOT EXISTS idx_asset_lookup ON asset_history (code, type, record_date DESC);
+-- [Optimization] 提升同步队列死锁恢复逻辑的扫描效率
+CREATE INDEX IF NOT EXISTS idx_sync_queue_recovery ON sync_queue (status, updated_at);
+-- [Optimization] 确保同步队列的主键唯一性，支持 INSERT OR REPLACE
+CREATE UNIQUE INDEX IF NOT EXISTS idx_sync_unique ON sync_queue (code, type);
