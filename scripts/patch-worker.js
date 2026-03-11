@@ -27,7 +27,8 @@ if (fs.existsSync(workerPath)) {
     
     // 使用 ctx.waitUntil 确保异步任务在 Worker 进程关闭前有时间跑完
     // 对 OpenNext 环境，这能防止 Next.js API 被提前“杀掉”
-    ctx.waitUntil(Promise.all(tasks));
+    // 使用 allSettled 确保即便其中一个 API 报错，其他任务也能坚持跑完
+    ctx.waitUntil(Promise.allSettled(tasks));
     console.log("[Trigger] All tasks dispatched and waiting via ctx.waitUntil.");
   },`;
 
