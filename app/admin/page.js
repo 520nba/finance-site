@@ -289,7 +289,7 @@ export default function AdminPage() {
                                     <button onClick={triggerCleanup} title="全量大扫除" className="p-1.5 hover:text-orange-400 transition-colors"><Zap size={16} /></button>
                                 </div>
                                 <div className="text-[10px] font-mono font-bold text-white/20 bg-white/5 px-4 py-2 rounded-xl border border-white/5">
-                                    {new Date().toLocaleString('zh-CN', { hour12: false })}
+                                    {new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })}
                                 </div>
                             </div>
                         </header>
@@ -521,7 +521,7 @@ export default function AdminPage() {
                                                                 <div className="flex items-center gap-4 min-w-[150px]">
                                                                     <div className={`w-1 h-1 rounded-full ${log.level === 'INFO' ? 'bg-blue-500' : log.level === 'WARN' ? 'bg-orange-500' : 'bg-red-500'}`} />
                                                                     <span className="text-[10px] font-mono font-bold text-white/20">
-                                                                        {new Date(log.timestamp).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })}
+                                                                        {new Date(log.timestamp + 'Z').toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })}
                                                                     </span>
                                                                 </div>
                                                                 <div className="flex-1 flex gap-4">
