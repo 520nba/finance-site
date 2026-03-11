@@ -125,6 +125,7 @@ export async function POST(request) {
             data
         })
     } catch (e) {
+        console.error('[HistoryBulkAPI] Fatal Error:', e);
         return NextResponse.json(
             { success: false, error: e.message },
             { status: 500 }
