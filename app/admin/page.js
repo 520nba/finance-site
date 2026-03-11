@@ -289,7 +289,7 @@ export default function AdminPage() {
                                     <button onClick={triggerCleanup} title="全量大扫除" className="p-1.5 hover:text-orange-400 transition-colors"><Zap size={16} /></button>
                                 </div>
                                 <div className="text-[10px] font-mono font-bold text-white/20 bg-white/5 px-4 py-2 rounded-xl border border-white/5">
-                                    {new Date().toLocaleTimeString()}
+                                    {new Date().toLocaleString('zh-CN', { hour12: false })}
                                 </div>
                             </div>
                         </header>
@@ -515,16 +515,18 @@ export default function AdminPage() {
                                         <div className="bg-white/[0.01] border border-white/5 rounded-[3rem] overflow-hidden backdrop-blur-3xl lg:p-4">
                                             <div className="max-h-[600px] overflow-y-auto custom-scrollbar px-6 py-4">
                                                 {logs.length > 0 ? (
-                                                    <div className="space-y-3">
+                                                    <div className="space-y-1">
                                                         {logs.map((log, idx) => (
-                                                            <div key={idx} className="group flex flex-col md:flex-row gap-4 p-5 rounded-3xl hover:bg-white/[0.02] border border-transparent hover:border-white/5 transition-all">
+                                                            <div key={idx} className="group flex flex-col md:flex-row gap-4 py-2 px-5 rounded-xl hover:bg-white/[0.02] border border-transparent hover:border-white/5 transition-all">
                                                                 <div className="flex items-center gap-4 min-w-[150px]">
-                                                                    <div className={`w-1.5 h-1.5 rounded-full ${log.level === 'INFO' ? 'bg-blue-500' : log.level === 'WARN' ? 'bg-orange-500' : 'bg-red-500'}`} />
-                                                                    <span className="text-[10px] font-mono font-bold text-white/20">{new Date(log.timestamp).toLocaleTimeString()}</span>
+                                                                    <div className={`w-1 h-1 rounded-full ${log.level === 'INFO' ? 'bg-blue-500' : log.level === 'WARN' ? 'bg-orange-500' : 'bg-red-500'}`} />
+                                                                    <span className="text-[10px] font-mono font-bold text-white/20">
+                                                                        {new Date(log.timestamp).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })}
+                                                                    </span>
                                                                 </div>
                                                                 <div className="flex-1 flex gap-4">
-                                                                    <span className="text-[9px] font-black px-3 py-1 bg-white/5 rounded-lg text-white/40 uppercase tracking-widest h-fit">[{log.module}]</span>
-                                                                    <p className="text-xs font-medium text-white/60 leading-relaxed group-hover:text-white/90 transition-colors uppercase tracking-tight">{log.message}</p>
+                                                                    <span className="text-[9px] font-black px-2 py-0.5 bg-white/5 rounded-md text-white/40 uppercase tracking-widest h-fit">[{log.module}]</span>
+                                                                    <p className="text-[11px] font-medium text-white/60 leading-tight group-hover:text-white/90 transition-colors uppercase tracking-tight">{log.message}</p>
                                                                 </div>
                                                             </div>
                                                         ))}
