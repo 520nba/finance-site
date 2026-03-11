@@ -108,3 +108,6 @@ CREATE INDEX IF NOT EXISTS idx_asset_lookup ON asset_history (code, type, record
 CREATE INDEX IF NOT EXISTS idx_sync_queue_recovery ON sync_queue (status, updated_at);
 -- [Optimization] 确保同步队列的主键唯一性，支持 INSERT OR REPLACE
 CREATE UNIQUE INDEX IF NOT EXISTS idx_sync_unique ON sync_queue (code, type);
+
+-- [Optimization] 提升近期统计查询速度 (用于 recent_growth)
+CREATE INDEX IF NOT EXISTS idx_asset_history_created_at ON asset_history (created_at);
