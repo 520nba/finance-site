@@ -2,6 +2,7 @@
   "name": "stock-tracker",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -10,7 +11,6 @@
     "start": "next start",
     "pages:build": "npx @opennextjs/cloudflare@latest build && node scripts/patch-worker.js",
     "pages:patch": "node scripts/patch-worker.js",
-    "deploy": "opennextjs-cloudflare build && node scripts/patch-worker.js && opennextjs-cloudflare deploy",
     "lint": "eslint"
   },
   "dependencies": {
