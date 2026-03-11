@@ -1,13 +1,11 @@
 import { NextResponse } from 'next/server';
-import { queryAll, getD1Storage } from '@/lib/storage/d1Client';
-import { fetchStockHistory, fetchFundHistory } from '@/lib/services/historyFetcher';
-import { syncCounterFromTable } from '@/lib/storage/statsRepo';
+import { queryAll, runSql } from '@/lib/storage/d1Client';
 import { isAdminAuthorized } from '@/lib/auth';
 
 export const dynamic = 'force-dynamic';
 
 /**
- * 强行同步接口：拉取最新 250 条数据并彻底替换旧数据
+ * 强行同步接口：将指定类型的所有资产推入高优先同步队列
  */
 export async function POST(request) {
     if (!(await isAdminAuthorized(request))) {
@@ -21,73 +19,28 @@ export async function POST(request) {
         }
 
         // 1. 获取所有该类型的资产代码
-        const assets = await queryAll('SELECT DISTINCT code FROM user_assets WHERE type = ?', [type]);
+        const assets = await queryAll('SELECT DISTINCT code, type FROM user_assets WHERE type = ?', [type]);
         if (assets.length === 0) {
-            return NextResponse.json({ success: true, message: `No ${type}s to sync` });
+            return NextResponse.json({ success: true, message: `No ${type}s found in user tracking lists.` });
         }
 
-        const db = await getD1Storage();
-        let successCount = 0;
-        let failCount = 0;
+        // 2. 清理并推入队列
+        // 先删除队列中已存在的同类任务，确保能重新触发全量拉取
+        await runSql('DELETE FROM sync_queue WHERE type = ?', [type]);
 
-        // 2. 遍历同步 (逐个处理以防 Worker 超时，如果资产极多建议走 SyncQueue，但用户要求“点击后拉取并替换”)
-        // 注意：在大规模资产下，此接口可能会因为 30s 限制而中断。
-        for (const asset of assets) {
-            const { code } = asset;
-            try {
-                const history = type === 'fund'
-                    ? await fetchFundHistory(code, 250)
-                    : await fetchStockHistory(code, 250);
+        const { addToSyncQueue } = await import('@/lib/storage/historyRepo');
+        await addToSyncQueue(assets);
 
-                if (history && history.length > 0) {
-                    // 原子化操作：删除旧数据 + 插入新数据
-                    const stmts = [
-                        db.prepare('DELETE FROM asset_history WHERE code = ? AND type = ?').bind(code, type)
-                    ];
-
-                    // 分片插入
-                    const records = history.map(h => ({
-                        code,
-                        type,
-                        price: h.value,
-                        date: h.date
-                    }));
-
-                    for (const r of records) {
-                        stmts.push(
-                            db.prepare('INSERT INTO asset_history (code, type, price, record_date) VALUES (?, ?, ?, ?)')
-                                .bind(r.code, r.type, r.price, r.date)
-                        );
-                    }
-
-                    // 由于 D1 batch 限制 100 条，历史 250 条需要分批事务
-                    const CHUNK = 90;
-                    for (let i = 0; i < stmts.length; i += CHUNK) {
-                        await db.batch(stmts.slice(i, i + CHUNK));
-                    }
-                    successCount++;
-                } else {
-                    failCount++;
-                }
-            } catch (err) {
-                console.error(`[ForceSync] Failed ${code}:`, err.message);
-                failCount++;
-            }
-        }
-
-        // 3. 校准计数器
-        await syncCounterFromTable('history_points', 'asset_history');
-
-        // 4. 记录到系统日志 (System Pulse Records)
+        // 3. 记录审计日志
         const { addSystemLog } = await import('@/lib/storage/logRepo');
-        await addSystemLog('WARN', 'ForceSync', `Manual Trigger [${type}]: ${successCount} success, ${failCount} failed.`);
+        await addSystemLog('WARN', 'ForceSync', `Queue Injection [${type}]: ${assets.length} assets pushed to sync_queue for asynchronous processing.`);
 
         return NextResponse.json({
             success: true,
-            message: `Force synced ${type}s: ${successCount} success, ${failCount} failed.`
+            message: `Successfully queued ${assets.length} ${type}s for background synchronization. Please monitor the queue counter for progress.`
         });
     } catch (e) {
-        console.error('[ForceSync] Global Failure:', e.message);
+        console.error('[ForceSync] Queue Injection Failure:', e.message);
         return NextResponse.json({ error: e.message }, { status: 500 });
     }
 }
