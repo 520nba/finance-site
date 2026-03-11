@@ -1,0 +1,1032 @@
+﻿
+ 鉀咃笍 wrangler 4.70.0 (update available 4.72.0)
+鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+Resource location: remote 
+
+馃寑 Executing on remote database stock-tracker-db (8451af7d-ba5b-47b3-915f-8aee5fa82723):
+馃寑 To execute on your local development database, remove the --remote flag from your wrangler command.
+馃殻 Executed 1 command in 0.71ms
+[
+  {
+    "results": [
+      {
+        "record_date": "2026-03-10",
+        "price": 1.0493
+      },
+      {
+        "record_date": "2026-03-09",
+        "price": 1.0491
+      },
+      {
+        "record_date": "2026-03-06",
+        "price": 1.0496
+      },
+      {
+        "record_date": "2026-03-05",
+        "price": 1.0494
+      },
+      {
+        "record_date": "2026-03-04",
+        "price": 1.0493
+      },
+      {
+        "record_date": "2026-03-03",
+        "price": 1.0491
+      },
+      {
+        "record_date": "2026-03-02",
+        "price": 1.049
+      },
+      {
+        "record_date": "2026-02-27",
+        "price": 1.0484
+      },
+      {
+        "record_date": "2026-02-26",
+        "price": 1.0482
+      },
+      {
+        "record_date": "2026-02-25",
+        "price": 1.0485
+      },
+      {
+        "record_date": "2026-02-24",
+        "price": 1.0489
+      },
+      {
+        "record_date": "2026-02-13",
+        "price": 1.0483
+      },
+      {
+        "record_date": "2026-02-12",
+        "price": 1.0482
+      },
+      {
+        "record_date": "2026-02-11",
+        "price": 1.048
+      },
+      {
+        "record_date": "2026-02-10",
+        "price": 1.0478
+      },
+      {
+        "record_date": "2026-02-09",
+        "price": 1.0476
+      },
+      {
+        "record_date": "2026-02-06",
+        "price": 1.0473
+      },
+      {
+        "record_date": "2026-02-05",
+        "price": 1.047
+      },
+      {
+        "record_date": "2026-02-04",
+        "price": 1.0468
+      },
+      {
+        "record_date": "2026-02-03",
+        "price": 1.0467
+      },
+      {
+        "record_date": "2026-02-02",
+        "price": 1.0467
+      },
+      {
+        "record_date": "2026-01-30",
+        "price": 1.0465
+      },
+      {
+        "record_date": "2026-01-29",
+        "price": 1.0465
+      },
+      {
+        "record_date": "2026-01-28",
+        "price": 1.0464
+      },
+      {
+        "record_date": "2026-01-27",
+        "price": 1.0463
+      },
+      {
+        "record_date": "2026-01-26",
+        "price": 1.0465
+      },
+      {
+        "record_date": "2026-01-23",
+        "price": 1.0459
+      },
+      {
+        "record_date": "2026-01-22",
+        "price": 1.0455
+      },
+      {
+        "record_date": "2026-01-21",
+        "price": 1.0455
+      },
+      {
+        "record_date": "2026-01-20",
+        "price": 1.0442
+      },
+      {
+        "record_date": "2026-01-19",
+        "price": 1.0434
+      },
+      {
+        "record_date": "2026-01-16",
+        "price": 1.0431
+      },
+      {
+        "record_date": "2026-01-15",
+        "price": 1.0427
+      },
+      {
+        "record_date": "2026-01-14",
+        "price": 1.0425
+      },
+      {
+        "record_date": "2026-01-13",
+        "price": 1.0425
+      },
+      {
+        "record_date": "2026-01-12",
+        "price": 1.0426
+      },
+      {
+        "record_date": "2026-01-09",
+        "price": 1.0419
+      },
+      {
+        "record_date": "2026-01-08",
+        "price": 1.0417
+      },
+      {
+        "record_date": "2026-01-07",
+        "price": 1.0416
+      },
+      {
+        "record_date": "2026-01-06",
+        "price": 1.0417
+      },
+      {
+        "record_date": "2026-01-05",
+        "price": 1.0418
+      },
+      {
+        "record_date": "2025-12-31",
+        "price": 1.0413
+      },
+      {
+        "record_date": "2025-12-30",
+        "price": 1.0409
+      },
+      {
+        "record_date": "2025-12-29",
+        "price": 1.0409
+      },
+      {
+        "record_date": "2025-12-26",
+        "price": 1.041
+      },
+      {
+        "record_date": "2025-12-25",
+        "price": 1.0409
+      },
+      {
+        "record_date": "2025-12-24",
+        "price": 1.0409
+      },
+      {
+        "record_date": "2025-12-23",
+        "price": 1.0406
+      },
+      {
+        "record_date": "2025-12-22",
+        "price": 1.0404
+      },
+      {
+        "record_date": "2025-12-19",
+        "price": 1.0403
+      },
+      {
+        "record_date": "2025-12-18",
+        "price": 1.04
+      },
+      {
+        "record_date": "2025-12-17",
+        "price": 1.0397
+      },
+      {
+        "record_date": "2025-12-16",
+        "price": 1.0396
+      },
+      {
+        "record_date": "2025-12-15",
+        "price": 1.0395
+      },
+      {
+        "record_date": "2025-12-12",
+        "price": 1.0391
+      },
+      {
+        "record_date": "2025-12-11",
+        "price": 1.0403
+      },
+      {
+        "record_date": "2025-12-10",
+        "price": 1.039
+      },
+      {
+        "record_date": "2025-12-09",
+        "price": 1.0388
+      },
+      {
+        "record_date": "2025-12-08",
+        "price": 1.0386
+      },
+      {
+        "record_date": "2025-12-05",
+        "price": 1.0387
+      },
+      {
+        "record_date": "2025-12-04",
+        "price": 1.0387
+      },
+      {
+        "record_date": "2025-12-03",
+        "price": 1.0396
+      },
+      {
+        "record_date": "2025-12-02",
+        "price": 1.0398
+      },
+      {
+        "record_date": "2025-12-01",
+        "price": 1.0402
+      },
+      {
+        "record_date": "2025-11-28",
+        "price": 1.04
+      },
+      {
+        "record_date": "2025-11-27",
+        "price": 1.0399
+      },
+      {
+        "record_date": "2025-11-26",
+        "price": 1.0402
+      },
+      {
+        "record_date": "2025-11-25",
+        "price": 1.0415
+      },
+      {
+        "record_date": "2025-11-24",
+        "price": 1.0421
+      },
+      {
+        "record_date": "2025-11-21",
+        "price": 1.0422
+      },
+      {
+        "record_date": "2025-11-20",
+        "price": 1.0424
+      },
+      {
+        "record_date": "2025-11-19",
+        "price": 1.0425
+      },
+      {
+        "record_date": "2025-11-18",
+        "price": 1.0426
+      },
+      {
+        "record_date": "2025-11-17",
+        "price": 1.0425
+      },
+      {
+        "record_date": "2025-11-14",
+        "price": 1.0421
+      },
+      {
+        "record_date": "2025-11-13",
+        "price": 1.0421
+      },
+      {
+        "record_date": "2025-11-12",
+        "price": 1.0424
+      },
+      {
+        "record_date": "2025-11-11",
+        "price": 1.042
+      },
+      {
+        "record_date": "2025-11-10",
+        "price": 1.0418
+      },
+      {
+        "record_date": "2025-11-07",
+        "price": 1.0415
+      },
+      {
+        "record_date": "2025-11-06",
+        "price": 1.0421
+      },
+      {
+        "record_date": "2025-11-05",
+        "price": 1.0428
+      },
+      {
+        "record_date": "2025-11-04",
+        "price": 1.0424
+      },
+      {
+        "record_date": "2025-11-03",
+        "price": 1.0423
+      },
+      {
+        "record_date": "2025-10-31",
+        "price": 1.0417
+      },
+      {
+        "record_date": "2025-10-30",
+        "price": 1.0407
+      },
+      {
+        "record_date": "2025-10-29",
+        "price": 1.0404
+      },
+      {
+        "record_date": "2025-10-28",
+        "price": 1.0401
+      },
+      {
+        "record_date": "2025-10-27",
+        "price": 1.0394
+      },
+      {
+        "record_date": "2025-10-24",
+        "price": 1.0391
+      },
+      {
+        "record_date": "2025-10-23",
+        "price": 1.0392
+      },
+      {
+        "record_date": "2025-10-22",
+        "price": 1.0391
+      },
+      {
+        "record_date": "2025-10-21",
+        "price": 1.0388
+      },
+      {
+        "record_date": "2025-10-20",
+        "price": 1.0386
+      },
+      {
+        "record_date": "2025-10-17",
+        "price": 1.0389
+      },
+      {
+        "record_date": "2025-10-16",
+        "price": 1.0378
+      },
+      {
+        "record_date": "2025-10-15",
+        "price": 1.0375
+      },
+      {
+        "record_date": "2025-10-14",
+        "price": 1.0375
+      },
+      {
+        "record_date": "2025-10-13",
+        "price": 1.0375
+      },
+      {
+        "record_date": "2025-10-10",
+        "price": 1.037
+      },
+      {
+        "record_date": "2025-10-09",
+        "price": 1.0369
+      },
+      {
+        "record_date": "2025-09-30",
+        "price": 1.0363
+      },
+      {
+        "record_date": "2025-09-29",
+        "price": 1.0361
+      },
+      {
+        "record_date": "2025-09-26",
+        "price": 1.0359
+      },
+      {
+        "record_date": "2025-09-25",
+        "price": 1.036
+      },
+      {
+        "record_date": "2025-09-24",
+        "price": 1.0363
+      },
+      {
+        "record_date": "2025-09-23",
+        "price": 1.0374
+      },
+      {
+        "record_date": "2025-09-22",
+        "price": 1.038
+      },
+      {
+        "record_date": "2025-09-19",
+        "price": 1.038
+      },
+      {
+        "record_date": "2025-09-18",
+        "price": 1.0384
+      },
+      {
+        "record_date": "2025-09-17",
+        "price": 1.0387
+      },
+      {
+        "record_date": "2025-09-16",
+        "price": 1.0382
+      },
+      {
+        "record_date": "2025-09-15",
+        "price": 1.0382
+      },
+      {
+        "record_date": "2025-09-12",
+        "price": 1.0379
+      },
+      {
+        "record_date": "2025-09-11",
+        "price": 1.0377
+      },
+      {
+        "record_date": "2025-09-10",
+        "price": 1.0379
+      },
+      {
+        "record_date": "2025-09-09",
+        "price": 1.0386
+      },
+      {
+        "record_date": "2025-09-08",
+        "price": 1.039
+      },
+      {
+        "record_date": "2025-09-05",
+        "price": 1.0395
+      },
+      {
+        "record_date": "2025-09-04",
+        "price": 1.0398
+      },
+      {
+        "record_date": "2025-09-03",
+        "price": 1.0394
+      },
+      {
+        "record_date": "2025-09-02",
+        "price": 1.0389
+      },
+      {
+        "record_date": "2025-09-01",
+        "price": 1.0388
+      },
+      {
+        "record_date": "2025-08-29",
+        "price": 1.0384
+      },
+      {
+        "record_date": "2025-08-28",
+        "price": 1.0385
+      },
+      {
+        "record_date": "2025-08-27",
+        "price": 1.0389
+      },
+      {
+        "record_date": "2025-08-26",
+        "price": 1.0389
+      },
+      {
+        "record_date": "2025-08-25",
+        "price": 1.0385
+      },
+      {
+        "record_date": "2025-08-22",
+        "price": 1.0382
+      },
+      {
+        "record_date": "2025-08-21",
+        "price": 1.0382
+      },
+      {
+        "record_date": "2025-08-20",
+        "price": 1.0382
+      },
+      {
+        "record_date": "2025-08-19",
+        "price": 1.0382
+      },
+      {
+        "record_date": "2025-08-18",
+        "price": 1.0383
+      },
+      {
+        "record_date": "2025-08-15",
+        "price": 1.0393
+      },
+      {
+        "record_date": "2025-08-14",
+        "price": 1.0395
+      },
+      {
+        "record_date": "2025-08-13",
+        "price": 1.0398
+      },
+      {
+        "record_date": "2025-08-12",
+        "price": 1.0397
+      },
+      {
+        "record_date": "2025-08-11",
+        "price": 1.0402
+      },
+      {
+        "record_date": "2025-08-08",
+        "price": 1.0407
+      },
+      {
+        "record_date": "2025-08-07",
+        "price": 1.0406
+      },
+      {
+        "record_date": "2025-08-06",
+        "price": 1.0404
+      },
+      {
+        "record_date": "2025-08-05",
+        "price": 1.0402
+      },
+      {
+        "record_date": "2025-08-04",
+        "price": 1.0401
+      },
+      {
+        "record_date": "2025-08-01",
+        "price": 1.0398
+      },
+      {
+        "record_date": "2025-07-31",
+        "price": 1.0396
+      },
+      {
+        "record_date": "2025-07-30",
+        "price": 1.0388
+      },
+      {
+        "record_date": "2025-07-29",
+        "price": 1.0379
+      },
+      {
+        "record_date": "2025-07-28",
+        "price": 1.0393
+      },
+      {
+        "record_date": "2025-07-25",
+        "price": 1.0386
+      },
+      {
+        "record_date": "2025-07-24",
+        "price": 1.0389
+      },
+      {
+        "record_date": "2025-07-23",
+        "price": 1.0402
+      },
+      {
+        "record_date": "2025-07-22",
+        "price": 1.0411
+      },
+      {
+        "record_date": "2025-07-21",
+        "price": 1.0419
+      },
+      {
+        "record_date": "2025-07-18",
+        "price": 1.0425
+      },
+      {
+        "record_date": "2025-07-17",
+        "price": 1.0425
+      },
+      {
+        "record_date": "2025-07-16",
+        "price": 1.0423
+      },
+      {
+        "record_date": "2025-07-15",
+        "price": 1.0421
+      },
+      {
+        "record_date": "2025-07-14",
+        "price": 1.0415
+      },
+      {
+        "record_date": "2025-07-11",
+        "price": 1.0418
+      },
+      {
+        "record_date": "2025-07-10",
+        "price": 1.042
+      },
+      {
+        "record_date": "2025-07-09",
+        "price": 1.0426
+      },
+      {
+        "record_date": "2025-07-08",
+        "price": 1.0426
+      },
+      {
+        "record_date": "2025-07-07",
+        "price": 1.0432
+      },
+      {
+        "record_date": "2025-07-04",
+        "price": 1.0427
+      },
+      {
+        "record_date": "2025-07-03",
+        "price": 1.0422
+      },
+      {
+        "record_date": "2025-07-02",
+        "price": 1.0419
+      },
+      {
+        "record_date": "2025-07-01",
+        "price": 1.084
+      },
+      {
+        "record_date": "2025-06-30",
+        "price": 1.0833
+      },
+      {
+        "record_date": "2025-06-27",
+        "price": 1.0834
+      },
+      {
+        "record_date": "2025-06-26",
+        "price": 1.083
+      },
+      {
+        "record_date": "2025-06-25",
+        "price": 1.083
+      },
+      {
+        "record_date": "2025-06-24",
+        "price": 1.0837
+      },
+      {
+        "record_date": "2025-06-23",
+        "price": 1.0844
+      },
+      {
+        "record_date": "2025-06-20",
+        "price": 1.0842
+      },
+      {
+        "record_date": "2025-06-19",
+        "price": 1.0837
+      },
+      {
+        "record_date": "2025-06-18",
+        "price": 1.0829
+      },
+      {
+        "record_date": "2025-06-17",
+        "price": 1.0824
+      },
+      {
+        "record_date": "2025-06-16",
+        "price": 1.0818
+      },
+      {
+        "record_date": "2025-06-13",
+        "price": 1.0816
+      },
+      {
+        "record_date": "2025-06-12",
+        "price": 1.0815
+      },
+      {
+        "record_date": "2025-06-11",
+        "price": 1.0813
+      },
+      {
+        "record_date": "2025-06-10",
+        "price": 1.0807
+      },
+      {
+        "record_date": "2025-06-09",
+        "price": 1.0804
+      },
+      {
+        "record_date": "2025-06-06",
+        "price": 1.0799
+      },
+      {
+        "record_date": "2025-06-05",
+        "price": 1.0796
+      },
+      {
+        "record_date": "2025-06-04",
+        "price": 1.0794
+      },
+      {
+        "record_date": "2025-06-03",
+        "price": 1.0794
+      },
+      {
+        "record_date": "2025-05-30",
+        "price": 1.0793
+      },
+      {
+        "record_date": "2025-05-29",
+        "price": 1.0786
+      },
+      {
+        "record_date": "2025-05-28",
+        "price": 1.0794
+      },
+      {
+        "record_date": "2025-05-27",
+        "price": 1.0797
+      },
+      {
+        "record_date": "2025-05-26",
+        "price": 1.0797
+      },
+      {
+        "record_date": "2025-05-23",
+        "price": 1.0793
+      },
+      {
+        "record_date": "2025-05-22",
+        "price": 1.0791
+      },
+      {
+        "record_date": "2025-05-21",
+        "price": 1.0788
+      },
+      {
+        "record_date": "2025-05-20",
+        "price": 1.0786
+      },
+      {
+        "record_date": "2025-05-19",
+        "price": 1.0782
+      },
+      {
+        "record_date": "2025-05-16",
+        "price": 1.0776
+      },
+      {
+        "record_date": "2025-05-15",
+        "price": 1.078
+      },
+      {
+        "record_date": "2025-05-14",
+        "price": 1.0779
+      },
+      {
+        "record_date": "2025-05-13",
+        "price": 1.078
+      },
+      {
+        "record_date": "2025-05-12",
+        "price": 1.0776
+      },
+      {
+        "record_date": "2025-05-09",
+        "price": 1.0783
+      },
+      {
+        "record_date": "2025-05-08",
+        "price": 1.0775
+      },
+      {
+        "record_date": "2025-05-07",
+        "price": 1.0765
+      },
+      {
+        "record_date": "2025-05-06",
+        "price": 1.0767
+      },
+      {
+        "record_date": "2025-04-30",
+        "price": 1.0761
+      },
+      {
+        "record_date": "2025-04-29",
+        "price": 1.0755
+      },
+      {
+        "record_date": "2025-04-28",
+        "price": 1.0747
+      },
+      {
+        "record_date": "2025-04-25",
+        "price": 1.0744
+      },
+      {
+        "record_date": "2025-04-24",
+        "price": 1.0746
+      },
+      {
+        "record_date": "2025-04-23",
+        "price": 1.0749
+      },
+      {
+        "record_date": "2025-04-22",
+        "price": 1.0753
+      },
+      {
+        "record_date": "2025-04-21",
+        "price": 1.0752
+      },
+      {
+        "record_date": "2025-04-18",
+        "price": 1.0753
+      },
+      {
+        "record_date": "2025-04-17",
+        "price": 1.0754
+      },
+      {
+        "record_date": "2025-04-16",
+        "price": 1.0755
+      },
+      {
+        "record_date": "2025-04-15",
+        "price": 1.0754
+      },
+      {
+        "record_date": "2025-04-14",
+        "price": 1.0755
+      },
+      {
+        "record_date": "2025-04-11",
+        "price": 1.0755
+      },
+      {
+        "record_date": "2025-04-10",
+        "price": 1.0754
+      },
+      {
+        "record_date": "2025-04-09",
+        "price": 1.0756
+      },
+      {
+        "record_date": "2025-04-08",
+        "price": 1.0755
+      },
+      {
+        "record_date": "2025-04-07",
+        "price": 1.0765
+      },
+      {
+        "record_date": "2025-04-03",
+        "price": 1.0734
+      },
+      {
+        "record_date": "2025-04-02",
+        "price": 1.0711
+      },
+      {
+        "record_date": "2025-04-01",
+        "price": 1.0704
+      },
+      {
+        "record_date": "2025-03-31",
+        "price": 1.0704
+      },
+      {
+        "record_date": "2025-03-28",
+        "price": 1.0701
+      },
+      {
+        "record_date": "2025-03-27",
+        "price": 1.0698
+      },
+      {
+        "record_date": "2025-03-26",
+        "price": 1.0695
+      },
+      {
+        "record_date": "2025-03-25",
+        "price": 1.0689
+      },
+      {
+        "record_date": "2025-03-24",
+        "price": 1.0684
+      },
+      {
+        "record_date": "2025-03-21",
+        "price": 1.0678
+      },
+      {
+        "record_date": "2025-03-20",
+        "price": 1.0674
+      },
+      {
+        "record_date": "2025-03-19",
+        "price": 1.0669
+      },
+      {
+        "record_date": "2025-03-18",
+        "price": 1.0665
+      },
+      {
+        "record_date": "2025-03-17",
+        "price": 1.0662
+      },
+      {
+        "record_date": "2025-03-14",
+        "price": 1.0664
+      },
+      {
+        "record_date": "2025-03-13",
+        "price": 1.066
+      },
+      {
+        "record_date": "2025-03-12",
+        "price": 1.0655
+      },
+      {
+        "record_date": "2025-03-11",
+        "price": 1.0652
+      },
+      {
+        "record_date": "2025-03-10",
+        "price": 1.0658
+      },
+      {
+        "record_date": "2025-03-07",
+        "price": 1.066
+      },
+      {
+        "record_date": "2025-03-06",
+        "price": 1.0669
+      },
+      {
+        "record_date": "2025-03-05",
+        "price": 1.0672
+      },
+      {
+        "record_date": "2025-03-04",
+        "price": 1.0671
+      },
+      {
+        "record_date": "2025-03-03",
+        "price": 1.0669
+      },
+      {
+        "record_date": "2025-02-28",
+        "price": 1.0665
+      },
+      {
+        "record_date": "2025-02-27",
+        "price": 1.0665
+      }
+    ],
+    "success": true,
+    "meta": {
+      "served_by": "v3-prod",
+      "served_by_region": "APAC",
+      "served_by_colo": "HKG",
+      "served_by_primary": true,
+      "timings": {
+        "sql_duration_ms": 0.7086
+      },
+      "duration": 0.7086,
+      "changes": 0,
+      "last_row_id": 0,
+      "changed_db": false,
+      "size_after": 3788800,
+      "rows_read": 507,
+      "rows_written": 0,
+      "total_attempts": 1
+    }
+  }
+]

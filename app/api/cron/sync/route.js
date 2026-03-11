@@ -15,7 +15,7 @@ export async function GET(request) {
 
     try {
         // 1. 原子化提取并锁定本批次任务 (防止 Worker 并发抢占)
-        const tasks = await grabAndLockSyncTasks(50);
+        const tasks = await grabAndLockSyncTasks(10);
         if (tasks.length === 0) {
             return NextResponse.json({ success: true, message: 'No pending sync tasks' });
         }

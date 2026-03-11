@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getHistory, insertDailyPricesBatch } from '@/lib/storage/historyRepo';
+import { fetchStockHistory, fetchFundHistory } from '@/lib/services/historyFetcher'
 
 function todayStr(date = new Date()) {
     return date.toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' });
@@ -47,119 +48,6 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 8000) {
     }
 }
 
-async function fetchStockHistoryServer(code, days) {
-    const { prefix, clean } = resolveMarket(code);
-    const mkt = prefix === 'sz' ? '0' : '1';
-    // 主数据源: 东方财富 K 线接口
-    const url = `https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=${mkt}.${clean}&fields1=f1,f2&fields2=f51,f53&klt=101&fqt=1&end=20500101&lmt=${days + 5}`;
-    try {
-        const res = await fetchWithTimeout(url, {
-            headers: {
-                ...BASE_HEADERS,
-                'Referer': 'https://quote.eastmoney.com/',
-            }
-        }, 8000);
-        if (res.ok) {
-            const d = await res.json();
-            if (d.data && d.data.klines) {
-                const data = d.data.klines.map(line => {
-                    const parts = line.split(',');
-                    return { date: parts[0], value: parseFloat(parts[1]) };
-                }).filter(i => !isNaN(i.value));
-                if (data.length > 0) {
-                    console.log(`[History] EastMoney fetch OK: ${code} (${data.length} pts)`);
-                    return data.slice(-days);
-                }
-            }
-        }
-        console.warn(`[History] EastMoney returned non-ok for ${code}: ${res.status}`);
-    } catch (e) {
-        console.warn(`[History] EastMoney stock ${code} failed: ${e.message}`);
-    }
-
-    // 备用数据源: 尝试从腾讯 API 拼历史（仅当 eastmoney 失败时）
-    try {
-        const urls = [];
-        for (let year = new Date().getFullYear(); year >= new Date().getFullYear() - 1; year--) {
-            urls.push(`https://data.gtimg.cn/flashdata/hushen/daily/${String(year).slice(-2)}/${code.toLowerCase()}.js`);
-        }
-        for (const u of urls) {
-            const res2 = await fetchWithTimeout(u, { headers: BASE_HEADERS }, 5000).catch(() => null);
-            if (!res2 || !res2.ok) continue;
-            const text = await res2.text();
-            const lines = text.split('\n').filter(l => /^\d{6}/.test(l.trim()));
-            if (lines.length > 0) {
-                const data = lines.map(line => {
-                    const parts = line.trim().split(' ');
-                    const date = `20${parts[0].slice(0, 2)}-${parts[0].slice(2, 4)}-${parts[0].slice(4, 6)}`;
-                    return { date, value: parseFloat(parts[2]) };
-                }).filter(i => !isNaN(i.value));
-                if (data.length > 0) {
-                    console.log(`[History] Tencent flashdata OK: ${code} (${data.length} pts)`);
-                    return data.slice(-days);
-                }
-            }
-        }
-    } catch (e2) {
-        console.warn(`[History] Tencent fallback also failed for ${code}: ${e2.message}`);
-    }
-    return null;
-}
-
-async function fetchFundHistoryServer(code, days) {
-    const match = code.match(/^([a-zA-Z]{2})?(\d+)$/i);
-    const clean = match ? match[2] : code;
-    try {
-        const probeRes = await fetchWithTimeout(
-            `https://api.fund.eastmoney.com/f10/lsjz?fundCode=${clean}&pageIndex=1&pageSize=20&_=${Date.now()}`,
-            { headers: { ...BASE_HEADERS, 'Referer': `http://fundf10.eastmoney.com/` } },
-            6000
-        );
-        if (!probeRes.ok) throw new Error(`probe ${probeRes.status}`);
-        const probeData = await probeRes.json();
-        const totalCount = probeData.TotalCount || 0;
-        if (totalCount === 0) return null;
-
-        const firstPage = probeData.Data?.LSJZList || [];
-        const targetCount = Math.min(days, totalCount);
-        const pagesNeeded = Math.ceil(targetCount / 20);
-
-        const pagePromises = [];
-        for (let page = 2; page <= pagesNeeded; page++) {
-            pagePromises.push(
-                () => fetchWithTimeout(
-                    `https://api.fund.eastmoney.com/f10/lsjz?fundCode=${clean}&pageIndex=${page}&pageSize=20&_=${Date.now()}`,
-                    { headers: { ...BASE_HEADERS, 'Referer': `http://fundf10.eastmoney.com/` } },
-                    4000
-                ).then(r => r.ok ? r.json() : null).catch(() => null)
-            );
-        }
-
-        const pageResults = [];
-        const PAGE_BATCH_SIZE = 6;
-        for (let i = 0; i < pagePromises.length; i += PAGE_BATCH_SIZE) {
-            const batch = pagePromises.slice(i, i + PAGE_BATCH_SIZE);
-            const batchRes = await Promise.all(batch.map(fn => fn()));
-            pageResults.push(...batchRes);
-        }
-
-        const allData = [...firstPage];
-        for (const result of pageResults) {
-            if (result?.Data?.LSJZList) allData.push(...result.Data.LSJZList);
-        }
-        if (allData.length > 0) {
-            return allData
-                .slice(0, targetCount)
-                .map(item => ({ date: item.FSRQ, value: parseFloat(item.DWJZ) }))
-                .filter(i => !isNaN(i.value))
-                .reverse();
-        }
-    } catch (e) {
-        console.warn(`[History] Fund lsjz ${code} failed: ${e.message}`);
-    }
-    return null;
-}
-
 export async function GET(request) {
     const { searchParams } = new URL(request.url);
     const code = searchParams.get('code');
@@ -197,9 +85,9 @@ export async function GET(request) {
         // 3. 外部 API 获取
         let history = null;
         if (type === 'stock') {
-            history = await fetchStockHistoryServer(code, days);
+            history = await fetchStockHistory(code, days);
         } else if (type === 'fund') {
-            history = await fetchFundHistoryServer(code, days);
+            history = await fetchFundHistory(code, days);
         }
 
         if (!history || history.length === 0) {
