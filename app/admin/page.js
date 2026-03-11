@@ -340,7 +340,17 @@ export default function AdminPage() {
                                                 </div>
                                                 <div>
                                                     <h2 className="text-2xl font-black italic uppercase tracking-tighter">Full Stack Sentinel Feedback</h2>
-                                                    <p className="text-[10px] text-white/20 font-bold uppercase tracking-[0.2em]">All External Financial Protocol Heartbeats ({stats.api_health.length} Nodes detected)</p>
+                                                    <p className="text-[10px] text-white/20 font-bold uppercase tracking-[0.2em]">
+                                                        All External Financial Protocol Heartbeats ({stats.api_health.length} Nodes detected)
+                                                        {stats.api_health.length > 0 && (
+                                                            <span className="ml-2 text-cyan-500/40">
+                                                                • Last Pulse: {
+                                                                    new Date(Math.max(...stats.api_health.map(a => new Date(a.heartbeat_ts + 'Z').getTime())))
+                                                                        .toLocaleString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })
+                                                                }
+                                                            </span>
+                                                        )}
+                                                    </p>
                                                 </div>
                                             </div>
                                             <div className="flex items-center gap-2 px-4 py-2 bg-white/5 border border-white/5 rounded-2xl text-[10px] font-black uppercase tracking-widest text-cyan-500/60">
