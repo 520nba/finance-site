@@ -5,6 +5,10 @@ export const revalidate = 0;
 import { queryOne } from '@/lib/storage/d1Client';
 import { isAdminAuthorized } from '@/lib/auth';
 import { getAllApiHealth } from '@/lib/storage/healthRepo';
+import { memoryCache } from '@/lib/storage/memoryCache';
+
+const STATS_CACHE_KEY = 'admin_stats_full';
+const CACHE_TTL = 3600000; // 1 小时缓存
 
 /**
  * 管理后台核心统计接口
@@ -13,6 +17,11 @@ import { getAllApiHealth } from '@/lib/storage/healthRepo';
 export async function GET(request) {
     if (!(await isAdminAuthorized(request))) {
         return NextResponse.json({ error: 'Unauthorized' }, { status: 403 });
+    }
+
+    const cached = memoryCache.get(STATS_CACHE_KEY);
+    if (cached && (Date.now() - cached.timestamp < CACHE_TTL)) {
+        return NextResponse.json(cached.data);
     }
 
     try {
@@ -57,7 +66,7 @@ export async function GET(request) {
             })()
         ]);
 
-        return NextResponse.json({
+        const finalStats = {
             users: userCount,
             stocks: stockCount,
             funds: fundCount,
@@ -68,7 +77,15 @@ export async function GET(request) {
             queue_count: queueCount,
             db_engine: 'Cloudflare D1 (SQLite)',
             api_health: healthData || []
+        };
+
+        // 写入内存缓存
+        memoryCache.set(STATS_CACHE_KEY, {
+            data: finalStats,
+            timestamp: Date.now()
         });
+
+        return NextResponse.json(finalStats);
     } catch (e) {
         console.error('[AdminStats] Global Critical Failure:', e.message);
         return NextResponse.json({ error: 'INTERNAL_SERVER_ERROR' }, { status: 500 });
