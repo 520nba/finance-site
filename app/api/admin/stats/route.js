@@ -47,7 +47,14 @@ export async function GET(request) {
             wrapQuery('SELECT COUNT(*) as count FROM asset_quotes'),
             wrapQuery("SELECT COUNT(*) as count FROM asset_history WHERE created_at > datetime('now', '-24 hours')"),
             wrapQuery('SELECT COUNT(*) as count FROM sync_queue'),
-            getAllApiHealth()
+            (async () => {
+                try {
+                    return await getAllApiHealth();
+                } catch (e) {
+                    console.error('[AdminStats] Health check query failed:', e.message);
+                    return [];
+                }
+            })()
         ]);
 
         return NextResponse.json({
