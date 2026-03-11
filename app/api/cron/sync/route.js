@@ -62,7 +62,7 @@ export async function GET(request) {
         }
 
         const msg = `Processed ${processed} tasks, ${failed} failed.`;
-        await addSystemLog('INFO', 'SyncCron', msg);
+        console.log(`[SyncCron] ${msg}`);
 
         return NextResponse.json({ success: true, message: msg });
     } catch (e) {

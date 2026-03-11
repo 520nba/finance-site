@@ -24,7 +24,7 @@ export async function GET(request) {
         await addToSyncQueue(assets);
 
         const msg = `Daily: Queued ${assets.length} assets for full refresh.`;
-        await addSystemLog('INFO', 'DailyCron', msg);
+        console.log(`[DailyCron] ${msg}`);
 
         return NextResponse.json({ success: true, message: msg });
     } catch (e) {

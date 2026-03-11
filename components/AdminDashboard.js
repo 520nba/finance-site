@@ -29,8 +29,6 @@ export default function AdminDashboard({ isOpen, onClose }) {
     useEffect(() => {
         if (isOpen) {
             fetchStats();
-            const timer = setInterval(fetchStats, 30000); // 30s 自动刷新
-            return () => clearInterval(timer);
         }
     }, [isOpen]);
 
