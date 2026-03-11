@@ -100,14 +100,17 @@ CREATE TABLE IF NOT EXISTS api_health (
     error_msg TEXT
 );
 
+-- 计数器表 (维度 3 优化: 将 O(N) 统计降为 O(1))
+CREATE TABLE IF NOT EXISTS system_stats (
+    key TEXT PRIMARY KEY,
+    value INTEGER DEFAULT 0,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE INDEX IF NOT EXISTS idx_logs_timestamp ON system_logs(timestamp);
 
--- [Optimization] 提升历史查询和去重写入速度
-CREATE INDEX IF NOT EXISTS idx_asset_lookup ON asset_history (code, type, record_date DESC);
--- [Optimization] 提升同步队列死锁恢复逻辑的扫描效率
-CREATE INDEX IF NOT EXISTS idx_sync_queue_recovery ON sync_queue (status, updated_at);
--- [Optimization] 确保同步队列的主键唯一性，支持 INSERT OR REPLACE
-CREATE UNIQUE INDEX IF NOT EXISTS idx_sync_unique ON sync_queue (code, type);
+-- [Optimization] 提升同步队列死锁恢复/任务提取逻辑的扫描效率 (维度 1 优化)
+CREATE INDEX IF NOT EXISTS idx_sync_queue_lookup ON sync_queue (status, updated_at);
 
 -- [Optimization] 提升近期统计查询速度 (用于 recent_growth)
 CREATE INDEX IF NOT EXISTS idx_asset_history_created_at ON asset_history (created_at);

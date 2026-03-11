@@ -36,46 +36,43 @@ export async function GET(request) {
             }
         };
 
-        // 并行获取所有统计维度，极大缩短响应时长
-        const [
-            userCount,
-            stockCount,
-            fundCount,
-            histCount,
-            intraPointsCount,
-            quotesCount,
-            growthCount,
-            queueCount,
-            healthData
-        ] = await Promise.all([
-            wrapQuery('SELECT COUNT(*) as count FROM users'),
-            wrapQuery('SELECT COUNT(*) as count FROM asset_names WHERE type = "stock"'),
-            wrapQuery('SELECT COUNT(*) as count FROM asset_names WHERE type = "fund"'),
-            wrapQuery('SELECT COUNT(*) as count FROM asset_history'),
-            wrapQuery('SELECT COUNT(*) as count FROM asset_intraday_points'),
-            wrapQuery('SELECT COUNT(*) as count FROM asset_quotes'),
-            wrapQuery("SELECT COUNT(*) as count FROM asset_history WHERE created_at > datetime('now', '-24 hours')"),
-            wrapQuery('SELECT COUNT(*) as count FROM sync_queue'),
-            (async () => {
-                try {
-                    return await getAllApiHealth();
-                } catch (e) {
-                    console.error('[AdminStats] Health check query failed:', e.message);
-                    return [];
-                }
-            })()
+        const { searchParams } = new URL(request.url);
+        const shouldSync = searchParams.get('sync') === 'true';
+
+        // 1. 如果带了 sync 参数，执行昂贵的全量校准 (仅限管理员手动操作)
+        if (shouldSync) {
+            const { syncCounterFromTable } = await import('@/lib/storage/statsRepo');
+            await Promise.all([
+                syncCounterFromTable('users', 'users'),
+                syncCounterFromTable('asset_stocks', 'asset_names', 'type = "stock"'),
+                syncCounterFromTable('asset_funds', 'asset_names', 'type = "fund"'),
+                syncCounterFromTable('history_points', 'asset_history'),
+                syncCounterFromTable('intraday_points', 'asset_intraday_points'),
+                syncCounterFromTable('quotes_count', 'asset_quotes'),
+                syncCounterFromTable('queue_count', 'sync_queue')
+            ]);
+        }
+
+        // 2. 从计数器批量获取数据 (O(1) 复杂度)
+        const { getCounters } = await import('@/lib/storage/statsRepo');
+        const counters = await getCounters([
+            'users', 'asset_stocks', 'asset_funds', 'history_points',
+            'intraday_points', 'quotes_count', 'queue_count'
         ]);
 
+        const healthData = await (async () => {
+            try { return await getAllApiHealth(); } catch (e) { return []; }
+        })();
+
         const finalStats = {
-            users: userCount,
-            stocks: stockCount,
-            funds: fundCount,
-            history_points: histCount,
-            intraday_points: intraPointsCount,
-            quotes_count: quotesCount,
-            recent_growth: growthCount,
-            queue_count: queueCount,
-            db_engine: 'Cloudflare D1 (SQLite)',
+            users: counters.users,
+            stocks: counters.asset_stocks,
+            funds: counters.asset_funds,
+            history_points: counters.history_points,
+            intraday_points: counters.intraday_points,
+            quotes_count: counters.quotes_count,
+            queue_count: counters.queue_count,
+            db_engine: 'Cloudflare D1 (SQLite) + Counters',
             api_health: healthData || []
         };
 

@@ -2,20 +2,21 @@
 
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, ShieldCheck, Activity, Wifi, WifiOff, Zap, BarChart3, Database } from 'lucide-react';
+import { X, ShieldCheck, Activity, Wifi, WifiOff, Zap, BarChart3, Database, RefreshCw } from 'lucide-react';
 
 export default function AdminDashboard({ isOpen, onClose }) {
     const [stats, setStats] = useState(null);
     const [loading, setLoading] = useState(false);
 
-    const fetchStats = async () => {
+    const fetchStats = async (forceSync = false) => {
         setLoading(true);
         try {
-            const url = new URL(window.location.href);
-            const key = url.searchParams.get('key') || url.searchParams.get('token');
+            const currentUrl = new URL(window.location.href);
+            const key = currentUrl.searchParams.get('key') || currentUrl.searchParams.get('token');
             const headers = key ? { 'x-admin-key': key } : {};
 
-            const res = await fetch('/api/admin/stats', { headers });
+            const targetUrl = forceSync ? '/api/admin/stats?sync=true' : '/api/admin/stats';
+            const res = await fetch(targetUrl, { headers });
             if (res.ok) {
                 const data = await res.json();
                 setStats(data);
@@ -97,7 +98,19 @@ export default function AdminDashboard({ isOpen, onClose }) {
                                     { label: 'Data Points', value: (stats?.history_points / 1000).toFixed(1) + 'K', icon: <Database size={18} />, color: 'text-purple-400' },
                                     { label: 'DB Engine', value: 'D1/SQLite', icon: <BarChart3 size={18} />, color: 'text-cyan-400' }
                                 ].map((kpi, i) => (
-                                    <div key={i} className="bg-white/[0.03] border border-white/5 p-6 rounded-3xl group hover:border-white/10 transition-all">
+                                    <div key={i} className="bg-white/[0.03] border border-white/5 p-6 rounded-3xl group hover:border-white/10 transition-all relative">
+                                        <div className="absolute top-6 right-6">
+                                            {i === 0 && (
+                                                <button
+                                                    onClick={() => fetchStats(true)}
+                                                    disabled={loading}
+                                                    title="校准并刷新所有计数器 (耗费 D1 读取)"
+                                                    className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 transition-colors text-white/30 hover:text-white/60"
+                                                >
+                                                    <RefreshCw size={12} className={loading ? 'animate-spin' : ''} />
+                                                </button>
+                                            )}
+                                        </div>
                                         <div className={`p-2 w-fit rounded-lg bg-white/5 mb-4 ${kpi.color}`}>
                                             {kpi.icon}
                                         </div>
