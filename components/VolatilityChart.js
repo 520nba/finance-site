@@ -18,16 +18,26 @@ export default function VolatilityChart({ data, title, color = '#3b82f6', height
         },
         grid: {
             top: compact ? 10 : 20,
-            left: compact ? 0 : 10,
-            right: compact ? 0 : 10,
-            bottom: compact ? 0 : 10,
+            left: compact ? 15 : 10,  // 留出空间防止日期被裁
+            right: compact ? 15 : 10, // 留出空间防止日期被裁
+            bottom: compact ? 22 : 10,
             containLabel: !compact,
         },
         xAxis: {
             type: 'category',
             data: data.map(d => d.date),
             axisLine: { lineStyle: { color: 'rgba(255, 255, 255, 0.1)' } },
-            axisLabel: { show: false },
+            axisLabel: {
+                show: true,
+                interval: (index) => index === 0 || index === data.length - 1,
+                formatter: (val) => {
+                    const parts = val.split('-');
+                    return `${parts[1]}-${parts[2]}`;
+                },
+                color: 'rgba(255, 255, 255, 0.2)',
+                fontSize: 9
+            },
+            axisTick: { show: false }
         },
         yAxis: {
             type: 'value',

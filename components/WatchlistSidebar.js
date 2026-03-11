@@ -121,6 +121,24 @@ export default function WatchlistSidebar({ assets, mode = 'volatility', selected
                     <span className="text-xs font-bold uppercase tracking-widest opacity-40">
                         {mode === 'realtime' ? '实时监控' : '自选清单'}
                     </span>
+                    {mode !== 'realtime' && (
+                        <span className="text-[10px] font-bold text-cyan-400/60 uppercase tracking-tighter ml-1">
+                            {(() => {
+                                let latest = '';
+                                assets.forEach(a => {
+                                    const key = `${a.type}:${a.code}`;
+                                    const h = (statsData[key]?.history) || a.history || [];
+                                    if (h.length > 0) {
+                                        const d = h[h.length - 1].date;
+                                        if (d > latest) latest = d;
+                                    }
+                                });
+                                if (!latest) return '';
+                                const [y, m, d] = latest.split('-');
+                                return `(更新至${parseInt(m)}月${parseInt(d)}日)`;
+                            })()}
+                        </span>
+                    )}
                     <span className="ml-auto text-xs font-mono opacity-20">{assets.length}</span>
                 </div>
 
