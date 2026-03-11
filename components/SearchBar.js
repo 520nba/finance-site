@@ -36,7 +36,7 @@ export default function SearchBar({ onAdd }) {
 
         setError('');
         setIsLoading(true);
-        await onAdd(code);
+        await onAdd(code.toLowerCase());
         setQuery('');
         setIsLoading(false);
     };
@@ -53,8 +53,9 @@ export default function SearchBar({ onAdd }) {
 
         let success = 0;
         for (let i = 0; i < valid.length; i++) {
-            setBatchProgress({ done: i, total: valid.length, msg: `正在添加 ${valid[i]}…` });
-            await onAdd(valid[i]);
+            const normalizedCode = valid[i].toLowerCase();
+            setBatchProgress({ done: i, total: valid.length, msg: `正在添加 ${normalizedCode}…` });
+            await onAdd(normalizedCode);
             success++;
         }
 
