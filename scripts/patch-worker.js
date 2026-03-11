@@ -16,9 +16,16 @@ if (fs.existsSync(workerPath)) {
       "https://finance.380220.xyz/api/cron/health?token=" + (env.CRON_SECRET || "")
     ];
     console.log("[Trigger] Dispatching Cron Tasks...");
-    for(const url of urls) {
-      try { await fetch(url); } catch(e) { console.error("[Trigger] FAILED:", url, e.message); }
-    }
+    
+    // 使用 Promise.all 并行触发并等待，确保 Worker 不会在请求完成前关闭
+    const tasks = urls.map(url => 
+      fetch(url)
+        .then(res => console.log(\`[Trigger] SUCCESS [\${res.status}]: \`, url))
+        .catch(e => console.error("[Trigger] FAILED:", url, e.message))
+    );
+    
+    await Promise.all(tasks);
+    console.log("[Trigger] All tasks dispatched and awaited.");
   },`;
 
     // 查找到 export default {
