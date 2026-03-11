@@ -78,6 +78,10 @@ export async function POST(request) {
         // 3. 校准计数器
         await syncCounterFromTable('history_points', 'asset_history');
 
+        // 4. 记录到系统日志 (System Pulse Records)
+        const { addSystemLog } = await import('@/lib/storage/logRepo');
+        await addSystemLog('WARN', 'ForceSync', `Manual Trigger [${type}]: ${successCount} success, ${failCount} failed.`);
+
         return NextResponse.json({
             success: true,
             message: `Force synced ${type}s: ${successCount} success, ${failCount} failed.`
