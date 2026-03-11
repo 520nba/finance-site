@@ -64,6 +64,9 @@ export async function GET(request) {
         const msg = `Processed ${processed} tasks, ${failed} failed.`;
         console.log(`[SyncCron] ${msg}`);
 
+        // 维度 3 优化: 将异步执行结果记入日志，方便在 System Pulse 观察进度
+        await addSystemLog('WARN', 'SyncCron', msg);
+
         return NextResponse.json({ success: true, message: msg });
     } catch (e) {
         console.error('[SyncCron] Global failure:', e.message);
