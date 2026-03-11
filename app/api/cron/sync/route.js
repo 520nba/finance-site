@@ -14,8 +14,8 @@ export async function GET(request) {
     // 这里简单处理，返回执行结果
 
     try {
-        // 1. 获取本批次任务 (限制 10 条，避免单次执行时间太长)
-        const tasks = await getSyncTasks(10);
+        // 1. 获取本批次任务 (限制 50 条，确保每日消化速度大于产出)
+        const tasks = await getSyncTasks(50);
         if (tasks.length === 0) {
             return NextResponse.json({ success: true, message: 'No pending sync tasks' });
         }
