@@ -15,7 +15,7 @@ if (fs.existsSync(workerPath)) {
       const normalizedCron = rawCron.replace(/\s+/g, ' ').trim();
       const secret = env.CRON_SECRET || "";
       
-      // 1. 严格路由映射
+      // 1. 严格路由映射 (Strict Mapping)
       const routes = {
         "*/10 * * * *": [
           \`/api/cron/health?token=\${secret}\`,
@@ -34,29 +34,28 @@ if (fs.existsSync(workerPath)) {
       };
 
       // 2. 增强型负载判定 (Resilient Lookup)
-      // 优先级：原始字符串 -> 归一化字符串 -> 默认巡检
       const paths = routes[rawCron] || routes[normalizedCron] || routes["*/10 * * * *"];
 
-      console.log(\`[Trigger] Cron [\${normalizedCron}] MatchFound: \${!!routes[normalizedCron]}. Dispatching \${paths.length} tasks.\`);
+      console.log(\`[Trigger] Cron [\${normalizedCron}] Dispatching \${paths.length} tasks via Direct Invocation.\`);
       
-      // 3. 将所有内部请求封装为异步任务池
+      // 3. 内存级直调 (Zero-Network Subrequest)
+      // 跳过网络栈，直触 Worker 内部逻辑，规避一切回环寻址问题
       const tasks = paths.map(async path => {
         try {
-          // 使用显式的内部域名标记，防止由于 localhost 解析策略变更导致的潜在回环或 522 错误
-          const url = new URL(path, "http://127.0.0.1").toString();
-          const res = await fetch(url, {
+          const req = new Request(\`http://internal\${path}\`, {
              headers: { "x-internal-cron": "true" }
           });
+          // @ts-ignore - this.fetch refers to the main fetch handler in OpenNext worker export
+          const res = await this.fetch(req, env, ctx);
           const body = await res.text();
-          console.log(\`[Trigger] SUCCESS [\${res.status}]: \${path} -> \${body.slice(0, 100)}\`);
+          console.log(\`[Trigger] SUCCESS [\${res.status}]: \${path} -> \${body.slice(0, 50)}\`);
         } catch (e) {
-          console.error(\`[Trigger] FAILED: \${path} -> \${e.message}\`);
+          console.error(\`[Trigger] INTERNAL_INVOCATION_FAILED: \${path} -> \${e.message}\`);
         }
       });
       
-      const job = Promise.all(tasks);
-      ctx.waitUntil(job);
-      await job; 
+      // 在 scheduled 事件中直接 await 任务池即可
+      await Promise.all(tasks); 
     } catch (globalError) {
       console.error(\`[Trigger] Critical failure: \${globalError.message}\`);
     }
