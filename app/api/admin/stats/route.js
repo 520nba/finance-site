@@ -8,7 +8,7 @@ import { getAllApiHealth } from '@/lib/storage/healthRepo';
 import { memoryCache } from '@/lib/storage/memoryCache';
 
 const STATS_CACHE_KEY = 'admin_stats_full';
-const CACHE_TTL = 3600000; // 1 小时缓存
+const CACHE_TTL = 10000; // 10s 缓存 (Dashboard 需求近实时)
 
 /**
  * 管理后台核心统计接口

@@ -134,6 +134,7 @@ export async function GET() {
             status: computeStatus(success, latency),
             successRate: `${success ? 1 : 0}/1`,
             avgLatency: latency,
+            isSuccess: success, // 显式传递成功标志，增强健壮性
             errorMsg: success ? '' : (errorMsg || 'IO Error')
         };
     }));
