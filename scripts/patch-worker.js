@@ -12,7 +12,7 @@ if (fs.existsSync(workerPath)) {
   async scheduled(event, env, ctx) {
     try {
       const cron = event.cron;
-      const baseUrl = "https://finance.380220.xyz";
+      const baseUrl = "http://localhost";
       const secret = env.CRON_SECRET || "";
       
       let targetUrls = [];
@@ -26,13 +26,14 @@ if (fs.existsSync(workerPath)) {
         targetUrls = [\`\${baseUrl}/api/cron/health?token=\${secret}\`, \`\${baseUrl}/api/cron/sync?token=\${secret}\`];
       }
 
-      console.log(\`[Trigger] Cron [\${cron}] triggered. Dispatching \${targetUrls.length} tasks.\`);
+      console.log(\`[Trigger] Cron [\${cron}] Dispatching \${targetUrls.length} tasks via localhost.\`);
       
-      const tasks = targetUrls.map(url => 
-        fetch(url)
+      const tasks = targetUrls.map(url => {
+        console.log(\`[Trigger] Fetching: \${url}\`);
+        return fetch(url)
           .then(res => console.log(\`[Trigger] SUCCESS [\${res.status}]: \${url}\`))
-          .catch(e => console.error("[Trigger] FAILED:", url, e.message))
-      );
+          .catch(e => console.error("[Trigger] FAILED:", url, e.message));
+      });
       
       ctx.waitUntil(Promise.allSettled(tasks));
     } catch (globalError) {
