@@ -10,9 +10,10 @@ if (fs.existsSync(workerPath)) {
   if (!content.includes('async scheduled')) {
     const scheduledFunction = `
   async scheduled(event, env, ctx) {
+    const results = [];
     try {
       const cron = event.cron;
-      const baseUrl = "http://localhost";
+      const baseUrl = "https://finance.380220.xyz";
       const secret = env.CRON_SECRET || "";
       
       let targetUrls = [];
@@ -26,19 +27,31 @@ if (fs.existsSync(workerPath)) {
         targetUrls = [\`\${baseUrl}/api/cron/health?token=\${secret}\`, \`\${baseUrl}/api/cron/sync?token=\${secret}\`];
       }
 
-      console.log(\`[Trigger] Cron [\${cron}] Dispatching \${targetUrls.length} tasks via localhost.\`);
+      console.log(\`[Trigger] Cron [\${cron}] Dispatching \${targetUrls.length} tasks.\`);
       
-      const tasks = targetUrls.map(url => {
-        console.log(\`[Trigger] Fetching: \${url}\`);
-        return fetch(url)
-          .then(res => console.log(\`[Trigger] SUCCESS [\${res.status}]: \${url}\`))
-          .catch(e => console.error("[Trigger] FAILED:", url, e.message));
+      const tasks = targetUrls.map(async url => {
+        try {
+          const res = await fetch(url);
+          const body = await res.text();
+          const log = \`[Trigger] SUCCESS [\${res.status}]: \${url} -> \${body.slice(0, 100)}\`;
+          console.log(log);
+          return log;
+        } catch (e) {
+          const err = \`[Trigger] FAILED: \${url} -> \${e.message}\`;
+          console.error(err);
+          return err;
+        }
       });
       
-      ctx.waitUntil(Promise.allSettled(tasks));
+      const taskResults = await Promise.all(tasks);
+      results.push(...taskResults);
+      ctx.waitUntil(Promise.resolve(taskResults));
     } catch (globalError) {
-      console.error("[Trigger] Critical failure in scheduled handler:", globalError.message);
+      const gErr = \`[Trigger] Critical failure: \${globalError.message}\`;
+      console.error(gErr);
+      results.push(gErr);
     }
+    return results;
   },`;
 
     // 更加鲁棒的导出对象匹配
@@ -59,8 +72,16 @@ if (fs.existsSync(workerPath)) {
        console.log("[Debug] Manually triggering scheduled handler via /__manual_scheduled");
        const cron = debugUrl.searchParams.get("cron") || "*/10 * * * *";
        // @ts-ignore
-       await this.scheduled({ cron }, env, ctx);
-       return new Response("OK: Scheduled Triggered", { status: 200 });
+       const results = await this.scheduled({ cron }, env, ctx);
+       return new Response(JSON.stringify({ 
+         success: true, 
+         message: "Scheduled Triggered", 
+         results,
+         secretSet: !!env.CRON_SECRET
+       }, null, 2), { 
+         status: 200,
+         headers: { "Content-Type": "application/json" }
+       });
     }
 `;
         const fetchInsertionPoint = fetchMatch.index + fetchMatch[0].length;
