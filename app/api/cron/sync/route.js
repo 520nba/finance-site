@@ -14,8 +14,8 @@ export async function GET(request) {
     const timeoutId = setTimeout(() => controller.abort(), 25000); // 25s 强制熔断，留出 5s 给日志/返回
 
     try {
-        // 1. 原子化提取并锁定本批次任务 (减少单次数量，提升吞吐频率)
-        const tasks = await grabAndLockSyncTasks(5);
+        // 1. 原子化提取并锁定本批次任务 (增加单次数量以加快排队处理速度)
+        const tasks = await grabAndLockSyncTasks(10);
         if (tasks.length === 0) {
             return NextResponse.json({ success: true, message: 'No pending tasks' });
         }
