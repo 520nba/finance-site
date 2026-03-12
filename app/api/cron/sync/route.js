@@ -15,7 +15,8 @@ export async function GET(request) {
 
     try {
         // 1. 原子化提取并锁定本批次任务 (增加单次数量以加快排队处理速度)
-        const tasks = await grabAndLockSyncTasks(10);
+        // 增加到 25 以适应每 10 分钟一次的调度
+        const tasks = await grabAndLockSyncTasks(25);
         if (tasks.length === 0) {
             return NextResponse.json({ success: true, message: 'No pending tasks' });
         }

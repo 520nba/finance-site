@@ -669,14 +669,37 @@ function AdminCommandCenter() {
                                                     <p className="text-[10px] text-white/20 font-bold uppercase tracking-[0.2em]">当前 D1 节点正在等待调度或同步中的任务清单</p>
                                                 </div>
                                             </div>
-                                            <button
-                                                onClick={fetchQueue}
-                                                disabled={queueLoading}
-                                                className="flex items-center gap-2 px-6 py-3 bg-white/5 hover:bg-white/10 rounded-2xl border border-white/5 transition-all group"
-                                            >
-                                                <RefreshCcw size={14} className={`text-white/40 group-hover:text-white/80 ${queueLoading ? 'animate-spin' : ''}`} />
-                                                <span className="text-[10px] font-black uppercase tracking-widest text-white/60 group-hover:text-white/90">立即刷新清单</span>
-                                            </button>
+                                            <div className="flex gap-3">
+                                                <button
+                                                    onClick={async () => {
+                                                        setQueueLoading(true);
+                                                        try {
+                                                            const res = await fetch('/api/cron/sync', { headers: { 'x-admin-key': secretKey } });
+                                                            const data = await res.json();
+                                                            showToast(data.message || '指令已送达', 'success');
+                                                            await fetchQueue();
+                                                            await fetchAllData(secretKey, true);
+                                                        } catch (e) {
+                                                            showToast('手动触发失败');
+                                                        } finally {
+                                                            setQueueLoading(false);
+                                                        }
+                                                    }}
+                                                    disabled={queueLoading}
+                                                    className="flex items-center gap-2 px-6 py-3 bg-cyan-600/10 hover:bg-cyan-600/20 text-cyan-400 rounded-2xl border border-cyan-500/10 transition-all group"
+                                                >
+                                                    <Zap size={14} className={queueLoading ? 'animate-pulse' : ''} />
+                                                    <span className="text-[10px] font-black uppercase tracking-widest">手动消化批处理 (25)</span>
+                                                </button>
+                                                <button
+                                                    onClick={fetchQueue}
+                                                    disabled={queueLoading}
+                                                    className="flex items-center gap-2 px-6 py-3 bg-white/5 hover:bg-white/10 rounded-2xl border border-white/5 transition-all group"
+                                                >
+                                                    <RefreshCcw size={14} className={`text-white/40 group-hover:text-white/80 ${queueLoading ? 'animate-spin' : ''}`} />
+                                                    <span className="text-[10px] font-black uppercase tracking-widest text-white/60 group-hover:text-white/90">立即刷新清单</span>
+                                                </button>
+                                            </div>
                                         </div>
 
                                         <div className="bg-white/[0.02] border border-white/5 rounded-[3rem] overflow-hidden backdrop-blur-3xl shadow-2xl">

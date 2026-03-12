@@ -15,14 +15,20 @@ if (fs.existsSync(workerPath)) {
       const cron = event.cron;
       const secret = env.CRON_SECRET || "";
       
+      const cronMatch = cron.replace(/\s+/g, ' ').trim();
+      
       let paths = [];
-      if (cron === "*/10 * * * *") {
-        paths = [\`/api/cron/health?token=\${secret}\`];
-      } else if (cron === "0 13 * * 1-5") {
-        paths = [\`/api/cron/daily?token=\${secret}\`];
-      } else if (cron === "*/5 1-7 * * 1-5") {
+      if (cronMatch === "*/10 * * * *" || cronMatch === "*/10 * * * *") {
+        // 每 10 分钟运行一次：健康检查 + 少量同步 (均衡负载)
+        paths = [\`/api/cron/health?token=\${secret}\`, \`/api/cron/sync?token=\${secret}\`];
+      } else if (cronMatch.includes("0 13") || cronMatch.includes("0 19")) {
+        // 每日全量调度
+        paths = [\`/api/cron/daily?token=\${secret}\`, \`/api/cron/sync?token=\${secret}\`];
+      } else if (cronMatch.includes("*/5")) {
+        // 高频同步时段
         paths = [\`/api/cron/sync?token=\${secret}\`];
       } else {
+        // 默认全量
         paths = [\`/api/cron/health?token=\${secret}\`, \`/api/cron/sync?token=\${secret}\`];
       }
 
