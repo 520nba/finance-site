@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, Suspense } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
     Trash2, Users, ShieldAlert, Activity, PieChart, TrendingUp, RefreshCcw,
@@ -13,6 +13,18 @@ import { useRouter, useSearchParams } from 'next/navigation';
  * 整合了用户管理、数据库统计、系统日志以及外部 API 健康监控。
  */
 export default function AdminPage() {
+    return (
+        <Suspense fallback={
+            <div className="min-h-screen bg-[#050510] flex items-center justify-center">
+                <div className="w-12 h-12 border-2 border-white/10 border-t-cyan-500 rounded-full animate-spin" />
+            </div>
+        }>
+            <AdminCommandCenter />
+        </Suspense>
+    );
+}
+
+function AdminCommandCenter() {
     const [users, setUsers] = useState([]);
     const [stats, setStats] = useState({
         users: 0,
