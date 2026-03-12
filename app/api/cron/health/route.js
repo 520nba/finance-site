@@ -36,38 +36,38 @@ export async function GET() {
      */
     function computeStatus(success, latency) {
         if (!success) return 'down';
-        if (latency < 800) return 'healthy'; // 1500->800, 真正的健康
-        if (latency < 1500) return 'wary';    // 超过 800 开始略显疲态
-        if (latency < 3000) return 'slow';    // 极慢
-        return 'warning';
+        if (latency < 800) return 'healthy';
+        if (latency < 1500) return 'wary';
+        if (latency < 3000) return 'slow';
+        return 'critical'; // warning -> critical (Semantic Fix)
     }
 
     const healthTasks = [
         {
             name: 'Hist: EastMoney (Stock)',
-            fn: async () => {
-                const data = await fetchStockEastmoney(STOCK_TEST, 1);
+            fn: async (signal) => {
+                const data = await fetchStockEastmoney(STOCK_TEST, 1, signal);
                 return data && data.length > 0 && typeof data[0].value === 'number';
             }
         },
         {
             name: 'Hist: Tencent (Stock)',
-            fn: async () => {
-                const data = await fetchStockTencent(STOCK_TEST, 1);
+            fn: async (signal) => {
+                const data = await fetchStockTencent(STOCK_TEST, 1, signal);
                 return data && data.length > 0 && typeof data[0].value === 'number';
             }
         },
         {
             name: 'Hist: Sina (Stock)',
-            fn: async () => {
-                const data = await fetchStockSina(STOCK_TEST, 1);
+            fn: async (signal) => {
+                const data = await fetchStockSina(STOCK_TEST, 1, signal);
                 return data && data.length > 0 && typeof data[0].value === 'number';
             }
         },
         {
             name: 'Hist: EastMoney (Fund)',
-            fn: async () => {
-                const data = await fetchFundHistory(FUND_TEST, 1);
+            fn: async (signal) => {
+                const data = await fetchFundHistory(FUND_TEST, 1, signal);
                 return data && data.length > 0 && typeof data[0].value === 'number';
             }
         },
@@ -113,7 +113,7 @@ export async function GET() {
         }
     ];
 
-    // 并行执行：巡检速度从 15s+ 缩短至 1s~2s 左右
+    // 并行执行 API 巡检
     const results = await Promise.all(healthTasks.map(async (task) => {
         const start = Date.now();
         let success = false;
@@ -129,22 +129,23 @@ export async function GET() {
             errorMsg = e.name === 'AbortError' ? 'Timeout (6s)' : e.message;
         }
 
-        const stats = {
+        return {
+            name: task.name,
             status: computeStatus(success, latency),
-            successRate: success ? 100 : 0, // HealthRepo 会根据此值进行滚动累计计算
+            successRate: success ? 100 : 0,
             avgLatency: latency,
             errorMsg: success ? '' : (errorMsg || 'IO Error')
         };
-
-        // 异步写入 D1，由于 HealthRepo 内部没有进行耗时读操作，可以并行
-        await updateApiHealth(task.name, stats);
-        return { name: task.name, ...stats };
     }));
 
-    const verifyCount = (await queryOne('SELECT COUNT(*) as count FROM api_health'))?.count || 0;
+    // 串行写入 D1，防止 SQLite 并发写瓶颈
+    for (const r of results) {
+        await updateApiHealth(r.name, r);
+    }
 
-    // 只有在全部任务完成后才记录一次系统汇总日志
-    const msg = `Sentinel verified ${results.length} nodes. Success: ${results.filter(r => r.status === 'healthy').length}`;
+    // 更新系统汇总日志 (排除 down 状态即算广义成功)
+    const successCount = results.filter(r => r.status !== 'down').length;
+    const msg = `Sentinel verified ${results.length} nodes. Success: ${successCount}`;
     await addSystemLog('INFO', 'Sentinel', msg);
 
     return NextResponse.json({ success: true, count: results.length, data: results });

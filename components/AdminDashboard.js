@@ -276,9 +276,19 @@ export default function AdminDashboard({ isOpen, onClose }) {
                                                                         <div className="w-1.5 h-1.5 rounded-full bg-yellow-500"></div>
                                                                         Delayed
                                                                     </div>
+                                                                ) : api.status === 'slow' ? (
+                                                                    <div className="flex items-center gap-2 px-3 py-1 bg-orange-500/10 text-orange-500 rounded-full text-[10px] font-black uppercase tracking-tighter border border-orange-500/20">
+                                                                        <div className="w-1.5 h-1.5 rounded-full bg-orange-500"></div>
+                                                                        Unstable
+                                                                    </div>
+                                                                ) : api.status === 'critical' ? (
+                                                                    <div className="flex items-center gap-2 px-3 py-1 bg-red-600/10 text-red-500 rounded-full text-[10px] font-black uppercase tracking-tighter border border-red-600/20">
+                                                                        <div className="w-1.5 h-1.5 rounded-full bg-red-600 animate-bounce"></div>
+                                                                        Critical
+                                                                    </div>
                                                                 ) : (
-                                                                    <div className="flex items-center gap-2 px-3 py-1 bg-red-500/10 text-red-500 rounded-full text-[10px] font-black uppercase tracking-tighter border border-red-500/20">
-                                                                        <div className="w-1.5 h-1.5 rounded-full bg-red-500"></div>
+                                                                    <div className="flex items-center gap-2 px-3 py-1 bg-red-900/20 text-red-700 rounded-full text-[10px] font-black uppercase tracking-tighter border border-red-900/30">
+                                                                        <div className="w-1.5 h-1.5 rounded-full bg-red-900"></div>
                                                                         Offline
                                                                     </div>
                                                                 )}

@@ -93,10 +93,15 @@ CREATE INDEX IF NOT EXISTS idx_sync_queue_status ON sync_queue(status);
 -- 外部 API 健康监控
 CREATE TABLE IF NOT EXISTS api_health (
     api_name TEXT PRIMARY KEY,
-    status TEXT DEFAULT 'unknown', -- healthy, wary, down
+    status TEXT DEFAULT 'unknown',
     success_rate REAL DEFAULT 0,
     avg_latency INTEGER DEFAULT 0,
+    success_count INTEGER DEFAULT 0,
+    fail_count INTEGER DEFAULT 0,
+    total_count INTEGER DEFAULT 0,
+    recent_results TEXT DEFAULT '',
     last_check DATETIME DEFAULT CURRENT_TIMESTAMP,
+    heartbeat_ts DATETIME DEFAULT CURRENT_TIMESTAMP,
     error_msg TEXT
 );
 

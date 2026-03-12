@@ -488,17 +488,27 @@ function AdminCommandCenter() {
                                                                             {api.status === 'healthy' ? (
                                                                                 <div className="flex items-center gap-2 px-3 py-1 bg-emerald-500/10 text-emerald-400 rounded-full text-[9px] font-black uppercase tracking-tighter border border-emerald-500/20">
                                                                                     <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                                                                                    Optimal
+                                                                                    Healthy
                                                                                 </div>
                                                                             ) : api.status === 'wary' ? (
                                                                                 <div className="flex items-center gap-2 px-3 py-1 bg-yellow-500/10 text-yellow-500 rounded-full text-[9px] font-black uppercase tracking-tighter border border-yellow-500/20">
                                                                                     <div className="w-1.5 h-1.5 rounded-full bg-yellow-500" />
-                                                                                    Wary
+                                                                                    Delayed
+                                                                                </div>
+                                                                            ) : api.status === 'slow' ? (
+                                                                                <div className="flex items-center gap-2 px-3 py-1 bg-orange-500/10 text-orange-400 rounded-full text-[9px] font-black uppercase tracking-tighter border border-orange-500/20">
+                                                                                    <div className="w-1.5 h-1.5 rounded-full bg-orange-400" />
+                                                                                    Unstable
+                                                                                </div>
+                                                                            ) : api.status === 'critical' ? (
+                                                                                <div className="flex items-center gap-2 px-3 py-1 bg-red-600/10 text-red-500 rounded-full text-[9px] font-black uppercase tracking-tighter border border-red-600/20">
+                                                                                    <div className="w-1.5 h-1.5 rounded-full bg-red-600 animate-bounce" />
+                                                                                    Critical
                                                                                 </div>
                                                                             ) : (
-                                                                                <div className="flex items-center gap-2 px-3 py-1 bg-red-500/10 text-red-500 rounded-full text-[9px] font-black uppercase tracking-tighter border border-red-500/20">
-                                                                                    <div className="w-1.5 h-1.5 rounded-full bg-red-500" />
-                                                                                    Down
+                                                                                <div className="flex items-center gap-2 px-3 py-1 bg-red-900/20 text-red-700 rounded-full text-[9px] font-black uppercase tracking-tighter border border-red-900/30">
+                                                                                    <div className="w-1.5 h-1.5 rounded-full bg-red-900" />
+                                                                                    Offline
                                                                                 </div>
                                                                             )}
                                                                         </div>
