@@ -10,59 +10,55 @@ if (fs.existsSync(workerPath)) {
   if (!content.includes('async scheduled')) {
     const scheduledFunction = `
   async scheduled(event, env, ctx) {
-    const results = [];
     try {
-      const cron = event.cron;
+      const cron = (event.cron || "").replace(/\s+/g, ' ').trim();
       const secret = env.CRON_SECRET || "";
       
-      const cronMatch = cron.replace(/\s+/g, ' ').trim();
-      
-      let paths = [];
-      if (cronMatch === "*/10 * * * *" || cronMatch === "*/10 * * * *") {
-        // 每 10 分钟运行一次：健康检查 + 少量同步 (均衡负载)
-        paths = [\`/api/cron/health?token=\${secret}\`, \`/api/cron/sync?token=\${secret}\`];
-      } else if (cronMatch.includes("0 13") || cronMatch.includes("0 19")) {
-        // 每日全量调度
-        paths = [\`/api/cron/daily?token=\${secret}\`, \`/api/cron/sync?token=\${secret}\`];
-      } else if (cronMatch.includes("*/5")) {
-        // 高频同步时段
-        paths = [\`/api/cron/sync?token=\${secret}\`];
-      } else {
-        // 默认全量
-        paths = [\`/api/cron/health?token=\${secret}\`, \`/api/cron/sync?token=\${secret}\`];
-      }
+      // 1. 严格路由映射与 Fallback 逻辑
+      const routes = {
+        "*/10 * * * *": [
+          \`/api/cron/health?token=\${secret}\`,
+          \`/api/cron/sync?token=\${secret}\`
+        ],
+        "0 13 * * 1-5": [
+          \`/api/cron/daily?token=\${secret}\`,
+          \`/api/cron/sync?token=\${secret}\`
+        ],
+        "0 19 * * 1-6": [
+          \`/api/cron/sync?token=\${secret}\`
+        ],
+        "*/5 1-7 * * 1-5": [
+          \`/api/cron/sync?token=\${secret}\`
+        ]
+      };
 
-      console.log(\`[Trigger] Cron [\${cron}] Dispatching \${paths.length} tasks internally.\`);
+      // 如果找不到匹配的 Cron，默认回退到例行同步与巡检
+      const paths = routes[cron] || routes["*/10 * * * *"];
+
+      console.log(\`[Trigger] Cron [\${cron}] Dispatching \${paths.length} tasks.\`);
       
+      // 2. 将所有内部请求封装为异步任务池
       const tasks = paths.map(async path => {
         try {
-          // 使用 internal fetch (this.fetch) 绕过公网 DNS/SSL 和 Loopback 522 限制
+          // 使用 localhost 内部调用，无视外部公网延迟
           const url = \`http://localhost\${path}\`;
-          const req = new Request(url, {
+          const res = await fetch(url, {
              headers: { "x-internal-cron": "true" }
           });
-          // @ts-ignore
-          const res = await this.fetch(req, env, ctx);
           const body = await res.text();
-          const log = \`[Trigger] SUCCESS [\${res.status}]: \${path} -> \${body.slice(0, 100)}\`;
-          console.log(log);
-          return log;
+          console.log(\`[Trigger] SUCCESS [\${res.status}]: \${path} -> \${body.slice(0, 100)}\`);
         } catch (e) {
-          const err = \`[Trigger] FAILED: \${path} -> \${e.message}\`;
-          console.error(err);
-          return err;
+          console.error(\`[Trigger] FAILED: \${path} -> \${e.message}\`);
         }
       });
       
-      const taskResults = await Promise.all(tasks);
-      results.push(...taskResults);
-      ctx.waitUntil(Promise.resolve(taskResults));
+      // 3. 正确管理 Worker 生命周期 (Cloudflare 推荐实践)
+      const job = Promise.all(tasks);
+      ctx.waitUntil(job);
+      await job; 
     } catch (globalError) {
-      const gErr = \`[Trigger] Critical failure: \${globalError.message}\`;
-      console.error(gErr);
-      results.push(gErr);
+      console.error(\`[Trigger] Critical failure: \${globalError.message}\`);
     }
-    return results;
   },`;
 
     // 更加鲁棒的导出对象匹配
@@ -80,15 +76,18 @@ if (fs.existsSync(workerPath)) {
         const debugRoute = `
     const debugUrl = new URL(request.url);
     if (debugUrl.pathname === "/__manual_scheduled") {
+       // 安全第一：手动触发必须校验 token
+       if (debugUrl.searchParams.get("token") !== env.CRON_SECRET) {
+          console.warn("[Debug] Unauthorized access attempt to /__manual_scheduled");
+          return new Response("Unauthorized", { status: 401 });
+       }
        console.log("[Debug] Manually triggering scheduled handler via /__manual_scheduled");
        const cron = debugUrl.searchParams.get("cron") || "*/10 * * * *";
-       // @ts-ignore
-       const results = await this.scheduled({ cron }, env, ctx);
+       // @ts-ignore - Trigger internal handler
+       await this.scheduled({ cron }, env, ctx);
        return new Response(JSON.stringify({ 
          success: true, 
-         message: "Scheduled Triggered", 
-         results,
-         secretSet: !!env.CRON_SECRET
+         message: "Manual Scheduled Triggered Successfully"
        }, null, 2), { 
          status: 200,
          headers: { "Content-Type": "application/json" }
