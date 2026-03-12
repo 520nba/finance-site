@@ -2,36 +2,87 @@
 
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, ShieldCheck, Activity, Wifi, WifiOff, Zap, BarChart3, Database, RefreshCw } from 'lucide-react';
+import { X, ShieldCheck, Activity, Wifi, WifiOff, Zap, BarChart3, Database, RefreshCw, TrendingUp, PieChart } from 'lucide-react';
+import { useSearchParams } from 'next/navigation';
 
 export default function AdminDashboard({ isOpen, onClose }) {
     const [stats, setStats] = useState(null);
     const [loading, setLoading] = useState(false);
+    const [confirmAction, setConfirmAction] = useState(null); // { type, message, onConfirm }
+
+    const [toast, setToast] = useState(null);
+    const showToast = (msg, type = 'error') => {
+        setToast({ msg, type });
+        setTimeout(() => setToast(null), 3000);
+    };
+
+    const searchParamsHooks = useSearchParams();
 
     const fetchStats = async (forceSync = false) => {
         setLoading(true);
         try {
-            const currentUrl = new URL(window.location.href);
-            const key = currentUrl.searchParams.get('key') || currentUrl.searchParams.get('token');
+            const key = searchParamsHooks.get('key') || searchParamsHooks.get('token') || sessionStorage.getItem('tracker_admin_secret');
             const headers = key ? { 'x-admin-key': key } : {};
 
-            const targetUrl = forceSync ? '/api/admin/stats?sync=true' : '/api/admin/stats';
-            const res = await fetch(targetUrl, { headers });
+            const url = new URL(forceSync ? '/api/admin/stats?sync=true' : '/api/admin/stats', window.location.origin);
+            if (key) url.searchParams.set('token', key);
+
+            const res = await fetch(url.toString(), { headers });
             if (res.ok) {
                 const data = await res.json();
                 setStats(data);
+            } else if (res.status === 403) {
+                showToast('Unauthorized: Check your admin key.');
             }
         } catch (e) {
             console.error('Failed to fetch admin stats:', e);
+            showToast('Connection Refused');
+        } finally {
+            setLoading(false);
         }
-        setLoading(false);
+    };
+
+    const triggerSync = async (type) => {
+        const typeZh = type === 'fund' ? '基金' : '股票';
+
+        setConfirmAction({
+            message: `!! Force Data Re-Sync !!\n\nThis will re-fetch all historical data for tracked ${typeZh}s. This consumes D1 resources.\n\nContinue?`,
+            onConfirm: async () => {
+                setLoading(true);
+                try {
+                    const key = searchParamsHooks.get('key') || searchParamsHooks.get('token') || sessionStorage.getItem('tracker_admin_secret');
+                    const headers = {
+                        'Content-Type': 'application/json',
+                        'x-admin-key': key
+                    };
+
+                    const res = await fetch(`/api/admin/force-sync?token=${key}`, {
+                        method: 'POST',
+                        headers,
+                        body: JSON.stringify({ type })
+                    });
+                    const data = await res.json();
+                    if (res.ok) {
+                        showToast(`[Success] ${data.message}`, 'success');
+                        await fetchStats(true);
+                    } else {
+                        showToast(data.error || 'Server rejected sync task');
+                    }
+                } catch (e) {
+                    showToast('Request failed');
+                } finally {
+                    setLoading(false);
+                    setConfirmAction(null);
+                }
+            }
+        });
     };
 
     useEffect(() => {
-        if (isOpen) {
+        if (isOpen && !stats) {
             fetchStats();
         }
-    }, [isOpen]);
+    }, [isOpen, stats]);
 
     if (!isOpen) return null;
 
@@ -42,8 +93,58 @@ export default function AdminDashboard({ isOpen, onClose }) {
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
                 onClick={onClose}
-                className="absolute inset-0 bg-black/90 backdrop-blur-md"
+                className="absolute inset-0 bg-black/95 backdrop-blur-xl"
             />
+
+            <AnimatePresence>
+                {toast && (
+                    <motion.div
+                        initial={{ opacity: 0, y: -20, scale: 0.9 }}
+                        animate={{ opacity: 1, y: 0, scale: 1 }}
+                        exit={{ opacity: 0, y: -20, scale: 0.9 }}
+                        className={`fixed top-8 left-1/2 -translate-x-1/2 z-[200] flex items-center gap-3 px-6 py-4 rounded-2xl shadow-2xl font-mono text-sm border border-white/10 backdrop-blur-2xl whitespace-pre-wrap max-w-lg
+                            ${toast.type === 'error' ? 'bg-red-500/20 text-red-400' : 'bg-emerald-500/20 text-emerald-400'}`}
+                    >
+                        <div className={`w-2 h-2 rounded-full flex-shrink-0 animate-pulse ${toast.type === 'error' ? 'bg-red-500' : 'bg-emerald-500'}`} />
+                        {toast.msg}
+                    </motion.div>
+                )}
+
+                {confirmAction && (
+                    <div className="fixed inset-0 z-[300] flex items-center justify-center p-4">
+                        <motion.div
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: 1 }}
+                            exit={{ opacity: 0 }}
+                            className="absolute inset-0 bg-black/80 backdrop-blur-md"
+                            onClick={() => setConfirmAction(null)}
+                        />
+                        <motion.div
+                            initial={{ scale: 0.9, opacity: 0 }}
+                            animate={{ scale: 1, opacity: 1 }}
+                            exit={{ scale: 0.9, opacity: 0 }}
+                            className="relative bg-[#111] border border-white/10 p-8 rounded-[2rem] max-w-md w-full shadow-2xl"
+                        >
+                            <h3 className="text-xl font-black italic uppercase mb-4 text-cyan-400">Authorization Required</h3>
+                            <p className="text-white/60 text-sm mb-8 whitespace-pre-wrap leading-relaxed">{confirmAction.message}</p>
+                            <div className="flex gap-4">
+                                <button
+                                    onClick={() => setConfirmAction(null)}
+                                    className="flex-1 px-6 py-3 rounded-xl bg-white/5 hover:bg-white/10 font-bold text-sm transition-all"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    onClick={confirmAction.onConfirm}
+                                    className="flex-1 px-6 py-3 rounded-xl bg-cyan-600 hover:bg-cyan-500 font-black uppercase tracking-widest text-sm shadow-lg shadow-cyan-600/20 transition-all text-white"
+                                >
+                                    Proceed
+                                </button>
+                            </div>
+                        </motion.div>
+                    </div>
+                )}
+            </AnimatePresence>
 
             <motion.div
                 initial={{ scale: 0.9, opacity: 0, y: 40 }}
@@ -64,6 +165,18 @@ export default function AdminDashboard({ isOpen, onClose }) {
                     </div>
 
                     <div className="flex items-center gap-6">
+                        <div className="hidden lg:flex items-center gap-1 border border-white/5 px-4 py-2 rounded-xl bg-white/[0.02]">
+                            <button onClick={() => triggerSync('stock')} disabled={loading} title="Refresh Stocks" className="p-1.5 hover:text-emerald-400 transition-colors flex items-center gap-1.5 group/btn">
+                                <TrendingUp size={16} className="group-hover/btn:scale-110 transition-transform" />
+                                <span className="text-[9px] font-black uppercase tracking-tighter">Stocks Sync</span>
+                            </button>
+                            <div className="w-px h-3 bg-white/10 mx-1" />
+                            <button onClick={() => triggerSync('fund')} disabled={loading} title="Refresh Funds" className="p-1.5 hover:text-blue-400 transition-colors flex items-center gap-1.5 group/btn">
+                                <PieChart size={16} className="group-hover/btn:scale-110 transition-transform" />
+                                <span className="text-[9px] font-black uppercase tracking-tighter text-blue-400">Funds Sync</span>
+                            </button>
+                        </div>
+
                         <div className="hidden md:flex flex-col items-end">
                             <span className="text-[10px] text-white/20 font-black uppercase tracking-widest leading-none mb-1">Node Status</span>
                             <div className="flex items-center gap-2">
@@ -93,9 +206,10 @@ export default function AdminDashboard({ isOpen, onClose }) {
                             {/* Key Performance Indicators */}
                             <div className="grid grid-cols-2 lg:grid-cols-4 gap-6">
                                 {[
-                                    { label: 'Active Users', value: stats?.users, icon: <Activity size={18} />, color: 'text-blue-400' },
-                                    { label: 'Total Assets', value: (stats?.stocks + stats?.funds), icon: <Zap size={18} />, color: 'text-yellow-400' },
-                                    { label: 'Data Points', value: (stats?.history_points / 1000).toFixed(1) + 'K', icon: <Database size={18} />, color: 'text-purple-400' },
+                                    { label: 'Active Users', value: stats?.users ?? 0, icon: <Activity size={18} />, color: 'text-blue-400' },
+                                    { label: 'Total Assets', value: ((stats?.stocks ?? 0) + (stats?.funds ?? 0)), icon: <Zap size={18} />, color: 'text-yellow-400' },
+                                    { label: 'Sync Queue', value: stats?.queue_count ?? 0, icon: <RefreshCw size={18} />, color: 'text-orange-400' },
+                                    { label: 'Data Points', value: (((stats?.history_points ?? 0) / 1000).toFixed(1)) + 'K', icon: <Database size={18} />, color: 'text-purple-400' },
                                     { label: 'DB Engine', value: 'D1/SQLite', icon: <BarChart3 size={18} />, color: 'text-cyan-400' }
                                 ].map((kpi, i) => (
                                     <div key={i} className="bg-white/[0.03] border border-white/5 p-6 rounded-3xl group hover:border-white/10 transition-all relative">
@@ -141,46 +255,50 @@ export default function AdminDashboard({ isOpen, onClose }) {
                                             </tr>
                                         </thead>
                                         <tbody className="divide-y divide-white/[0.03]">
-                                            {stats?.api_health?.map((api) => (
-                                                <tr key={api.api_name} className="group hover:bg-white/[0.02] transition-colors">
-                                                    <td className="px-8 py-6">
-                                                        <div className="flex flex-col">
-                                                            <span className="font-bold text-white/80 group-hover:text-cyan-400 transition-colors">{api.api_name}</span>
-                                                            <span className="text-[9px] text-white/20 mt-1 uppercase font-mono">{api.error_msg || 'Endpoint Active'}</span>
-                                                        </div>
-                                                    </td>
-                                                    <td className="px-8 py-6">
-                                                        <div className="flex justify-center">
-                                                            {api.status === 'healthy' ? (
-                                                                <div className="flex items-center gap-2 px-3 py-1 bg-green-500/10 text-green-400 rounded-full text-[10px] font-black uppercase tracking-tighter border border-green-500/20">
-                                                                    <div className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse"></div>
-                                                                    Healthy
-                                                                </div>
-                                                            ) : api.status === 'wary' ? (
-                                                                <div className="flex items-center gap-2 px-3 py-1 bg-yellow-500/10 text-yellow-500 rounded-full text-[10px] font-black uppercase tracking-tighter border border-yellow-500/20">
-                                                                    <div className="w-1.5 h-1.5 rounded-full bg-yellow-500"></div>
-                                                                    Delayed
-                                                                </div>
-                                                            ) : (
-                                                                <div className="flex items-center gap-2 px-3 py-1 bg-red-500/10 text-red-500 rounded-full text-[10px] font-black uppercase tracking-tighter border border-red-500/20">
-                                                                    <div className="w-1.5 h-1.5 rounded-full bg-red-500"></div>
-                                                                    Offline
-                                                                </div>
-                                                            )}
-                                                        </div>
-                                                    </td>
-                                                    <td className="px-8 py-6 text-right">
-                                                        <span className="font-mono font-black text-lg text-white/60">{api.success_rate}%</span>
-                                                    </td>
-                                                    <td className="px-8 py-6 text-right">
-                                                        <span className="font-mono font-black text-white/40">{api.avg_latency}ms</span>
+                                            {stats?.api_health?.length ? (
+                                                stats.api_health.map((api) => (
+                                                    <tr key={api.api_name} className="group hover:bg-white/[0.02] transition-colors">
+                                                        <td className="px-8 py-6">
+                                                            <div className="flex flex-col">
+                                                                <span className="font-bold text-white/80 group-hover:text-cyan-400 transition-colors">{api.api_name}</span>
+                                                                <span className="text-[9px] text-white/20 mt-1 uppercase font-mono">{api.error_msg || 'Endpoint Active'}</span>
+                                                            </div>
+                                                        </td>
+                                                        <td className="px-8 py-6">
+                                                            <div className="flex justify-center">
+                                                                {api.status === 'healthy' ? (
+                                                                    <div className="flex items-center gap-2 px-3 py-1 bg-green-500/10 text-green-400 rounded-full text-[10px] font-black uppercase tracking-tighter border border-green-500/20">
+                                                                        <div className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse"></div>
+                                                                        Healthy
+                                                                    </div>
+                                                                ) : api.status === 'wary' ? (
+                                                                    <div className="flex items-center gap-2 px-3 py-1 bg-yellow-500/10 text-yellow-500 rounded-full text-[10px] font-black uppercase tracking-tighter border border-yellow-500/20">
+                                                                        <div className="w-1.5 h-1.5 rounded-full bg-yellow-500"></div>
+                                                                        Delayed
+                                                                    </div>
+                                                                ) : (
+                                                                    <div className="flex items-center gap-2 px-3 py-1 bg-red-500/10 text-red-500 rounded-full text-[10px] font-black uppercase tracking-tighter border border-red-500/20">
+                                                                        <div className="w-1.5 h-1.5 rounded-full bg-red-500"></div>
+                                                                        Offline
+                                                                    </div>
+                                                                )}
+                                                            </div>
+                                                        </td>
+                                                        <td className="px-8 py-6 text-right">
+                                                            <span className="font-mono font-black text-lg text-white/60">{api.success_rate ?? 0}%</span>
+                                                        </td>
+                                                        <td className="px-8 py-6 text-right">
+                                                            <span className={`font-mono font-black ${(api.avg_latency ?? 0) > 3000 ? 'text-red-400' : (api.avg_latency ?? 0) > 1500 ? 'text-yellow-400' : 'text-white/40'}`}>{api.avg_latency ?? '--'}ms</span>
+                                                        </td>
+                                                    </tr>
+                                                ))
+                                            ) : (
+                                                <tr>
+                                                    <td colSpan="4" className="px-8 py-12 text-center text-white/10 italic text-sm font-black uppercase tracking-widest">
+                                                        {loading ? 'Decrypting Heartbeat...' : 'Waiting for sentinel heartbeat...'}
                                                     </td>
                                                 </tr>
-                                            )) || (
-                                                    <tr>
-                                                        <td colSpan="4" className="px-8 py-12 text-center text-white/10 italic text-sm">Waiting for sentinel heartbeat...</td>
-                                                    </tr>
-                                                )}
+                                            )}
                                         </tbody>
                                     </table>
                                 </div>

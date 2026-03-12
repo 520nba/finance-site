@@ -6,7 +6,7 @@ import {
     Trash2, Users, ShieldAlert, Activity, PieChart, TrendingUp, RefreshCcw,
     LogOut, Code, FileText, Wifi, Zap, Database, BarChart3, Clock, LayoutGrid
 } from 'lucide-react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 
 /**
  * Admin Dashboard - Integrated Command Center
@@ -22,6 +22,7 @@ export default function AdminPage() {
         intraday_points: 0,
         quotes_count: 0,
         recent_growth: 0,
+        queue_count: 0,
         api_health: []
     });
     const [logs, setLogs] = useState([]);
@@ -30,35 +31,45 @@ export default function AdminPage() {
     const [isAuthenticated, setIsAuthenticated] = useState(false);
     const [toast, setToast] = useState(null);
     const [activeSection, setActiveSection] = useState('overview'); // overview, users, logs, health
-    const router = useRouter();
+    const [confirmAction, setConfirmAction] = useState(null); // { message, onConfirm }
+    const searchParamsHooks = useSearchParams();
+    const urlKey = searchParamsHooks.get('key') || searchParamsHooks.get('token');
 
     useEffect(() => {
-        const urlParams = new URL(window.location.href).searchParams;
-        const urlKey = urlParams.get('key') || urlParams.get('token');
         const cachedKey = sessionStorage.getItem('tracker_admin_secret');
-
         const finalKey = urlKey || cachedKey;
+
         if (finalKey) {
             setSecretKey(finalKey);
             fetchAllData(finalKey);
         }
-    }, []);
+    }, [urlKey]); // Only re-run if the key in URL actually changes
 
     const showToast = (msg, type = 'error') => {
         setToast({ msg, type });
         setTimeout(() => setToast(null), 3000);
     };
 
-    const fetchAllData = async (keyToUse = secretKey) => {
+    const fetchAllData = async (keyToUse, forceSyncStats = false) => {
         if (!keyToUse) return;
         setLoading(true);
 
         try {
-            const headers = { 'x-admin-key': keyToUse };
+            const statsUrl = new URL('/api/admin/stats', window.location.origin);
+            statsUrl.searchParams.set('token', keyToUse);
+            if (forceSyncStats) statsUrl.searchParams.set('sync', 'true');
+
+            const usersUrl = new URL('/api/user/list', window.location.origin);
+            usersUrl.searchParams.set('token', keyToUse);
+
+            const logsUrl = new URL('/api/admin/logs', window.location.origin);
+            logsUrl.searchParams.set('hours', '72');
+            logsUrl.searchParams.set('token', keyToUse);
+
             const [usersRes, statsRes, logsRes] = await Promise.all([
-                fetch(`/api/user/list?token=${keyToUse}`, { headers }),
-                fetch(`/api/admin/stats?token=${keyToUse}`, { headers }),
-                fetch(`/api/admin/logs?hours=72&token=${keyToUse}`, { headers })
+                fetch(usersUrl.toString(), { headers: { 'x-admin-key': keyToUse } }),
+                fetch(statsUrl.toString(), { headers: { 'x-admin-key': keyToUse } }),
+                fetch(logsUrl.toString(), { headers: { 'x-admin-key': keyToUse } })
             ]);
 
             if (statsRes.ok) {
@@ -75,43 +86,51 @@ export default function AdminPage() {
 
             if (logsRes.ok) {
                 const logsData = await logsRes.json();
-                setLogs(logsData.logs || []);
+                // 性能优化: 限制日志渲染数量
+                setLogs(logsData.logs?.slice(0, 500) || []);
             }
 
             if (!statsRes.ok && !usersRes.ok) {
-                if (keyToUse === secretKey) {
-                    showToast('鉴权失败: 密钥无效或无权限');
-                    setIsAuthenticated(false);
-                }
+                showToast('鉴权失败: 密钥无效或无权限');
+                setIsAuthenticated(false);
             }
         } catch (e) {
+            console.error('[Admin] Fetch failed:', e);
             showToast('无法连接服务器');
+        } finally {
+            setLoading(false);
         }
-        setLoading(false);
     };
 
     const deleteUser = async (targetUserId) => {
-        if (!confirm(`!! 危险操作 !!\n\n您即将删除用户 "${targetUserId}" 及其所有定制化的自选关联数据。\n\n确认执行吗？（不可逆）`)) return;
-
-        try {
-            const res = await fetch(`/api/user/delete?token=${secretKey}`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'x-admin-key': secretKey
-                },
-                body: JSON.stringify({ targetUserId }),
-            });
-            const data = await res.json();
-            if (res.ok) {
-                showToast(`已粉碎用户账户 [${targetUserId}]`, 'success');
-                fetchAllData();
-            } else {
-                showToast(data.error || '删除失败');
+        setConfirmAction({
+            message: `!! Danger Alert !!\n\nYou are about to purge user "${targetUserId}" and all associated data records.\n\nThis action cannot be undone. Confirm execution?`,
+            onConfirm: async () => {
+                setLoading(true);
+                try {
+                    const res = await fetch(`/api/user/delete?token=${secretKey}`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'x-admin-key': secretKey
+                        },
+                        body: JSON.stringify({ targetUserId }),
+                    });
+                    const data = await res.json();
+                    if (res.ok) {
+                        showToast(`Subject [${targetUserId}] terminated`, 'success');
+                        fetchAllData(secretKey);
+                    } else {
+                        showToast(data.error || 'Purge failed');
+                    }
+                } catch (e) {
+                    showToast('Communication Error');
+                } finally {
+                    setLoading(false);
+                    setConfirmAction(null);
+                }
             }
-        } catch (e) {
-            showToast('删除请求发出异常');
-        }
+        });
     };
 
     const handleLogout = () => {
@@ -122,50 +141,61 @@ export default function AdminPage() {
 
     const triggerForceSync = async (type) => {
         const typeZh = type === 'fund' ? '基金' : '股票';
-        if (!confirm(`!! 强制重置同步 !!\n\n系统将去外部接口拉取所有自选 ${typeZh} 的最新 250 条数据，并彻底【替换】数据库中的历史记录。\n\n此操作耗费 D1 资源，确认执行吗？`)) return;
-
-        setLoading(true);
-        try {
-            const res = await fetch(`/api/admin/force-sync?token=${secretKey}`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'x-admin-key': secretKey
-                },
-                body: JSON.stringify({ type })
-            });
-            const data = await res.json();
-            if (res.ok) {
-                showToast(`强制同步完成！\n${data.message}`, 'success');
-                fetchAllData();
-            } else {
-                showToast(data.error || '同步任务被拒绝');
+        setConfirmAction({
+            message: `!! Force Protocol Override !!\n\nSystem will re-synchronize all ${typeZh} history from external nodes. This will replace local datasets.\n\nExecute command?`,
+            onConfirm: async () => {
+                setLoading(true);
+                try {
+                    const res = await fetch(`/api/admin/force-sync?token=${secretKey}`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'x-admin-key': secretKey
+                        },
+                        body: JSON.stringify({ type })
+                    });
+                    const data = await res.json();
+                    if (res.ok) {
+                        showToast(`[Success] Queue Injected\n${data.message}`, 'success');
+                        await fetchAllData(secretKey, true);
+                    } else {
+                        showToast(data.error || 'Protocol Rejected');
+                    }
+                } catch (e) {
+                    showToast('API Link Lost');
+                } finally {
+                    setLoading(false);
+                    setConfirmAction(null);
+                }
             }
-        } catch (e) {
-            showToast('请求同步接口异常');
-        }
-        setLoading(false);
+        });
     };
 
     const triggerCleanup = async () => {
-        if (!confirm('确定要扫描全库并删除所有“未被订阅”的僵尸行情数据吗？\n\n此操作会大幅降低 D1 负载并加快 Cron 运行速度。')) return;
-        setLoading(true);
-        try {
-            const res = await fetch(`/api/admin/cleanup?token=${secretKey}`, {
-                method: 'POST',
-                headers: { 'x-admin-key': secretKey }
-            });
-            const data = await res.json();
-            if (res.ok) {
-                showToast(`清理成功！\n历史: -${data.deleted_hist}, 名称: -${data.deleted_names}`, 'success');
-                fetchAllData();
-            } else {
-                showToast(data.error || '清理任务失败');
+        setConfirmAction({
+            message: `!! Sector Sanitation !!\n\nScan and purge all orphaned ticker data from the backplane. This optimizes D1 performance.\n\nProceed?`,
+            onConfirm: async () => {
+                setLoading(true);
+                try {
+                    const res = await fetch(`/api/admin/cleanup?token=${secretKey}`, {
+                        method: 'POST',
+                        headers: { 'x-admin-key': secretKey }
+                    });
+                    const data = await res.json();
+                    if (res.ok) {
+                        showToast(`Zone Cleaned!\nHist: -${data.deleted_hist}, Names: -${data.deleted_names}`, 'success');
+                        fetchAllData(secretKey);
+                    } else {
+                        showToast(data.error || 'Sanitation Failed');
+                    }
+                } catch (e) {
+                    showToast('Link Timeout');
+                } finally {
+                    setLoading(false);
+                    setConfirmAction(null);
+                }
             }
-        } catch (e) {
-            showToast('请求超时或网络异常');
-        }
-        setLoading(false);
+        });
     };
 
     return (
@@ -182,12 +212,48 @@ export default function AdminPage() {
                         initial={{ opacity: 0, y: -20, scale: 0.9 }}
                         animate={{ opacity: 1, y: 0, scale: 1 }}
                         exit={{ opacity: 0, y: -20, scale: 0.9 }}
-                        className={`fixed top-8 left-1/2 -translate-x-1/2 z-[100] flex items-center gap-3 px-6 py-4 rounded-2xl shadow-[0_10px_40px_-10px_rgba(0,0,0,0.5)] font-mono text-sm border border-white/10 backdrop-blur-xl
-                            ${toast.type === 'error' ? 'bg-red-500/10 text-red-400' : 'bg-emerald-500/10 text-emerald-400'}`}
+                        className={`fixed top-8 left-1/2 -translate-x-1/2 z-[200] flex items-center gap-3 px-6 py-4 rounded-2xl shadow-[0_20px_50px_rgba(0,0,0,0.5)] font-mono text-sm border border-white/10 backdrop-blur-2xl whitespace-pre-wrap max-w-lg
+                            ${toast.type === 'error' ? 'bg-red-500/20 text-red-400 border-red-500/20' : 'bg-emerald-500/20 text-emerald-400 border-emerald-500/20'}`}
                     >
-                        <div className={`w-2 h-2 rounded-full animate-pulse ${toast.type === 'error' ? 'bg-red-500' : 'bg-emerald-500'}`} />
-                        {toast.msg}
+                        <div className={`w-2 h-2 rounded-full flex-shrink-0 animate-pulse ${toast.type === 'error' ? 'bg-red-500 shadow-[0_0_10px_rgba(239,68,68,0.5)]' : 'bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.5)]'}`} />
+                        <span className="leading-relaxed">{toast.msg}</span>
                     </motion.div>
+                )}
+
+                {confirmAction && (
+                    <div className="fixed inset-0 z-[300] flex items-center justify-center p-4">
+                        <motion.div
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: 1 }}
+                            exit={{ opacity: 0 }}
+                            className="absolute inset-0 bg-black/80 backdrop-blur-md"
+                            onClick={() => setConfirmAction(null)}
+                        />
+                        <motion.div
+                            initial={{ scale: 0.9, opacity: 0, y: 20 }}
+                            animate={{ scale: 1, opacity: 1, y: 0 }}
+                            exit={{ scale: 0.9, opacity: 0, y: 20 }}
+                            className="relative bg-black/90 border border-white/10 p-10 rounded-[3rem] max-w-md w-full shadow-[0_0_100px_rgba(0,0,0,1)] overflow-hidden"
+                        >
+                            <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-red-600 to-amber-500" />
+                            <h3 className="text-xl font-black italic uppercase mb-6 tracking-tighter">Command Confirmation</h3>
+                            <p className="text-white/40 text-sm mb-10 whitespace-pre-wrap leading-relaxed font-medium uppercase tracking-wider">{confirmAction.message}</p>
+                            <div className="flex gap-4">
+                                <button
+                                    onClick={() => setConfirmAction(null)}
+                                    className="flex-1 px-6 py-4 rounded-2xl bg-white/5 hover:bg-white/10 font-bold text-[10px] uppercase tracking-widest transition-all"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    onClick={confirmAction.onConfirm}
+                                    className="flex-1 px-6 py-4 rounded-2xl bg-red-600 hover:bg-red-500 font-black uppercase tracking-[0.2em] text-[10px] shadow-xl shadow-red-600/10 transition-all text-white"
+                                >
+                                    Proceed
+                                </button>
+                            </div>
+                        </motion.div>
+                    </div>
                 )}
             </AnimatePresence>
 
@@ -217,11 +283,11 @@ export default function AdminPage() {
                                         value={secretKey}
                                         onChange={(e) => setSecretKey(e.target.value)}
                                         className="w-full bg-white/[0.03] border border-white/5 rounded-2xl px-6 py-5 outline-none focus:border-cyan-500/50 focus:bg-white/5 transition-all font-mono text-center text-xl tracking-[0.3em]"
-                                        onKeyDown={(e) => e.key === 'Enter' && fetchAllData()}
+                                        onKeyDown={(e) => e.key === 'Enter' && fetchAllData(secretKey)}
                                     />
                                 </div>
                                 <button
-                                    onClick={() => fetchAllData()}
+                                    onClick={() => fetchAllData(secretKey)}
                                     disabled={loading}
                                     className="w-full bg-blue-600 hover:bg-cyan-500 text-white rounded-2xl py-5 font-black uppercase tracking-widest shadow-xl shadow-blue-500/10 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex justify-center items-center gap-3"
                                 >
@@ -289,16 +355,16 @@ export default function AdminPage() {
                             <div className="flex items-center gap-4">
                                 <div className="hidden lg:flex items-center gap-1 border border-white/5 px-4 py-2 rounded-xl bg-white/[0.02]">
                                     <span className="text-[10px] font-black uppercase tracking-widest text-white/20 mr-2">Quick Actions:</span>
-                                    <button onClick={() => fetchAllData()} title="刷新" className="p-1.5 hover:text-cyan-400 transition-colors"><RefreshCcw size={16} /></button>
+                                    <button onClick={() => fetchAllData(secretKey, true)} title="刷新并校准计数器" className={`p-1.5 hover:text-cyan-400 transition-colors ${loading ? 'animate-spin opacity-50' : ''}`}><RefreshCcw size={16} /></button>
                                     <div className="w-px h-3 bg-white/10 mx-1" />
-                                    <button onClick={() => triggerForceSync('stock')} title="重刷所有股票历史数据" className="p-1.5 hover:text-emerald-400 transition-colors flex items-center gap-1.5">
-                                        <TrendingUp size={16} />
-                                        <span className="text-[9px] font-black uppercase tracking-tighter hidden xl:inline">股票</span>
+                                    <button onClick={() => triggerForceSync('stock')} disabled={loading} title="重刷所有股票历史数据" className="p-1.5 hover:text-emerald-400 disabled:opacity-30 transition-colors flex items-center gap-1.5 group/btn">
+                                        <TrendingUp size={16} className="group-hover/btn:scale-110 transition-transform" />
+                                        <span className="text-[9px] font-black uppercase tracking-tighter hidden xl:inline">股票重刷</span>
                                     </button>
                                     <div className="w-px h-3 bg-white/10 mx-1" />
-                                    <button onClick={() => triggerForceSync('fund')} title="重刷所有基金历史数据" className="p-1.5 hover:text-blue-400 transition-colors flex items-center gap-1.5">
-                                        <PieChart size={16} />
-                                        <span className="text-[9px] font-black uppercase tracking-tighter hidden xl:inline">基金</span>
+                                    <button onClick={() => triggerForceSync('fund')} disabled={loading} title="重刷所有基金历史数据" className="p-1.5 hover:text-blue-400 disabled:opacity-30 transition-colors flex items-center gap-1.5 group/btn">
+                                        <PieChart size={16} className="group-hover/btn:scale-110 transition-transform" />
+                                        <span className="text-[9px] font-black uppercase tracking-tighter hidden xl:inline">基金重刷</span>
                                     </button>
                                     <div className="w-px h-3 bg-white/10 mx-1" />
                                     <button onClick={triggerCleanup} title="环境全量大扫除" className="p-1.5 hover:text-orange-400 transition-colors"><Zap size={16} /></button>
@@ -314,10 +380,12 @@ export default function AdminPage() {
                                 {activeSection === 'overview' && (
                                     <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }} key="overview" className="space-y-12">
                                         {/* Key Stats Grid */}
-                                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
                                             {[
-                                                { label: '注册账户', value: stats.users, icon: <Users size={18} />, color: 'text-blue-400', bg: 'from-blue-500/10' },
-                                                { label: '自选资产', value: (stats.stocks + stats.funds), icon: <Zap size={18} />, color: 'text-yellow-400', bg: 'from-yellow-500/10' },
+                                                { label: '注册账户', value: stats.users ?? 0, icon: <Users size={18} />, color: 'text-blue-400', bg: 'from-blue-500/10' },
+                                                { label: '总资产数', value: ((stats.stocks ?? 0) + (stats.funds ?? 0)), icon: <Zap size={18} />, color: 'text-yellow-400', bg: 'from-yellow-500/10' },
+                                                { label: '待处理队列', value: stats.queue_count ?? 0, icon: <RefreshCcw size={18} />, color: 'text-orange-400', bg: 'from-orange-500/10' },
+                                                { label: '历史数据总量', value: (((stats.history_points ?? 0) / 1000).toFixed(1)) + 'K', icon: <Database size={18} />, color: 'text-emerald-400', bg: 'from-emerald-500/10' },
                                             ].map((kpi, i) => (
                                                 <div key={i} className={`bg-gradient-to-br ${kpi.bg} to-transparent border border-white/5 p-8 rounded-[2.5rem] relative overflow-hidden group hover:border-white/10 transition-all`}>
                                                     <div className={`p-3 w-fit rounded-2xl bg-white/5 mb-6 ${kpi.color}`}>
@@ -341,12 +409,18 @@ export default function AdminPage() {
                                                 <div>
                                                     <h2 className="text-2xl font-black italic uppercase tracking-tighter">Full Stack Sentinel Feedback</h2>
                                                     <p className="text-[10px] text-white/20 font-bold uppercase tracking-[0.2em]">
-                                                        All External Financial Protocol Heartbeats ({stats.api_health.length} Nodes detected)
-                                                        {stats.api_health.length > 0 && (
+                                                        All External Financial Protocol Heartbeats ({stats.api_health?.length || 0} Nodes detected)
+                                                        {stats.api_health?.length > 0 && (
                                                             <span className="ml-2 text-cyan-500/40">
                                                                 • Last Pulse: {
-                                                                    new Date(Math.max(...stats.api_health.map(a => new Date(a.heartbeat_ts + 'Z').getTime())))
-                                                                        .toLocaleString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })
+                                                                    (() => {
+                                                                        const timestamps = stats.api_health
+                                                                            .map(a => a.heartbeat_ts ? new Date(a.heartbeat_ts + 'Z').getTime() : 0)
+                                                                            .filter(t => t > 0);
+                                                                        if (timestamps.length === 0) return 'N/A';
+                                                                        return new Date(Math.max(...timestamps))
+                                                                            .toLocaleString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                                                                    })()
                                                                 }
                                                             </span>
                                                         )}
@@ -421,7 +495,7 @@ export default function AdminPage() {
                                                                         <span className="font-mono font-black text-xl text-white/50 group-hover:text-white transition-colors">{api.success_rate}<span className="text-[10px] opacity-40 ml-0.5">%</span></span>
                                                                     </td>
                                                                     <td className="px-10 py-6 text-right font-mono">
-                                                                        <span className={`font-black text-base ${api.avg_latency > 3000 ? 'text-red-400' : api.avg_latency > 1500 ? 'text-yellow-400' : 'text-white/40 group-hover:text-white/80'}`}>{api.avg_latency}</span>
+                                                                        <span className={`font-black text-base ${(api.avg_latency ?? 0) > 3000 ? 'text-red-400' : (api.avg_latency ?? 0) > 1500 ? 'text-yellow-400' : 'text-white/40 group-hover:text-white/80'}`}>{api.avg_latency ?? '--'}</span>
                                                                         <span className="text-[9px] opacity-20 ml-1 font-black">ms</span>
                                                                     </td>
                                                                 </tr>
