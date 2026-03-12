@@ -10,26 +10,39 @@ if (fs.existsSync(workerPath)) {
   if (!content.includes('async scheduled')) {
     const scheduledFunction = `
   async scheduled(event, env, ctx) {
-    const urls = [
-      "https://finance.380220.xyz/api/cron/sync?token=" + (env.CRON_SECRET || ""),
-      "https://finance.380220.xyz/api/cron/daily?token=" + (env.CRON_SECRET || ""),
-      "https://finance.380220.xyz/api/cron/health?token=" + (env.CRON_SECRET || "")
-    ];
-    console.log("[Trigger] Dispatching Cron Tasks...");
+    const cron = event.cron;
+    const baseUrl = "https://finance.380220.xyz"; // 需确保此域名对应的 Worker 能够接受外部请求
+    const secret = env.CRON_SECRET || "";
     
-    // 使用 Promise.all 并行触发，并将 Promise 传递给 ctx.waitUntil
-    // 确保 Worker 不会在请求完成前关闭，即便主进程结束，后台任务仍有配额继续运行直到完成。
-    const tasks = urls.map(url => 
+    let targetUrls = [];
+    
+    // 精准路由分发
+    if (cron === "*/10 * * * *") {
+      // 仅运行哨兵巡检
+      targetUrls = [\`${baseUrl}/api/cron/health?token=\${secret}\`];
+    } else if (cron === "0 13 * * 1-5") {
+      // 每日任务：填充同步队列
+      targetUrls = [\`${baseUrl}/api/cron/daily?token=\${secret}\`];
+    } else if (cron === "*/5 1-7 * * 1-5") {
+      // 盘中任务：消化同步队列
+      targetUrls = [\`${baseUrl}/api/cron/sync?token=\${secret}\`];
+    } else {
+      // 兜底：触发汇总任务 (如 03:00 的归档等)
+      targetUrls = [
+        \`${baseUrl}/api/cron/health?token=\${secret}\`,
+        \`${baseUrl}/api/cron/sync?token=\${secret}\`
+      ];
+    }
+
+    console.log(\`[Trigger] Cron [\${cron}] triggered. Dispatching \${targetUrls.length} tasks.\`);
+    
+    const tasks = targetUrls.map(url => 
       fetch(url)
-        .then(res => console.log(\`[Trigger] SUCCESS [\${res.status}]: \`, url))
+        .then(res => console.log(\`[Trigger] SUCCESS [\${res.status}]: \${url}\`))
         .catch(e => console.error("[Trigger] FAILED:", url, e.message))
     );
     
-    // 使用 ctx.waitUntil 确保异步任务在 Worker 进程关闭前有时间跑完
-    // 对 OpenNext 环境，这能防止 Next.js API 被提前“杀掉”
-    // 使用 allSettled 确保即便其中一个 API 报错，其他任务也能坚持跑完
     ctx.waitUntil(Promise.allSettled(tasks));
-    console.log("[Trigger] All tasks dispatched and waiting via ctx.waitUntil.");
   },`;
 
     // 查找到 export default {
