@@ -42,7 +42,9 @@ function AdminCommandCenter() {
     const [secretKey, setSecretKey] = useState('');
     const [isAuthenticated, setIsAuthenticated] = useState(false);
     const [toast, setToast] = useState(null);
-    const [activeSection, setActiveSection] = useState('overview'); // overview, users, logs, health
+    const [activeSection, setActiveSection] = useState('overview'); // overview, users, logs, health, queue
+    const [queueData, setQueueData] = useState([]);
+    const [queueLoading, setQueueLoading] = useState(false);
     const [confirmAction, setConfirmAction] = useState(null); // { message, onConfirm }
     const searchParamsHooks = useSearchParams();
     const urlKey = searchParamsHooks.get('key') || searchParamsHooks.get('token');
@@ -57,9 +59,33 @@ function AdminCommandCenter() {
         }
     }, [urlKey]); // Only re-run if the key in URL actually changes
 
+    useEffect(() => {
+        if (activeSection === 'queue' && secretKey) {
+            fetchQueue();
+        }
+    }, [activeSection, secretKey]);
+
     const showToast = (msg, type = 'error') => {
         setToast({ msg, type });
         setTimeout(() => setToast(null), 3000);
+    };
+
+    const fetchQueue = async () => {
+        setQueueLoading(true);
+        try {
+            const url = new URL('/api/admin/queue', window.location.origin);
+            url.searchParams.set('token', secretKey);
+            const res = await fetch(url.toString(), { headers: { 'x-admin-key': secretKey } });
+            if (res.ok) {
+                const data = await res.json();
+                setQueueData(data.queue || []);
+            }
+        } catch (e) {
+            console.error('Failed to fetch queue:', e);
+            showToast('获取队列失败');
+        } finally {
+            setQueueLoading(false);
+        }
     };
 
     const fetchAllData = async (keyToUse, forceSyncStats = false) => {
@@ -100,6 +126,11 @@ function AdminCommandCenter() {
                 const logsData = await logsRes.json();
                 // 性能优化: 限制日志渲染数量
                 setLogs(logsData.logs?.slice(0, 500) || []);
+            }
+
+            // 如果当前在队列页面或初始加载，则获取队列列表
+            if (activeSection === 'queue') {
+                fetchQueue();
             }
 
             if (!statsRes.ok && !usersRes.ok) {
@@ -330,6 +361,7 @@ function AdminCommandCenter() {
                             {[
                                 { id: 'overview', icon: <LayoutGrid size={20} />, label: '概览面板' },
                                 { id: 'health', icon: <Wifi size={20} />, label: '接口哨兵' },
+                                { id: 'queue', icon: <RefreshCcw size={20} />, label: '同步队列' },
                                 { id: 'users', icon: <Users size={20} />, label: '用户审计' },
                                 { id: 'logs', icon: <FileText size={20} />, label: '系统日志' },
                             ].map(item => (
@@ -394,12 +426,16 @@ function AdminCommandCenter() {
                                         {/* Key Stats Grid */}
                                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
                                             {[
-                                                { label: '注册账户', value: stats.users ?? 0, icon: <Users size={18} />, color: 'text-blue-400', bg: 'from-blue-500/10' },
-                                                { label: '总资产数', value: ((stats.stocks ?? 0) + (stats.funds ?? 0)), icon: <Zap size={18} />, color: 'text-yellow-400', bg: 'from-yellow-500/10' },
-                                                { label: '待处理队列', value: stats.queue_count ?? 0, icon: <RefreshCcw size={18} />, color: 'text-orange-400', bg: 'from-orange-500/10' },
-                                                { label: '历史数据总量', value: (((stats.history_points ?? 0) / 1000).toFixed(1)) + 'K', icon: <Database size={18} />, color: 'text-emerald-400', bg: 'from-emerald-500/10' },
+                                                { label: '注册账户', value: stats.users ?? 0, icon: <Users size={18} />, color: 'text-blue-400', bg: 'from-blue-500/10', id: 'users' },
+                                                { label: '总资产数', value: ((stats.stocks ?? 0) + (stats.funds ?? 0)), icon: <Zap size={18} />, color: 'text-yellow-400', bg: 'from-yellow-500/10', id: 'assets' },
+                                                { label: '待处理队列', value: stats.queue_count ?? 0, icon: <RefreshCcw size={18} />, color: 'text-orange-400', bg: 'from-orange-500/10', id: 'queue' },
+                                                { label: '历史数据总量', value: (((stats.history_points ?? 0) / 1000).toFixed(1)) + 'K', icon: <Database size={18} />, color: 'text-emerald-400', bg: 'from-emerald-500/10', id: 'history' },
                                             ].map((kpi, i) => (
-                                                <div key={i} className={`bg-gradient-to-br ${kpi.bg} to-transparent border border-white/5 p-8 rounded-[2.5rem] relative overflow-hidden group hover:border-white/10 transition-all`}>
+                                                <div
+                                                    key={i}
+                                                    onClick={() => kpi.id === 'queue' && setActiveSection('queue')}
+                                                    className={`bg-gradient-to-br ${kpi.bg} to-transparent border border-white/5 p-8 rounded-[2.5rem] relative overflow-hidden group hover:border-white/10 transition-all ${kpi.id === 'queue' ? 'cursor-pointer hover:scale-[1.02]' : ''}`}
+                                                >
                                                     <div className={`p-3 w-fit rounded-2xl bg-white/5 mb-6 ${kpi.color}`}>
                                                         {kpi.icon}
                                                     </div>
@@ -617,6 +653,92 @@ function AdminCommandCenter() {
                                                     </div>
                                                 )}
                                             </div>
+                                        </div>
+                                    </motion.div>
+                                )}
+
+                                {activeSection === 'queue' && (
+                                    <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }} key="queue">
+                                        <div className="flex items-center justify-between mb-8 px-2">
+                                            <div className="flex items-center gap-4">
+                                                <div className="p-3 bg-orange-500/10 rounded-2xl text-orange-400">
+                                                    <RefreshCcw size={24} />
+                                                </div>
+                                                <div>
+                                                    <h2 className="text-2xl font-black italic uppercase tracking-tighter">待处理任务队列</h2>
+                                                    <p className="text-[10px] text-white/20 font-bold uppercase tracking-[0.2em]">当前 D1 节点正在等待调度或同步中的任务清单</p>
+                                                </div>
+                                            </div>
+                                            <button
+                                                onClick={fetchQueue}
+                                                disabled={queueLoading}
+                                                className="flex items-center gap-2 px-6 py-3 bg-white/5 hover:bg-white/10 rounded-2xl border border-white/5 transition-all group"
+                                            >
+                                                <RefreshCcw size={14} className={`text-white/40 group-hover:text-white/80 ${queueLoading ? 'animate-spin' : ''}`} />
+                                                <span className="text-[10px] font-black uppercase tracking-widest text-white/60 group-hover:text-white/90">立即刷新清单</span>
+                                            </button>
+                                        </div>
+
+                                        <div className="bg-white/[0.02] border border-white/5 rounded-[3rem] overflow-hidden backdrop-blur-3xl shadow-2xl">
+                                            <table className="w-full text-left border-collapse">
+                                                <thead>
+                                                    <tr className="border-b border-white/5 bg-white/[0.01]">
+                                                        <th className="px-10 py-6 text-[10px] font-black uppercase tracking-[0.3em] text-white/30">资产代码</th>
+                                                        <th className="px-10 py-6 text-[10px] font-black uppercase tracking-[0.3em] text-white/30">类型</th>
+                                                        <th className="px-10 py-6 text-[10px] font-black uppercase tracking-[0.3em] text-white/30 text-center">状态</th>
+                                                        <th className="px-10 py-6 text-[10px] font-black uppercase tracking-[0.3em] text-white/30 text-right">时间</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody className="divide-y divide-white/[0.02]">
+                                                    {queueLoading && !queueData.length ? (
+                                                        <tr>
+                                                            <td colSpan="4" className="px-10 py-32 text-center text-white/10 italic font-medium uppercase tracking-[0.3em] text-sm group">
+                                                                正在从 D1 提取队列清单<span className="inline-block animate-bounce ml-2">...</span>
+                                                            </td>
+                                                        </tr>
+                                                    ) : queueData.length > 0 ? (
+                                                        queueData.map((item) => (
+                                                            <tr key={`${item.code}-${item.type}`} className="group hover:bg-white/[0.02] transition-colors">
+                                                                <td className="px-10 py-6 font-mono text-lg font-bold text-white/80 group-hover:text-orange-400 transition-colors tracking-tight">
+                                                                    {item.code}
+                                                                </td>
+                                                                <td className="px-10 py-6">
+                                                                    <span className={`px-2 py-0.5 rounded text-[9px] font-black uppercase tracking-widest border border-white/5 ${item.type === 'fund' ? 'bg-blue-500/10 text-blue-400' : 'bg-emerald-500/10 text-emerald-400'}`}>
+                                                                        {item.type === 'fund' ? '基金' : '股票'}
+                                                                    </span>
+                                                                </td>
+                                                                <td className="px-10 py-6">
+                                                                    <div className="flex justify-center">
+                                                                        {item.status === 'pending' ? (
+                                                                            <div className="px-3 py-1 bg-white/5 text-white/30 rounded-full text-[9px] font-black uppercase tracking-tighter border border-white/10">
+                                                                                等待中
+                                                                            </div>
+                                                                        ) : item.status === 'syncing' ? (
+                                                                            <div className="flex items-center gap-2 px-3 py-1 bg-orange-500/10 text-orange-400 rounded-full text-[9px] font-black uppercase tracking-tighter border border-orange-500/20">
+                                                                                <div className="w-1 h-1 rounded-full bg-orange-400 animate-pulse" />
+                                                                                同步中
+                                                                            </div>
+                                                                        ) : (
+                                                                            <div className="px-3 py-1 bg-emerald-500/10 text-emerald-400 rounded-full text-[9px] font-black uppercase tracking-tighter border border-emerald-500/20">
+                                                                                完成
+                                                                            </div>
+                                                                        )}
+                                                                    </div>
+                                                                </td>
+                                                                <td className="px-10 py-6 text-right font-mono text-[10px] text-white/20 group-hover:text-white/60 transition-colors">
+                                                                    {new Date(item.created_at).toLocaleString('zh-CN', { hour12: false })}
+                                                                </td>
+                                                            </tr>
+                                                        ))
+                                                    ) : (
+                                                        <tr>
+                                                            <td colSpan="4" className="px-10 py-32 text-center text-white/10 italic font-medium uppercase tracking-[0.3em] text-sm group">
+                                                                当前核心队列已清空
+                                                            </td>
+                                                        </tr>
+                                                    )}
+                                                </tbody>
+                                            </table>
                                         </div>
                                     </motion.div>
                                 )}
