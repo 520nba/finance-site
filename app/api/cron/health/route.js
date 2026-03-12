@@ -36,10 +36,10 @@ export async function GET() {
      */
     function computeStatus(success, latency) {
         if (!success) return 'down';
-        if (latency < 800) return 'healthy';
-        if (latency < 1500) return 'wary';
-        if (latency < 3000) return 'slow';
-        return 'critical'; // warning -> critical (Semantic Fix)
+        if (latency < 1200) return 'healthy';
+        if (latency < 2200) return 'wary';
+        if (latency < 4000) return 'slow';
+        return 'critical';
     }
 
     const healthTasks = [
@@ -132,7 +132,7 @@ export async function GET() {
         return {
             name: task.name,
             status: computeStatus(success, latency),
-            successRate: success ? 100 : 0,
+            successRate: `${success ? 1 : 0}/1`,
             avgLatency: latency,
             errorMsg: success ? '' : (errorMsg || 'IO Error')
         };
