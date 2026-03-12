@@ -19,18 +19,18 @@ if (fs.existsSync(workerPath)) {
     // 精准路由分发
     if (cron === "*/10 * * * *") {
       // 仅运行哨兵巡检
-      targetUrls = [\`${baseUrl}/api/cron/health?token=\${secret}\`];
+      targetUrls = [\`\${baseUrl}/api/cron/health?token=\${secret}\`];
     } else if (cron === "0 13 * * 1-5") {
       // 每日任务：填充同步队列
-      targetUrls = [\`${baseUrl}/api/cron/daily?token=\${secret}\`];
+      targetUrls = [\`\${baseUrl}/api/cron/daily?token=\${secret}\`];
     } else if (cron === "*/5 1-7 * * 1-5") {
       // 盘中任务：消化同步队列
-      targetUrls = [\`${baseUrl}/api/cron/sync?token=\${secret}\`];
+      targetUrls = [\`\${baseUrl}/api/cron/sync?token=\${secret}\`];
     } else {
       // 兜底：触发汇总任务 (如 03:00 的归档等)
       targetUrls = [
-        \`${baseUrl}/api/cron/health?token=\${secret}\`,
-        \`${baseUrl}/api/cron/sync?token=\${secret}\`
+        \`\${baseUrl}/api/cron/health?token=\${secret}\`,
+        \`\${baseUrl}/api/cron/sync?token=\${secret}\`
       ];
     }
 
@@ -44,6 +44,7 @@ if (fs.existsSync(workerPath)) {
     
     ctx.waitUntil(Promise.allSettled(tasks));
   },`;
+
 
     // 查找到 export default {
     const searchStr = 'export default {';
