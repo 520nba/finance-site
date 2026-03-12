@@ -11,10 +11,11 @@ if (fs.existsSync(workerPath)) {
     const scheduledFunction = `
   async scheduled(event, env, ctx) {
     try {
-      const cron = (event.cron || "").replace(/\s+/g, ' ').trim();
+      const rawCron = event.cron || "";
+      const normalizedCron = rawCron.replace(/\s+/g, ' ').trim();
       const secret = env.CRON_SECRET || "";
       
-      // 1. 严格路由映射与 Fallback 逻辑
+      // 1. 严格路由映射
       const routes = {
         "*/10 * * * *": [
           \`/api/cron/health?token=\${secret}\`,
@@ -32,16 +33,17 @@ if (fs.existsSync(workerPath)) {
         ]
       };
 
-      // 如果找不到匹配的 Cron，默认回退到例行同步与巡检
-      const paths = routes[cron] || routes["*/10 * * * *"];
+      // 2. 增强型负载判定 (Resilient Lookup)
+      // 优先级：原始字符串 -> 归一化字符串 -> 默认巡检
+      const paths = routes[rawCron] || routes[normalizedCron] || routes["*/10 * * * *"];
 
-      console.log(\`[Trigger] Cron [\${cron}] Dispatching \${paths.length} tasks.\`);
+      console.log(\`[Trigger] Cron [\${normalizedCron}] MatchFound: \${!!routes[normalizedCron]}. Dispatching \${paths.length} tasks.\`);
       
-      // 2. 将所有内部请求封装为异步任务池
+      // 3. 将所有内部请求封装为异步任务池
       const tasks = paths.map(async path => {
         try {
-          // 使用 localhost 内部调用，无视外部公网延迟
-          const url = \`http://localhost\${path}\`;
+          // 使用显式的内部域名标记，防止由于 localhost 解析策略变更导致的潜在回环或 522 错误
+          const url = new URL(path, "http://127.0.0.1").toString();
           const res = await fetch(url, {
              headers: { "x-internal-cron": "true" }
           });
@@ -52,7 +54,6 @@ if (fs.existsSync(workerPath)) {
         }
       });
       
-      // 3. 正确管理 Worker 生命周期 (Cloudflare 推荐实践)
       const job = Promise.all(tasks);
       ctx.waitUntil(job);
       await job; 
