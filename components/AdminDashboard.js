@@ -32,11 +32,11 @@ export default function AdminDashboard({ isOpen, onClose }) {
                 const data = await res.json();
                 setStats(data);
             } else if (res.status === 403) {
-                showToast('Unauthorized: Check your admin key.');
+                showToast('未授权：请检查您的管理员密钥。');
             }
         } catch (e) {
             console.error('Failed to fetch admin stats:', e);
-            showToast('Connection Refused');
+            showToast('连接被拒绝');
         } finally {
             setLoading(false);
         }
@@ -63,13 +63,13 @@ export default function AdminDashboard({ isOpen, onClose }) {
                     });
                     const data = await res.json();
                     if (res.ok) {
-                        showToast(`[Success] ${data.message}`, 'success');
+                        showToast(`[成功] ${data.message}`, 'success');
                         await fetchStats(true);
                     } else {
-                        showToast(data.error || 'Server rejected sync task');
+                        showToast(data.error || '服务器拒绝了同步任务');
                     }
                 } catch (e) {
-                    showToast('Request failed');
+                    showToast('请求失败');
                 } finally {
                     setLoading(false);
                     setConfirmAction(null);
@@ -125,20 +125,20 @@ export default function AdminDashboard({ isOpen, onClose }) {
                             exit={{ scale: 0.9, opacity: 0 }}
                             className="relative bg-[#111] border border-white/10 p-8 rounded-[2rem] max-w-md w-full shadow-2xl"
                         >
-                            <h3 className="text-xl font-black italic uppercase mb-4 text-cyan-400">Authorization Required</h3>
+                            <h3 className="text-xl font-black italic uppercase mb-4 text-cyan-400">需要指令授权</h3>
                             <p className="text-white/60 text-sm mb-8 whitespace-pre-wrap leading-relaxed">{confirmAction.message}</p>
                             <div className="flex gap-4">
                                 <button
                                     onClick={() => setConfirmAction(null)}
                                     className="flex-1 px-6 py-3 rounded-xl bg-white/5 hover:bg-white/10 font-bold text-sm transition-all"
                                 >
-                                    Cancel
+                                    取消
                                 </button>
                                 <button
                                     onClick={confirmAction.onConfirm}
                                     className="flex-1 px-6 py-3 rounded-xl bg-cyan-600 hover:bg-cyan-500 font-black uppercase tracking-widest text-sm shadow-lg shadow-cyan-600/20 transition-all text-white"
                                 >
-                                    Proceed
+                                    确认执行
                                 </button>
                             </div>
                         </motion.div>
@@ -159,29 +159,29 @@ export default function AdminDashboard({ isOpen, onClose }) {
                             <ShieldCheck size={28} />
                         </div>
                         <div>
-                            <h2 className="text-2xl font-black italic tracking-tighter uppercase leading-none mb-1">Chief Command Center</h2>
-                            <p className="text-[10px] text-white/20 uppercase tracking-[0.3em] font-bold">Infrastructure & API Health Sentinel</p>
+                            <h2 className="text-2xl font-black italic tracking-tighter uppercase leading-none mb-1">首席调度中心</h2>
+                            <p className="text-[10px] text-white/20 uppercase tracking-[0.3em] font-bold">基础设施与 API 健康巡检控制台</p>
                         </div>
                     </div>
 
                     <div className="flex items-center gap-6">
                         <div className="hidden lg:flex items-center gap-1 border border-white/5 px-4 py-2 rounded-xl bg-white/[0.02]">
-                            <button onClick={() => triggerSync('stock')} disabled={loading} title="Refresh Stocks" className="p-1.5 hover:text-emerald-400 transition-colors flex items-center gap-1.5 group/btn">
+                            <button onClick={() => triggerSync('stock')} disabled={loading} title="刷新股票数据" className="p-1.5 hover:text-emerald-400 transition-colors flex items-center gap-1.5 group/btn">
                                 <TrendingUp size={16} className="group-hover/btn:scale-110 transition-transform" />
-                                <span className="text-[9px] font-black uppercase tracking-tighter">Stocks Sync</span>
+                                <span className="text-[9px] font-black uppercase tracking-tighter">股票同步</span>
                             </button>
                             <div className="w-px h-3 bg-white/10 mx-1" />
-                            <button onClick={() => triggerSync('fund')} disabled={loading} title="Refresh Funds" className="p-1.5 hover:text-blue-400 transition-colors flex items-center gap-1.5 group/btn">
+                            <button onClick={() => triggerSync('fund')} disabled={loading} title="刷新基金数据" className="p-1.5 hover:text-blue-400 transition-colors flex items-center gap-1.5 group/btn">
                                 <PieChart size={16} className="group-hover/btn:scale-110 transition-transform" />
-                                <span className="text-[9px] font-black uppercase tracking-tighter text-blue-400">Funds Sync</span>
+                                <span className="text-[9px] font-black uppercase tracking-tighter text-blue-400">基金同步</span>
                             </button>
                         </div>
 
                         <div className="hidden md:flex flex-col items-end">
-                            <span className="text-[10px] text-white/20 font-black uppercase tracking-widest leading-none mb-1">Node Status</span>
+                            <span className="text-[10px] text-white/20 font-black uppercase tracking-widest leading-none mb-1">节点状态</span>
                             <div className="flex items-center gap-2">
                                 <span className="w-1.5 h-1.5 rounded-full bg-cyan-500 animate-pulse"></span>
-                                <span className="text-xs font-mono font-bold text-cyan-500/80 uppercase tracking-tighter">Operational</span>
+                                <span className="text-xs font-mono font-bold text-cyan-500/80 uppercase tracking-tighter">正常运行</span>
                             </div>
                         </div>
                         <button onClick={onClose} className="p-3 hover:bg-white/5 rounded-full transition-all group">
@@ -199,18 +199,18 @@ export default function AdminDashboard({ isOpen, onClose }) {
                                 transition={{ duration: 4, repeat: Infinity, ease: "linear" }}
                                 className="w-12 h-12 border-2 border-white/10 border-t-white/60 rounded-full"
                             />
-                            <p className="font-black italic tracking-[0.5em] uppercase text-sm">Syncing Matrix...</p>
+                            <p className="font-black italic tracking-[0.5em] uppercase text-sm">正在同步矩阵数据...</p>
                         </div>
                     ) : (
                         <div className="space-y-12">
                             {/* Key Performance Indicators */}
                             <div className="grid grid-cols-2 lg:grid-cols-4 gap-6">
                                 {[
-                                    { label: 'Active Users', value: stats?.users ?? 0, icon: <Activity size={18} />, color: 'text-blue-400' },
-                                    { label: 'Total Assets', value: ((stats?.stocks ?? 0) + (stats?.funds ?? 0)), icon: <Zap size={18} />, color: 'text-yellow-400' },
-                                    { label: 'Sync Queue', value: stats?.queue_count ?? 0, icon: <RefreshCw size={18} />, color: 'text-orange-400' },
-                                    { label: 'Data Points', value: (((stats?.history_points ?? 0) / 1000).toFixed(1)) + 'K', icon: <Database size={18} />, color: 'text-purple-400' },
-                                    { label: 'DB Engine', value: 'D1/SQLite', icon: <BarChart3 size={18} />, color: 'text-cyan-400' }
+                                    { label: '活跃用户', value: stats?.users ?? 0, icon: <Activity size={18} />, color: 'text-blue-400' },
+                                    { label: '资产总量', value: ((stats?.stocks ?? 0) + (stats?.funds ?? 0)), icon: <Zap size={18} />, color: 'text-yellow-400' },
+                                    { label: '同步队列', value: stats?.queue_count ?? 0, icon: <RefreshCw size={18} />, color: 'text-orange-400' },
+                                    { label: '历史点位', value: (((stats?.history_points ?? 0) / 1000).toFixed(1)) + 'K', icon: <Database size={18} />, color: 'text-purple-400' },
+                                    { label: '计算引擎', value: 'D1/SQLite', icon: <BarChart3 size={18} />, color: 'text-cyan-400' }
                                 ].map((kpi, i) => (
                                     <div key={i} className="bg-white/[0.03] border border-white/5 p-6 rounded-3xl group hover:border-white/10 transition-all relative">
                                         <div className="absolute top-6 right-6">
@@ -239,19 +239,19 @@ export default function AdminDashboard({ isOpen, onClose }) {
                                 <div className="flex items-center justify-between mb-6 px-2">
                                     <div className="flex items-center gap-3">
                                         <Wifi size={18} className="text-cyan-500" />
-                                        <h3 className="text-sm font-black italic uppercase tracking-widest text-white/60">API Sentinel Feedback</h3>
+                                        <h3 className="text-sm font-black italic uppercase tracking-widest text-white/60">外部协议巡检反馈</h3>
                                     </div>
-                                    <span className="text-[10px] font-mono text-white/20 uppercase tracking-tighter">Sampling rate: 5m</span>
+                                    <span className="text-[10px] font-mono text-white/20 uppercase tracking-tighter">采样率: 5分钟</span>
                                 </div>
 
                                 <div className="bg-white/[0.02] border border-white/5 rounded-3xl overflow-hidden">
                                     <table className="w-full text-left border-collapse">
                                         <thead>
                                             <tr className="border-b border-white/5 bg-white/[0.01]">
-                                                <th className="px-8 py-5 text-[10px] font-black uppercase tracking-[0.2em] text-white/30">Interface Name</th>
-                                                <th className="px-8 py-5 text-[10px] font-black uppercase tracking-[0.2em] text-white/30 text-center">Protocol Status</th>
-                                                <th className="px-8 py-5 text-[10px] font-black uppercase tracking-[0.2em] text-white/30 text-right">Success Rate</th>
-                                                <th className="px-8 py-5 text-[10px] font-black uppercase tracking-[0.2em] text-white/30 text-right">Avg Latency</th>
+                                                <th className="px-8 py-5 text-[10px] font-black uppercase tracking-[0.2em] text-white/30">接口与通道名称</th>
+                                                <th className="px-8 py-5 text-[10px] font-black uppercase tracking-[0.2em] text-white/30 text-center">协议状态</th>
+                                                <th className="px-8 py-5 text-[10px] font-black uppercase tracking-[0.2em] text-white/30 text-right">成功率</th>
+                                                <th className="px-8 py-5 text-[10px] font-black uppercase tracking-[0.2em] text-white/30 text-right">平均延迟</th>
                                             </tr>
                                         </thead>
                                         <tbody className="divide-y divide-white/[0.03]">
@@ -261,7 +261,7 @@ export default function AdminDashboard({ isOpen, onClose }) {
                                                         <td className="px-8 py-6">
                                                             <div className="flex flex-col">
                                                                 <span className="font-bold text-white/80 group-hover:text-cyan-400 transition-colors">{api.api_name}</span>
-                                                                <span className="text-[9px] text-white/20 mt-1 uppercase font-mono">{api.error_msg || 'Endpoint Active'}</span>
+                                                                <span className="text-[9px] text-white/20 mt-1 uppercase font-mono">{api.error_msg || '协议接口正常'}</span>
                                                             </div>
                                                         </td>
                                                         <td className="px-8 py-6">
@@ -269,27 +269,27 @@ export default function AdminDashboard({ isOpen, onClose }) {
                                                                 {api.status === 'healthy' ? (
                                                                     <div className="flex items-center gap-2 px-3 py-1 bg-green-500/10 text-green-400 rounded-full text-[10px] font-black uppercase tracking-tighter border border-green-500/20">
                                                                         <div className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse"></div>
-                                                                        Healthy
+                                                                        正常健康
                                                                     </div>
                                                                 ) : api.status === 'wary' ? (
                                                                     <div className="flex items-center gap-2 px-3 py-1 bg-yellow-500/10 text-yellow-500 rounded-full text-[10px] font-black uppercase tracking-tighter border border-yellow-500/20">
                                                                         <div className="w-1.5 h-1.5 rounded-full bg-yellow-500"></div>
-                                                                        Delayed
+                                                                        响应延迟
                                                                     </div>
                                                                 ) : api.status === 'slow' ? (
                                                                     <div className="flex items-center gap-2 px-3 py-1 bg-orange-500/10 text-orange-500 rounded-full text-[10px] font-black uppercase tracking-tighter border border-orange-500/20">
                                                                         <div className="w-1.5 h-1.5 rounded-full bg-orange-500"></div>
-                                                                        Unstable
+                                                                        波动不稳定
                                                                     </div>
                                                                 ) : api.status === 'critical' ? (
                                                                     <div className="flex items-center gap-2 px-3 py-1 bg-red-600/10 text-red-500 rounded-full text-[10px] font-black uppercase tracking-tighter border border-red-600/20">
                                                                         <div className="w-1.5 h-1.5 rounded-full bg-red-600 animate-bounce"></div>
-                                                                        Critical
+                                                                        严重故障
                                                                     </div>
                                                                 ) : (
                                                                     <div className="flex items-center gap-2 px-3 py-1 bg-red-900/20 text-red-700 rounded-full text-[10px] font-black uppercase tracking-tighter border border-red-900/30">
                                                                         <div className="w-1.5 h-1.5 rounded-full bg-red-900"></div>
-                                                                        Offline
+                                                                        离线断开
                                                                     </div>
                                                                 )}
                                                             </div>
@@ -305,7 +305,7 @@ export default function AdminDashboard({ isOpen, onClose }) {
                                             ) : (
                                                 <tr>
                                                     <td colSpan="4" className="px-8 py-12 text-center text-white/10 italic text-sm font-black uppercase tracking-widest">
-                                                        {loading ? 'Decrypting Heartbeat...' : 'Waiting for sentinel heartbeat...'}
+                                                        {loading ? '正在解密心跳信号...' : '等待巡检组件响应...'}
                                                     </td>
                                                 </tr>
                                             )}
@@ -320,7 +320,7 @@ export default function AdminDashboard({ isOpen, onClose }) {
                 {/* Footer */}
                 <div className="px-10 py-6 border-t border-white/5 bg-white/[0.01] flex justify-between items-center">
                     <div className="flex items-center gap-3">
-                        <span className="text-[9px] font-black text-white/10 uppercase tracking-[0.3em]">Telemetry Active</span>
+                        <span className="text-[9px] font-black text-white/10 uppercase tracking-[0.3em]">遥测链路已激活</span>
                         <div className="w-1 h-1 rounded-full bg-white/20"></div>
                         <span className="text-[9px] font-black text-white/10 uppercase tracking-[0.3em]">{new Date().toLocaleTimeString()}</span>
                     </div>

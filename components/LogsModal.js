@@ -59,8 +59,8 @@ export default function LogsModal({ isOpen, onClose }) {
                             <ShieldAlert size={22} />
                         </div>
                         <div>
-                            <h2 className="text-xl font-black italic tracking-tighter uppercase">System Logs</h2>
-                            <p className="text-[10px] text-white/30 uppercase tracking-widest font-bold">Activity Tracking & Audit</p>
+                            <h2 className="text-xl font-black italic tracking-tighter uppercase">系统活动日志</h2>
+                            <p className="text-[10px] text-white/30 uppercase tracking-widest font-bold">审计与时序追踪记录</p>
                         </div>
                     </div>
 
@@ -72,10 +72,10 @@ export default function LogsModal({ isOpen, onClose }) {
                                 onChange={(e) => setHours(parseInt(e.target.value))}
                                 className="bg-transparent border-none outline-none text-xs font-bold text-white/60 cursor-pointer"
                             >
-                                <option value={1} className="bg-[#0c0c0e]">Last 1 Hour</option>
-                                <option value={6} className="bg-[#0c0c0e]">Last 6 Hours</option>
-                                <option value={24} className="bg-[#0c0c0e]">Last 24 Hours</option>
-                                <option value={48} className="bg-[#0c0c0e]">Last 48 Hours</option>
+                                <option value={1} className="bg-[#0c0c0e]">最近 1 小时</option>
+                                <option value={6} className="bg-[#0c0c0e]">最近 6 小时</option>
+                                <option value={24} className="bg-[#0c0c0e]">最近 24 小时</option>
+                                <option value={48} className="bg-[#0c0c0e]">最近 48 小时</option>
                             </select>
                         </div>
 
@@ -84,7 +84,7 @@ export default function LogsModal({ isOpen, onClose }) {
                             className="flex items-center gap-2 px-4 py-2 bg-white/5 hover:bg-white/10 rounded-xl text-xs font-bold transition-all border border-white/5"
                         >
                             <Download size={14} />
-                            <span className="hidden sm:inline">DOWNLOAD CSV</span>
+                            <span className="hidden sm:inline">导出 CSV 报表</span>
                         </button>
 
                         <button onClick={onClose} className="p-2.5 hover:bg-white/5 rounded-full transition-all opacity-40 hover:opacity-100">
@@ -97,12 +97,12 @@ export default function LogsModal({ isOpen, onClose }) {
                 <div className="flex-1 overflow-y-auto p-4 sm:p-8 font-mono text-[13px] leading-relaxed">
                     {loading ? (
                         <div className="flex items-center justify-center h-full opacity-20 animate-pulse">
-                            <p className="tracking-widest uppercase font-black">Scanning database logs...</p>
+                            <p className="tracking-widest uppercase font-black">正在扫描数据库日志记录...</p>
                         </div>
                     ) : logs.length === 0 ? (
                         <div className="flex flex-col items-center justify-center h-full opacity-20">
                             <Info size={48} className="mb-4" />
-                            <p className="tracking-widest uppercase font-black">No logs found in this period</p>
+                            <p className="tracking-widest uppercase font-black">当前时间段内无日志信号</p>
                         </div>
                     ) : (
                         <div className="space-y-1.5">
@@ -128,8 +128,8 @@ export default function LogsModal({ isOpen, onClose }) {
 
                 {/* Footer */}
                 <div className="px-8 py-4 border-t border-white/5 bg-white/1 text-[10px] text-white/20 uppercase font-black tracking-[0.2em] flex justify-between items-center">
-                    <span>Total Logs: {logs.length}</span>
-                    <span className="animate-pulse">Live Feed Active</span>
+                    <span>日志条目统计: {logs.length}</span>
+                    <span className="animate-pulse">实时链路已激活</span>
                 </div>
             </motion.div>
         </div>

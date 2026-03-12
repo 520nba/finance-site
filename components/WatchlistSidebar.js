@@ -24,9 +24,9 @@ function PerfCell({ value }) {
 }
 
 const COLS = [
-    { key: 'd5', label: '5D' },
-    { key: 'd22', label: '22D' },
-    { key: 'd250', label: '250D' },
+    { key: 'd5', label: '5日' },
+    { key: 'd22', label: '22日' },
+    { key: 'd250', label: '250日' },
 ];
 
 function SortIcon({ colKey, sortKey, sortDesc }) {

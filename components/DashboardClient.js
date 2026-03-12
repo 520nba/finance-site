@@ -153,7 +153,7 @@ export default function DashboardClient() {
                                 <div className="flex gap-2">
                                     <input
                                         type="text"
-                                        placeholder="Enter User ID"
+                                        placeholder="输入用户 ID"
                                         value={loginInput}
                                         onChange={(e) => setLoginInput(e.target.value)}
                                         className="flex-1 bg-white/5 border border-white/10 rounded-xl px-4 py-3 outline-none focus:border-blue-500/50 transition-all text-sm font-mono"
@@ -199,7 +199,7 @@ export default function DashboardClient() {
             </div>
 
             <footer className="mt-24 pt-12 border-t border-white/5 text-center text-white/20 text-sm">
-                <p>&copy; 2026 Antigravity Financial Labs. Data provided by Tencent &amp; EastMoney.</p>
+                <p>&copy; 2026 Antigravity 金融实验室。数据源由 腾讯 &amp; 天天基金 提供。</p>
             </footer>
         </main>
     );

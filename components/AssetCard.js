@@ -30,8 +30,8 @@ function MetricPanel({ label, value, history = [], days }) {
                     compact={true}
                 />
             ) : (
-                <div className="h-[80px] flex items-center justify-center text-white/20 text-xs italic bg-white/5 rounded-lg">
-                    数据加载中…
+                <div className="h-[80px] flex items-center justify-center text-white/20 text-[10px] italic bg-white/5 rounded-lg">
+                    数据加载中...
                 </div>
             )}
         </div>
@@ -135,7 +135,7 @@ function AssetCardComponent({ asset, onRemove, mode = 'volatility' }) {
                             </div>
                         ) : (
                             <div className="h-[120px] flex items-center justify-center text-white/20 text-sm bg-white/5 rounded-xl border border-white/5">
-                                <span className="italic">暂无今日分时数据</span>
+                                <span className="italic">今日暂无分时交易数据</span>
                             </div>
                         )}
                     </div>

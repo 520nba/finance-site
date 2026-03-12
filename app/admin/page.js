@@ -116,7 +116,7 @@ function AdminCommandCenter() {
 
     const deleteUser = async (targetUserId) => {
         setConfirmAction({
-            message: `!! Danger Alert !!\n\nYou are about to purge user "${targetUserId}" and all associated data records.\n\nThis action cannot be undone. Confirm execution?`,
+            message: `!! 危险警报 !!\n\n你即将对用户 "${targetUserId}" 及其相关的资产记录进行物理抹除。\n\n此操作不可逆。确认执行？`,
             onConfirm: async () => {
                 setLoading(true);
                 try {
@@ -130,13 +130,13 @@ function AdminCommandCenter() {
                     });
                     const data = await res.json();
                     if (res.ok) {
-                        showToast(`Subject [${targetUserId}] terminated`, 'success');
+                        showToast(`主体 [${targetUserId}] 已被终止`, 'success');
                         fetchAllData(secretKey);
                     } else {
-                        showToast(data.error || 'Purge failed');
+                        showToast(data.error || '抹除失败');
                     }
                 } catch (e) {
-                    showToast('Communication Error');
+                    showToast('通信错误');
                 } finally {
                     setLoading(false);
                     setConfirmAction(null);
@@ -154,7 +154,7 @@ function AdminCommandCenter() {
     const triggerForceSync = async (type) => {
         const typeZh = type === 'fund' ? '基金' : '股票';
         setConfirmAction({
-            message: `!! Force Protocol Override !!\n\nSystem will re-synchronize all ${typeZh} history from external nodes. This will replace local datasets.\n\nExecute command?`,
+            message: `!! 协议强制覆盖 !!\n\n系统将从外部节点重新同步所有 ${typeZh} 的历史 K 线，这将替换当前的本地数据集。\n\n执行指令？`,
             onConfirm: async () => {
                 setLoading(true);
                 try {
@@ -168,13 +168,13 @@ function AdminCommandCenter() {
                     });
                     const data = await res.json();
                     if (res.ok) {
-                        showToast(`[Success] Queue Injected\n${data.message}`, 'success');
+                        showToast(`[成功] 任务已注入队列\n${data.message}`, 'success');
                         await fetchAllData(secretKey, true);
                     } else {
-                        showToast(data.error || 'Protocol Rejected');
+                        showToast(data.error || '指令被拒绝');
                     }
                 } catch (e) {
-                    showToast('API Link Lost');
+                    showToast('API 链路中断');
                 } finally {
                     setLoading(false);
                     setConfirmAction(null);
@@ -185,7 +185,7 @@ function AdminCommandCenter() {
 
     const triggerCleanup = async () => {
         setConfirmAction({
-            message: `!! Sector Sanitation !!\n\nScan and purge all orphaned ticker data from the backplane. This optimizes D1 performance.\n\nProceed?`,
+            message: `!! 环境全量洗消 !!\n\n系统将扫描并清理 D1 数据库中所有失效的无主行情数据，以优化背板性能。\n\n继续执行？`,
             onConfirm: async () => {
                 setLoading(true);
                 try {
@@ -195,13 +195,13 @@ function AdminCommandCenter() {
                     });
                     const data = await res.json();
                     if (res.ok) {
-                        showToast(`Zone Cleaned!\nHist: -${data.deleted_hist}, Names: -${data.deleted_names}`, 'success');
+                        showToast(`区域清理完成！\n历史: -${data.deleted_hist}, 名称: -${data.deleted_names}`, 'success');
                         fetchAllData(secretKey);
                     } else {
-                        showToast(data.error || 'Sanitation Failed');
+                        showToast(data.error || '洗消任务失败');
                     }
                 } catch (e) {
-                    showToast('Link Timeout');
+                    showToast('链路请求超时');
                 } finally {
                     setLoading(false);
                     setConfirmAction(null);
@@ -248,20 +248,20 @@ function AdminCommandCenter() {
                             className="relative bg-black/90 border border-white/10 p-10 rounded-[3rem] max-w-md w-full shadow-[0_0_100px_rgba(0,0,0,1)] overflow-hidden"
                         >
                             <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-red-600 to-amber-500" />
-                            <h3 className="text-xl font-black italic uppercase mb-6 tracking-tighter">Command Confirmation</h3>
+                            <h3 className="text-xl font-black italic uppercase mb-6 tracking-tighter">指令授权确认</h3>
                             <p className="text-white/40 text-sm mb-10 whitespace-pre-wrap leading-relaxed font-medium uppercase tracking-wider">{confirmAction.message}</p>
                             <div className="flex gap-4">
                                 <button
                                     onClick={() => setConfirmAction(null)}
                                     className="flex-1 px-6 py-4 rounded-2xl bg-white/5 hover:bg-white/10 font-bold text-[10px] uppercase tracking-widest transition-all"
                                 >
-                                    Cancel
+                                    返回
                                 </button>
                                 <button
                                     onClick={confirmAction.onConfirm}
                                     className="flex-1 px-6 py-4 rounded-2xl bg-red-600 hover:bg-red-500 font-black uppercase tracking-[0.2em] text-[10px] shadow-xl shadow-red-600/10 transition-all text-white"
                                 >
-                                    Proceed
+                                    确认执行
                                 </button>
                             </div>
                         </motion.div>
@@ -281,14 +281,14 @@ function AdminCommandCenter() {
                             <div className="w-24 h-24 bg-blue-500/10 rounded-3xl flex items-center justify-center mb-8 rotate-12 group-hover:rotate-0 transition-transform duration-500">
                                 <ShieldAlert size={42} className="text-blue-500 shadow-[0_0_30px_rgba(59,130,246,0.3)]" />
                             </div>
-                            <h2 className="text-3xl font-black tracking-tighter italic uppercase mb-3">Chief Command Center</h2>
-                            <p className="text-white/30 text-sm mb-10 leading-relaxed font-medium uppercase tracking-[0.2em]">
-                                Infrastructure & API Health Sentinel<br />
-                                <span className="opacity-50 font-mono">[Classified Access Only]</span>
+                            <h2 className="text-3xl font-black tracking-tighter italic uppercase mb-3">首席调度中心</h2>
+                            <p className="text-white/30 text-sm mb-10 leading-relaxed font-medium uppercase tracking-[0.15em]">
+                                基础设施与 API 健康巡检控制台<br />
+                                <span className="opacity-50 font-mono text-[10px]">[受保护权限 - 仅限核心管理员]</span>
                             </p>
                             <div className="w-full space-y-6">
                                 <div className="space-y-2 text-left">
-                                    <label className="text-[10px] font-black uppercase tracking-[0.3em] text-white/20 ml-2">Authorization Secret</label>
+                                    <label className="text-[10px] font-black uppercase tracking-[0.3em] text-white/20 ml-2">身份鉴权密钥</label>
                                     <input
                                         type="password"
                                         placeholder="••••••••••••••••"
@@ -303,10 +303,10 @@ function AdminCommandCenter() {
                                     disabled={loading}
                                     className="w-full bg-blue-600 hover:bg-cyan-500 text-white rounded-2xl py-5 font-black uppercase tracking-widest shadow-xl shadow-blue-500/10 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex justify-center items-center gap-3"
                                 >
-                                    {loading ? <RefreshCcw size={20} className="animate-spin" /> : 'Initial Communication'}
+                                    {loading ? <RefreshCcw size={20} className="animate-spin" /> : '建立通信连接'}
                                 </button>
                                 <button onClick={() => router.push('/')} className="w-full py-4 text-white/20 hover:text-white/60 text-[10px] font-black uppercase tracking-[0.4em] transition-all">
-                                    &larr; Return to Matrix
+                                    &larr; 返回系统主界面
                                 </button>
                             </div>
                         </div>
@@ -322,7 +322,7 @@ function AdminCommandCenter() {
                             </div>
                             <div className="hidden md:block">
                                 <h1 className="text-lg font-black italic tracking-tighter uppercase leading-none">Command</h1>
-                                <p className="text-[9px] font-bold opacity-30 uppercase tracking-[0.2em] mt-1">Sentinel v2.0</p>
+                                <p className="text-[9px] font-bold opacity-30 uppercase tracking-[0.2em] mt-1">控制中心 v2.0</p>
                             </div>
                         </div>
 
@@ -361,12 +361,12 @@ function AdminCommandCenter() {
                                 <div className="p-2 bg-emerald-500/10 rounded-full">
                                     <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse" />
                                 </div>
-                                <span className="text-xs font-mono font-black uppercase tracking-widest text-white/40">Node Status: Operational</span>
+                                <span className="text-xs font-mono font-black uppercase tracking-widest text-white/40">节点状态: 正常运行</span>
                             </div>
 
                             <div className="flex items-center gap-4">
                                 <div className="hidden lg:flex items-center gap-1 border border-white/5 px-4 py-2 rounded-xl bg-white/[0.02]">
-                                    <span className="text-[10px] font-black uppercase tracking-widest text-white/20 mr-2">Quick Actions:</span>
+                                    <span className="text-[10px] font-black uppercase tracking-widest text-white/20 mr-2">快速操作:</span>
                                     <button onClick={() => fetchAllData(secretKey, true)} title="刷新并校准计数器" className={`p-1.5 hover:text-cyan-400 transition-colors ${loading ? 'animate-spin opacity-50' : ''}`}><RefreshCcw size={16} /></button>
                                     <div className="w-px h-3 bg-white/10 mx-1" />
                                     <button onClick={() => triggerForceSync('stock')} disabled={loading} title="重刷所有股票历史数据" className="p-1.5 hover:text-emerald-400 disabled:opacity-30 transition-colors flex items-center gap-1.5 group/btn">
@@ -379,7 +379,7 @@ function AdminCommandCenter() {
                                         <span className="text-[9px] font-black uppercase tracking-tighter hidden xl:inline">基金重刷</span>
                                     </button>
                                     <div className="w-px h-3 bg-white/10 mx-1" />
-                                    <button onClick={triggerCleanup} title="环境全量大扫除" className="p-1.5 hover:text-orange-400 transition-colors"><Zap size={16} /></button>
+                                    <button onClick={triggerCleanup} title="全量环境洗消" className="p-1.5 hover:text-orange-400 transition-colors"><Zap size={16} /></button>
                                 </div>
                                 <div className="text-[10px] font-mono font-bold text-white/20 bg-white/5 px-4 py-2 rounded-xl border border-white/5">
                                     {new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })}
@@ -419,17 +419,17 @@ function AdminCommandCenter() {
                                                     <Wifi size={24} />
                                                 </div>
                                                 <div>
-                                                    <h2 className="text-2xl font-black italic uppercase tracking-tighter">Full Stack Sentinel Feedback</h2>
+                                                    <h2 className="text-2xl font-black italic uppercase tracking-tighter">全栈巡检实时监测中心</h2>
                                                     <p className="text-[10px] text-white/20 font-bold uppercase tracking-[0.2em]">
-                                                        All External Financial Protocol Heartbeats ({stats.api_health?.length || 0} Nodes detected)
+                                                        外部金融协议心跳数据监测 ({stats.api_health?.length || 0} 已连接节点)
                                                         {stats.api_health?.length > 0 && (
                                                             <span className="ml-2 text-cyan-500/40">
-                                                                • Last Pulse: {
+                                                                • 最后心跳: {
                                                                     (() => {
                                                                         const timestamps = stats.api_health
                                                                             .map(a => a.heartbeat_ts ? new Date(a.heartbeat_ts + 'Z').getTime() : 0)
                                                                             .filter(t => t > 0);
-                                                                        if (timestamps.length === 0) return 'N/A';
+                                                                        if (timestamps.length === 0) return '无记录';
                                                                         return new Date(Math.max(...timestamps))
                                                                             .toLocaleString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
                                                                     })()
@@ -440,7 +440,7 @@ function AdminCommandCenter() {
                                                 </div>
                                             </div>
                                             <div className="flex items-center gap-2 px-4 py-2 bg-white/5 border border-white/5 rounded-2xl text-[10px] font-black uppercase tracking-widest text-cyan-500/60">
-                                                <Clock size={12} /> Live Matrix
+                                                <Clock size={12} /> 实时遥测中
                                             </div>
                                         </div>
 
@@ -448,10 +448,10 @@ function AdminCommandCenter() {
                                             <table className="w-full text-left border-collapse">
                                                 <thead>
                                                     <tr className="border-b border-white/5 bg-white/[0.01]">
-                                                        <th className="px-10 py-6 text-[10px] font-black uppercase tracking-[0.3em] text-white/30">Protocol & Channel</th>
-                                                        <th className="px-10 py-6 text-[10px] font-black uppercase tracking-[0.3em] text-white/30 text-center">Status</th>
-                                                        <th className="px-10 py-6 text-[10px] font-black uppercase tracking-[0.3em] text-white/30 text-right">Success</th>
-                                                        <th className="px-10 py-6 text-[10px] font-black uppercase tracking-[0.3em] text-white/30 text-right">Latency</th>
+                                                        <th className="px-10 py-6 text-[10px] font-black uppercase tracking-[0.3em] text-white/30">协议与通道</th>
+                                                        <th className="px-10 py-6 text-[10px] font-black uppercase tracking-[0.3em] text-white/30 text-center">状态</th>
+                                                        <th className="px-10 py-6 text-[10px] font-black uppercase tracking-[0.3em] text-white/30 text-right">成功率</th>
+                                                        <th className="px-10 py-6 text-[10px] font-black uppercase tracking-[0.3em] text-white/30 text-right">延迟</th>
                                                     </tr>
                                                 </thead>
                                                 <tbody className="divide-y divide-white/[0.02]">
@@ -488,27 +488,27 @@ function AdminCommandCenter() {
                                                                             {api.status === 'healthy' ? (
                                                                                 <div className="flex items-center gap-2 px-3 py-1 bg-emerald-500/10 text-emerald-400 rounded-full text-[9px] font-black uppercase tracking-tighter border border-emerald-500/20">
                                                                                     <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                                                                                    Healthy
+                                                                                    健康
                                                                                 </div>
                                                                             ) : api.status === 'wary' ? (
                                                                                 <div className="flex items-center gap-2 px-3 py-1 bg-yellow-500/10 text-yellow-500 rounded-full text-[9px] font-black uppercase tracking-tighter border border-yellow-500/20">
                                                                                     <div className="w-1.5 h-1.5 rounded-full bg-yellow-500" />
-                                                                                    Delayed
+                                                                                    延迟
                                                                                 </div>
                                                                             ) : api.status === 'slow' ? (
                                                                                 <div className="flex items-center gap-2 px-3 py-1 bg-orange-500/10 text-orange-400 rounded-full text-[9px] font-black uppercase tracking-tighter border border-orange-500/20">
                                                                                     <div className="w-1.5 h-1.5 rounded-full bg-orange-400" />
-                                                                                    Unstable
+                                                                                    不稳定
                                                                                 </div>
                                                                             ) : api.status === 'critical' ? (
                                                                                 <div className="flex items-center gap-2 px-3 py-1 bg-red-600/10 text-red-500 rounded-full text-[9px] font-black uppercase tracking-tighter border border-red-600/20">
                                                                                     <div className="w-1.5 h-1.5 rounded-full bg-red-600 animate-bounce" />
-                                                                                    Critical
+                                                                                    严重错误
                                                                                 </div>
                                                                             ) : (
                                                                                 <div className="flex items-center gap-2 px-3 py-1 bg-red-900/20 text-red-700 rounded-full text-[9px] font-black uppercase tracking-tighter border border-red-900/30">
                                                                                     <div className="w-1.5 h-1.5 rounded-full bg-red-900" />
-                                                                                    Offline
+                                                                                    离线
                                                                                 </div>
                                                                             )}
                                                                         </div>
@@ -524,7 +524,7 @@ function AdminCommandCenter() {
                                                             );
                                                         })
                                                     ) : (
-                                                        <tr><td colSpan="4" className="px-10 py-32 text-center text-white/10 italic font-medium uppercase tracking-[0.3em] text-sm group">Waiting for sentinel heartbeat<span className="inline-block animate-bounce ml-2">...</span></td></tr>
+                                                        <tr><td colSpan="4" className="px-10 py-32 text-center text-white/10 italic font-medium uppercase tracking-[0.3em] text-sm group">正在等待巡检心跳信号<span className="inline-block animate-bounce ml-2">...</span></td></tr>
                                                     )}
                                                 </tbody>
                                             </table>
@@ -539,8 +539,8 @@ function AdminCommandCenter() {
                                                 <Users size={24} />
                                             </div>
                                             <div>
-                                                <h2 className="text-2xl font-black italic uppercase tracking-tighter">Subject Audit & Management</h2>
-                                                <p className="text-[10px] text-white/20 font-bold uppercase tracking-[0.2em]">Registered Entities Database Scrubbing</p>
+                                                <h2 className="text-2xl font-black italic uppercase tracking-tighter">主体审计与权限管理</h2>
+                                                <p className="text-[10px] text-white/20 font-bold uppercase tracking-[0.1em]">已注册实体账户数据库分布情况</p>
                                             </div>
                                         </div>
 
@@ -554,7 +554,7 @@ function AdminCommandCenter() {
                                                             </div>
                                                             <div>
                                                                 <div className="font-mono text-xl font-bold tracking-tight text-white/80 group-hover:text-white transition-colors">{u}</div>
-                                                                <div className="text-[9px] text-white/20 font-bold uppercase tracking-widest mt-1">Hash Verification Active</div>
+                                                                <div className="text-[9px] text-white/20 font-bold uppercase tracking-widest mt-1">哈希校验：已激活</div>
                                                             </div>
                                                         </div>
                                                         <button
@@ -569,7 +569,7 @@ function AdminCommandCenter() {
                                             ) : (
                                                 <div className="col-span-full py-40 flex flex-col items-center justify-center text-white/10 italic group">
                                                     <FileText size={64} className="mb-4 opacity-5 group-hover:opacity-10 transition-opacity" />
-                                                    <p className="uppercase tracking-[0.4em] font-black text-xs">No active subjects identified in sector</p>
+                                                    <p className="uppercase tracking-[0.4em] font-black text-xs">当前扇区未发现活跃主体</p>
                                                 </div>
                                             )}
                                         </div>
@@ -584,11 +584,11 @@ function AdminCommandCenter() {
                                                     <FileText size={24} />
                                                 </div>
                                                 <div>
-                                                    <h2 className="text-2xl font-black italic uppercase tracking-tighter">System Pulse Records</h2>
-                                                    <p className="text-[10px] text-white/20 font-bold uppercase tracking-[0.2em]">Temporal Activity Tracking (72H Window)</p>
+                                                    <h2 className="text-2xl font-black italic uppercase tracking-tighter">系统脉搏记录</h2>
+                                                    <p className="text-[10px] text-white/20 font-bold uppercase tracking-[0.15em]">时序活动追踪 (最近 72 小时窗口)</p>
                                                 </div>
                                             </div>
-                                            <div className="px-5 py-2 bg-blue-500/10 border border-blue-500/20 rounded-full text-[10px] font-black text-blue-400 uppercase tracking-widest animate-pulse">Telemetry Live</div>
+                                            <div className="px-5 py-2 bg-blue-500/10 border border-blue-500/20 rounded-full text-[10px] font-black text-blue-400 uppercase tracking-widest animate-pulse">实时遥测中</div>
                                         </div>
 
                                         <div className="bg-white/[0.01] border border-white/5 rounded-[3rem] overflow-hidden backdrop-blur-3xl lg:p-4">
@@ -613,7 +613,7 @@ function AdminCommandCenter() {
                                                 ) : (
                                                     <div className="py-40 flex flex-col items-center justify-center text-white/10 italic">
                                                         <Activity size={48} className="mb-4 opacity-5 animate-pulse" />
-                                                        <p className="font-black uppercase tracking-[0.5em] text-xs">Awaiting signal from backplane...</p>
+                                                        <p className="font-black uppercase tracking-[0.4em] text-xs">正在等待背板信号...</p>
                                                     </div>
                                                 )}
                                             </div>
