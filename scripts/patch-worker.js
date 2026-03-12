@@ -13,31 +13,36 @@ if (fs.existsSync(workerPath)) {
     const results = [];
     try {
       const cron = event.cron;
-      const baseUrl = "https://finance.380220.xyz";
       const secret = env.CRON_SECRET || "";
       
-      let targetUrls = [];
+      let paths = [];
       if (cron === "*/10 * * * *") {
-        targetUrls = [\`\${baseUrl}/api/cron/health?token=\${secret}\`];
+        paths = [\`/api/cron/health?token=\${secret}\`];
       } else if (cron === "0 13 * * 1-5") {
-        targetUrls = [\`\${baseUrl}/api/cron/daily?token=\${secret}\`];
+        paths = [\`/api/cron/daily?token=\${secret}\`];
       } else if (cron === "*/5 1-7 * * 1-5") {
-        targetUrls = [\`\${baseUrl}/api/cron/sync?token=\${secret}\`];
+        paths = [\`/api/cron/sync?token=\${secret}\`];
       } else {
-        targetUrls = [\`\${baseUrl}/api/cron/health?token=\${secret}\`, \`\${baseUrl}/api/cron/sync?token=\${secret}\`];
+        paths = [\`/api/cron/health?token=\${secret}\`, \`/api/cron/sync?token=\${secret}\`];
       }
 
-      console.log(\`[Trigger] Cron [\${cron}] Dispatching \${targetUrls.length} tasks.\`);
+      console.log(\`[Trigger] Cron [\${cron}] Dispatching \${paths.length} tasks internally.\`);
       
-      const tasks = targetUrls.map(async url => {
+      const tasks = paths.map(async path => {
         try {
-          const res = await fetch(url);
+          // 使用 internal fetch (this.fetch) 绕过公网 DNS/SSL 和 Loopback 522 限制
+          const url = \`http://localhost\${path}\`;
+          const req = new Request(url, {
+             headers: { "x-internal-cron": "true" }
+          });
+          // @ts-ignore
+          const res = await this.fetch(req, env, ctx);
           const body = await res.text();
-          const log = \`[Trigger] SUCCESS [\${res.status}]: \${url} -> \${body.slice(0, 100)}\`;
+          const log = \`[Trigger] SUCCESS [\${res.status}]: \${path} -> \${body.slice(0, 100)}\`;
           console.log(log);
           return log;
         } catch (e) {
-          const err = \`[Trigger] FAILED: \${url} -> \${e.message}\`;
+          const err = \`[Trigger] FAILED: \${path} -> \${e.message}\`;
           console.error(err);
           return err;
         }
