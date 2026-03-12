@@ -144,7 +144,8 @@ export async function GET() {
     const verifyCount = (await queryOne('SELECT COUNT(*) as count FROM api_health'))?.count || 0;
 
     // 只有在全部任务完成后才记录一次系统汇总日志
-    console.log(`[Sentinel] All ${results.length} nodes verified.`);
+    const msg = `Sentinel verified ${results.length} nodes. Success: ${results.filter(r => r.status === 'healthy').length}`;
+    await addSystemLog('INFO', 'Sentinel', msg);
 
     return NextResponse.json({ success: true, count: results.length, data: results });
 }

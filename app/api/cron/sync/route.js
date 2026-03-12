@@ -65,7 +65,7 @@ export async function GET(request) {
         console.log(`[SyncCron] ${msg}`);
 
         // 维度 3 优化: 将异步执行结果记入日志，方便在 System Pulse 观察进度
-        await addSystemLog('WARN', 'SyncCron', msg);
+        await addSystemLog('INFO', 'SyncCron', msg);
 
         return NextResponse.json({ success: true, message: msg });
     } catch (e) {
