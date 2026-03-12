@@ -694,6 +694,36 @@ function AdminCommandCenter() {
                                                     </span>
                                                 </button>
                                                 <button
+                                                    onClick={() => {
+                                                        setConfirmAction({
+                                                            title: '清空同步队列？',
+                                                            message: `确定要作废当前所有待同步任务吗？这不会删除已有的历史数据，但会停止当前的后台更新。`,
+                                                            onConfirm: async () => {
+                                                                setQueueLoading(true);
+                                                                try {
+                                                                    const res = await fetch('/api/admin/queue/clear', {
+                                                                        method: 'POST',
+                                                                        headers: { 'x-admin-key': secretKey }
+                                                                    });
+                                                                    const data = await res.json();
+                                                                    showToast(data.message || '队列已清空', 'success');
+                                                                    await fetchQueue();
+                                                                    await fetchAllData(secretKey, true);
+                                                                } catch (e) {
+                                                                    showToast('清空队列失败');
+                                                                } finally {
+                                                                    setQueueLoading(false);
+                                                                }
+                                                            }
+                                                        });
+                                                    }}
+                                                    disabled={queueLoading || (stats.queue_count || 0) === 0}
+                                                    title="一键清空待处理队列"
+                                                    className={`p-3 rounded-2xl border transition-all ${(stats.queue_count || 0) > 0 ? 'bg-red-500/10 hover:bg-red-500/20 text-red-400 border-red-500/10' : 'bg-white/5 text-white/10 border-white/5 cursor-not-allowed'}`}
+                                                >
+                                                    <Trash2 size={16} />
+                                                </button>
+                                                <button
                                                     onClick={fetchQueue}
                                                     disabled={queueLoading}
                                                     className="flex items-center gap-2 px-6 py-3 bg-white/5 hover:bg-white/10 rounded-2xl border border-white/5 transition-all group"
