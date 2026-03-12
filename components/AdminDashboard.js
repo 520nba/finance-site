@@ -6,6 +6,9 @@ import { X, ShieldCheck, Activity, Wifi, WifiOff, Zap, BarChart3, Database, Refr
 import { useSearchParams } from 'next/navigation';
 
 export default function AdminDashboard({ isOpen, onClose }) {
+    const [activeTab, setActiveTab] = useState('overview'); // 'overview', 'queue'
+    const [queueData, setQueueData] = useState([]);
+    const [queueLoading, setQueueLoading] = useState(false);
     const [stats, setStats] = useState(null);
     const [loading, setLoading] = useState(false);
     const [confirmAction, setConfirmAction] = useState(null); // { type, message, onConfirm }
@@ -42,11 +45,33 @@ export default function AdminDashboard({ isOpen, onClose }) {
         }
     };
 
+    const fetchQueue = async () => {
+        setQueueLoading(true);
+        try {
+            const key = searchParamsHooks.get('key') || searchParamsHooks.get('token') || sessionStorage.getItem('tracker_admin_secret');
+            const headers = key ? { 'x-admin-key': key } : {};
+
+            const url = new URL('/api/admin/queue', window.location.origin);
+            if (key) url.searchParams.set('token', key);
+
+            const res = await fetch(url.toString(), { headers });
+            if (res.ok) {
+                const data = await res.json();
+                setQueueData(data.queue || []);
+            }
+        } catch (e) {
+            console.error('Failed to fetch queue:', e);
+            showToast('获取队列失败');
+        } finally {
+            setQueueLoading(false);
+        }
+    };
+
     const triggerSync = async (type) => {
         const typeZh = type === 'fund' ? '基金' : '股票';
 
         setConfirmAction({
-            message: `!! Force Data Re-Sync !!\n\nThis will re-fetch all historical data for tracked ${typeZh}s. This consumes D1 resources.\n\nContinue?`,
+            message: `!! 强行全量数据同步 !!\n\n这将重新抓取所有已追踪 ${typeZh} 的历史数据。这会消耗大量 D1 资源。\n\n确认继续？`,
             onConfirm: async () => {
                 setLoading(true);
                 try {
@@ -79,10 +104,11 @@ export default function AdminDashboard({ isOpen, onClose }) {
     };
 
     useEffect(() => {
-        if (isOpen && !stats) {
-            fetchStats();
+        if (isOpen) {
+            if (activeTab === 'overview' && !stats) fetchStats();
+            if (activeTab === 'queue') fetchQueue();
         }
-    }, [isOpen, stats]);
+    }, [isOpen, activeTab]);
 
     if (!isOpen) return null;
 
@@ -154,13 +180,31 @@ export default function AdminDashboard({ isOpen, onClose }) {
             >
                 {/* Header */}
                 <div className="flex items-center justify-between px-10 py-8 border-b border-white/5 bg-white/[0.02]">
-                    <div className="flex items-center gap-5">
-                        <div className="p-3 bg-cyan-500/10 rounded-2xl text-cyan-400 shadow-[0_0_20px_rgba(34,211,238,0.1)]">
-                            <ShieldCheck size={28} />
+                    <div className="flex items-center gap-8">
+                        <div className="flex items-center gap-5">
+                            <div className="p-3 bg-cyan-500/10 rounded-2xl text-cyan-400 shadow-[0_0_20px_rgba(34,211,238,0.1)]">
+                                <ShieldCheck size={28} />
+                            </div>
+                            <div>
+                                <h2 className="text-2xl font-black italic tracking-tighter uppercase leading-none mb-1">首席调度中心</h2>
+                                <p className="text-[10px] text-white/20 uppercase tracking-[0.3em] font-bold">终端节点：D1-MATRIX-01</p>
+                            </div>
                         </div>
-                        <div>
-                            <h2 className="text-2xl font-black italic tracking-tighter uppercase leading-none mb-1">首席调度中心</h2>
-                            <p className="text-[10px] text-white/20 uppercase tracking-[0.3em] font-bold">基础设施与 API 健康巡检控制台</p>
+
+                        {/* Tabs Navigation */}
+                        <div className="flex items-center bg-white/[0.03] border border-white/5 p-1 rounded-2xl">
+                            <button
+                                onClick={() => setActiveTab('overview')}
+                                className={`px-5 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${activeTab === 'overview' ? 'bg-cyan-500 text-white shadow-lg shadow-cyan-500/20' : 'text-white/30 hover:text-white/60'}`}
+                            >
+                                概览面板
+                            </button>
+                            <button
+                                onClick={() => setActiveTab('queue')}
+                                className={`px-5 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${activeTab === 'queue' ? 'bg-cyan-500 text-white shadow-lg shadow-cyan-500/20' : 'text-white/30 hover:text-white/60'}`}
+                            >
+                                待处理队列
+                            </button>
                         </div>
                     </div>
 
@@ -178,10 +222,10 @@ export default function AdminDashboard({ isOpen, onClose }) {
                         </div>
 
                         <div className="hidden md:flex flex-col items-end">
-                            <span className="text-[10px] text-white/20 font-black uppercase tracking-widest leading-none mb-1">节点状态</span>
+                            <span className="text-[10px] text-white/20 font-black uppercase tracking-widest leading-none mb-1">系统心跳</span>
                             <div className="flex items-center gap-2">
                                 <span className="w-1.5 h-1.5 rounded-full bg-cyan-500 animate-pulse"></span>
-                                <span className="text-xs font-mono font-bold text-cyan-500/80 uppercase tracking-tighter">正常运行</span>
+                                <span className="text-xs font-mono font-bold text-cyan-500/80 uppercase tracking-tighter">ENCRYPTED</span>
                             </div>
                         </div>
                         <button onClick={onClose} className="p-3 hover:bg-white/5 rounded-full transition-all group">
@@ -192,126 +236,211 @@ export default function AdminDashboard({ isOpen, onClose }) {
 
                 {/* Content */}
                 <div className="flex-1 overflow-y-auto p-10 custom-scrollbar">
-                    {loading && !stats ? (
-                        <div className="h-full flex flex-col items-center justify-center gap-4 opacity-20">
-                            <motion.div
-                                animate={{ rotate: 360 }}
-                                transition={{ duration: 4, repeat: Infinity, ease: "linear" }}
-                                className="w-12 h-12 border-2 border-white/10 border-t-white/60 rounded-full"
-                            />
-                            <p className="font-black italic tracking-[0.5em] uppercase text-sm">正在同步矩阵数据...</p>
-                        </div>
-                    ) : (
-                        <div className="space-y-12">
-                            {/* Key Performance Indicators */}
-                            <div className="grid grid-cols-2 lg:grid-cols-4 gap-6">
-                                {[
-                                    { label: '活跃用户', value: stats?.users ?? 0, icon: <Activity size={18} />, color: 'text-blue-400' },
-                                    { label: '资产总量', value: ((stats?.stocks ?? 0) + (stats?.funds ?? 0)), icon: <Zap size={18} />, color: 'text-yellow-400' },
-                                    { label: '同步队列', value: stats?.queue_count ?? 0, icon: <RefreshCw size={18} />, color: 'text-orange-400' },
-                                    { label: '历史点位', value: (((stats?.history_points ?? 0) / 1000).toFixed(1)) + 'K', icon: <Database size={18} />, color: 'text-purple-400' },
-                                    { label: '计算引擎', value: 'D1/SQLite', icon: <BarChart3 size={18} />, color: 'text-cyan-400' }
-                                ].map((kpi, i) => (
-                                    <div key={i} className="bg-white/[0.03] border border-white/5 p-6 rounded-3xl group hover:border-white/10 transition-all relative">
-                                        <div className="absolute top-6 right-6">
-                                            {i === 0 && (
-                                                <button
-                                                    onClick={() => fetchStats(true)}
-                                                    disabled={loading}
-                                                    title="校准并刷新所有计数器 (耗费 D1 读取)"
-                                                    className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 transition-colors text-white/30 hover:text-white/60"
-                                                >
-                                                    <RefreshCw size={12} className={loading ? 'animate-spin' : ''} />
-                                                </button>
-                                            )}
-                                        </div>
-                                        <div className={`p-2 w-fit rounded-lg bg-white/5 mb-4 ${kpi.color}`}>
-                                            {kpi.icon}
-                                        </div>
-                                        <div className="text-3xl font-black italic tracking-tighter mb-1">{kpi.value || '--'}</div>
-                                        <div className="text-[10px] text-white/20 font-bold uppercase tracking-widest">{kpi.label}</div>
-                                    </div>
-                                ))}
+                    {activeTab === 'overview' ? (
+                        loading && !stats ? (
+                            <div className="h-full flex flex-col items-center justify-center gap-4 opacity-20">
+                                <motion.div
+                                    animate={{ rotate: 360 }}
+                                    transition={{ duration: 4, repeat: Infinity, ease: "linear" }}
+                                    className="w-12 h-12 border-2 border-white/10 border-t-white/60 rounded-full"
+                                />
+                                <p className="font-black italic tracking-[0.5em] uppercase text-sm">正在同步矩阵数据...</p>
                             </div>
-
-                            {/* Section: API Realtime Health Monitoring */}
-                            <div>
-                                <div className="flex items-center justify-between mb-6 px-2">
-                                    <div className="flex items-center gap-3">
-                                        <Wifi size={18} className="text-cyan-500" />
-                                        <h3 className="text-sm font-black italic uppercase tracking-widest text-white/60">外部协议巡检反馈</h3>
-                                    </div>
-                                    <span className="text-[10px] font-mono text-white/20 uppercase tracking-tighter">采样率: 5分钟</span>
+                        ) : (
+                            <div className="space-y-12">
+                                {/* Key Performance Indicators */}
+                                <div className="grid grid-cols-2 lg:grid-cols-4 gap-6">
+                                    {[
+                                        { label: '活跃用户', value: stats?.users ?? 0, icon: <Activity size={18} />, color: 'text-blue-400' },
+                                        { label: '资产总量', value: ((stats?.stocks ?? 0) + (stats?.funds ?? 0)), icon: <Zap size={18} />, color: 'text-yellow-400' },
+                                        { label: '同步队列', value: stats?.queue_count ?? 0, icon: <RefreshCw size={18} />, color: 'text-orange-400' },
+                                        { label: '历史点位', value: (((stats?.history_points ?? 0) / 1000).toFixed(1)) + 'K', icon: <Database size={18} />, color: 'text-purple-400' }
+                                    ].map((kpi, i) => (
+                                        <div key={i} className="bg-white/[0.03] border border-white/5 p-6 rounded-3xl group hover:border-white/10 transition-all relative">
+                                            <div className="absolute top-6 right-6">
+                                                {i === 0 && (
+                                                    <button
+                                                        onClick={() => fetchStats(true)}
+                                                        disabled={loading}
+                                                        title="手动校准计数器 (消耗 D1 读取)"
+                                                        className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 transition-colors text-white/30 hover:text-white/60"
+                                                    >
+                                                        <RefreshCw size={12} className={loading ? 'animate-spin' : ''} />
+                                                    </button>
+                                                )}
+                                            </div>
+                                            <div className={`p-2 w-fit rounded-lg bg-white/5 mb-4 ${kpi.color}`}>
+                                                {kpi.icon}
+                                            </div>
+                                            <div className="text-3xl font-black italic tracking-tighter mb-1">{kpi.value || '--'}</div>
+                                            <div className="text-[10px] text-white/20 font-bold uppercase tracking-widest">{kpi.label}</div>
+                                        </div>
+                                    ))}
                                 </div>
 
-                                <div className="bg-white/[0.02] border border-white/5 rounded-3xl overflow-hidden">
-                                    <table className="w-full text-left border-collapse">
-                                        <thead>
-                                            <tr className="border-b border-white/5 bg-white/[0.01]">
-                                                <th className="px-8 py-5 text-[10px] font-black uppercase tracking-[0.2em] text-white/30">接口与通道名称</th>
-                                                <th className="px-8 py-5 text-[10px] font-black uppercase tracking-[0.2em] text-white/30 text-center">协议状态</th>
-                                                <th className="px-8 py-5 text-[10px] font-black uppercase tracking-[0.2em] text-white/30 text-right">成功率</th>
-                                                <th className="px-8 py-5 text-[10px] font-black uppercase tracking-[0.2em] text-white/30 text-right">平均延迟</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody className="divide-y divide-white/[0.03]">
-                                            {stats?.api_health?.length ? (
-                                                stats.api_health.map((api) => (
-                                                    <tr key={api.api_name} className="group hover:bg-white/[0.02] transition-colors">
-                                                        <td className="px-8 py-6">
-                                                            <div className="flex flex-col">
-                                                                <span className="font-bold text-white/80 group-hover:text-cyan-400 transition-colors">{api.api_name}</span>
-                                                                <span className="text-[9px] text-white/20 mt-1 uppercase font-mono">{api.error_msg || '协议接口正常'}</span>
-                                                            </div>
-                                                        </td>
-                                                        <td className="px-8 py-6">
-                                                            <div className="flex justify-center">
-                                                                {api.status === 'healthy' ? (
-                                                                    <div className="flex items-center gap-2 px-3 py-1 bg-green-500/10 text-green-400 rounded-full text-[10px] font-black uppercase tracking-tighter border border-green-500/20">
-                                                                        <div className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse"></div>
-                                                                        正常健康
-                                                                    </div>
-                                                                ) : api.status === 'wary' ? (
-                                                                    <div className="flex items-center gap-2 px-3 py-1 bg-yellow-500/10 text-yellow-500 rounded-full text-[10px] font-black uppercase tracking-tighter border border-yellow-500/20">
-                                                                        <div className="w-1.5 h-1.5 rounded-full bg-yellow-500"></div>
-                                                                        响应延迟
-                                                                    </div>
-                                                                ) : api.status === 'slow' ? (
-                                                                    <div className="flex items-center gap-2 px-3 py-1 bg-orange-500/10 text-orange-500 rounded-full text-[10px] font-black uppercase tracking-tighter border border-orange-500/20">
-                                                                        <div className="w-1.5 h-1.5 rounded-full bg-orange-500"></div>
-                                                                        波动不稳定
-                                                                    </div>
-                                                                ) : api.status === 'critical' ? (
-                                                                    <div className="flex items-center gap-2 px-3 py-1 bg-red-600/10 text-red-500 rounded-full text-[10px] font-black uppercase tracking-tighter border border-red-600/20">
-                                                                        <div className="w-1.5 h-1.5 rounded-full bg-red-600 animate-bounce"></div>
-                                                                        严重故障
-                                                                    </div>
-                                                                ) : (
-                                                                    <div className="flex items-center gap-2 px-3 py-1 bg-red-900/20 text-red-700 rounded-full text-[10px] font-black uppercase tracking-tighter border border-red-900/30">
-                                                                        <div className="w-1.5 h-1.5 rounded-full bg-red-900"></div>
-                                                                        离线断开
-                                                                    </div>
-                                                                )}
-                                                            </div>
-                                                        </td>
-                                                        <td className="px-8 py-6 text-right">
-                                                            <span className="font-mono font-black text-lg text-white/60">{api.success_rate ?? '0/0'}</span>
-                                                        </td>
-                                                        <td className="px-8 py-6 text-right">
-                                                            <span className={`font-mono font-black ${(api.avg_latency ?? 0) > 3000 ? 'text-red-400' : (api.avg_latency ?? 0) > 1500 ? 'text-yellow-400' : 'text-white/40'}`}>{api.avg_latency ?? '--'}ms</span>
+                                {/* Section: API Realtime Health Monitoring */}
+                                <div>
+                                    <div className="flex items-center justify-between mb-6 px-2">
+                                        <div className="flex items-center gap-3">
+                                            <Wifi size={18} className="text-cyan-500" />
+                                            <h3 className="text-sm font-black italic uppercase tracking-widest text-white/60">外部协议巡检反馈</h3>
+                                        </div>
+                                        <span className="text-[10px] font-mono text-white/20 uppercase tracking-tighter">采样率: 5分钟</span>
+                                    </div>
+
+                                    <div className="bg-white/[0.02] border border-white/5 rounded-3xl overflow-hidden shadow-2xl">
+                                        <table className="w-full text-left border-collapse">
+                                            <thead>
+                                                <tr className="border-b border-white/5 bg-white/[0.01]">
+                                                    <th className="px-8 py-5 text-[10px] font-black uppercase tracking-[0.2em] text-white/30">接口与通道名称</th>
+                                                    <th className="px-8 py-5 text-[10px] font-black uppercase tracking-[0.2em] text-white/30 text-center">协议状态</th>
+                                                    <th className="px-8 py-5 text-[10px] font-black uppercase tracking-[0.2em] text-white/30 text-right">成功率</th>
+                                                    <th className="px-8 py-5 text-[10px] font-black uppercase tracking-[0.2em] text-white/30 text-right">平均延迟</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody className="divide-y divide-white/[0.03]">
+                                                {stats?.api_health?.length ? (
+                                                    stats.api_health.map((api) => (
+                                                        <tr key={api.api_name} className="group hover:bg-white/[0.02] transition-colors">
+                                                            <td className="px-8 py-6">
+                                                                <div className="flex flex-col">
+                                                                    <span className="font-bold text-white/80 group-hover:text-cyan-400 transition-colors uppercase tracking-tight">{api.api_name}</span>
+                                                                    <span className="text-[9px] text-white/20 mt-1 uppercase font-mono">{api.error_msg || '协议接口运行正常'}</span>
+                                                                </div>
+                                                            </td>
+                                                            <td className="px-8 py-6">
+                                                                <div className="flex justify-center">
+                                                                    {api.status === 'healthy' ? (
+                                                                        <div className="flex items-center gap-2 px-3 py-1 bg-green-500/10 text-green-400 rounded-full text-[10px] font-black uppercase tracking-tighter border border-green-500/20">
+                                                                            <div className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse"></div>
+                                                                            正常健康
+                                                                        </div>
+                                                                    ) : api.status === 'wary' ? (
+                                                                        <div className="flex items-center gap-2 px-3 py-1 bg-yellow-500/10 text-yellow-500 rounded-full text-[10px] font-black uppercase tracking-tighter border border-yellow-500/20">
+                                                                            <div className="w-1.5 h-1.5 rounded-full bg-yellow-500"></div>
+                                                                            响应延迟
+                                                                        </div>
+                                                                    ) : api.status === 'slow' ? (
+                                                                        <div className="flex items-center gap-2 px-3 py-1 bg-orange-500/10 text-orange-500 rounded-full text-[10px] font-black uppercase tracking-tighter border border-orange-500/20">
+                                                                            <div className="w-1.5 h-1.5 rounded-full bg-orange-500"></div>
+                                                                            波动不稳定
+                                                                        </div>
+                                                                    ) : api.status === 'critical' ? (
+                                                                        <div className="flex items-center gap-2 px-3 py-1 bg-red-600/10 text-red-500 rounded-full text-[10px] font-black uppercase tracking-tighter border border-red-600/20">
+                                                                            <div className="w-1.5 h-1.5 rounded-full bg-red-600 animate-bounce"></div>
+                                                                            严重故障
+                                                                        </div>
+                                                                    ) : (
+                                                                        <div className="flex items-center gap-2 px-3 py-1 bg-red-900/20 text-red-700 rounded-full text-[10px] font-black uppercase tracking-tighter border border-red-900/30">
+                                                                            <div className="w-1.5 h-1.5 rounded-full bg-red-900"></div>
+                                                                            离线断开
+                                                                        </div>
+                                                                    )}
+                                                                </div>
+                                                            </td>
+                                                            <td className="px-8 py-6 text-right">
+                                                                <span className="font-mono font-black text-lg text-white/60">{api.success_rate ?? '0/0'}</span>
+                                                            </td>
+                                                            <td className="px-8 py-6 text-right">
+                                                                <span className={`font-mono font-black ${(api.avg_latency ?? 0) > 3000 ? 'text-red-400' : (api.avg_latency ?? 0) > 1500 ? 'text-yellow-400' : 'text-white/40'}`}>{api.avg_latency ?? '--'}ms</span>
+                                                            </td>
+                                                        </tr>
+                                                    ))
+                                                ) : (
+                                                    <tr>
+                                                        <td colSpan="4" className="px-8 py-12 text-center text-white/10 italic text-sm font-black uppercase tracking-widest">
+                                                            {loading ? '正在解密心跳信号...' : '等待巡检组件响应...'}
                                                         </td>
                                                     </tr>
-                                                ))
-                                            ) : (
-                                                <tr>
-                                                    <td colSpan="4" className="px-8 py-12 text-center text-white/10 italic text-sm font-black uppercase tracking-widest">
-                                                        {loading ? '正在解密心跳信号...' : '等待巡检组件响应...'}
+                                                )}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+                        )
+                    ) : (
+                        /* Queue List Tab */
+                        <div className="space-y-6">
+                            <div className="flex items-center justify-between px-2">
+                                <div className="flex items-center gap-3">
+                                    <RefreshCw size={18} className="text-orange-400" />
+                                    <h3 className="text-sm font-black italic uppercase tracking-widest text-white/60">同步任务执行队列</h3>
+                                </div>
+                                <button
+                                    onClick={fetchQueue}
+                                    disabled={queueLoading}
+                                    className="flex items-center gap-2 px-4 py-2 bg-white/5 hover:bg-white/10 rounded-xl transition-all group"
+                                >
+                                    <RefreshCw size={14} className={`text-white/40 group-hover:text-white/80 ${queueLoading ? 'animate-spin' : ''}`} />
+                                    <span className="text-[10px] font-black uppercase tracking-tighter">立即刷新</span>
+                                </button>
+                            </div>
+
+                            <div className="bg-white/[0.02] border border-white/5 rounded-3xl overflow-hidden shadow-2xl">
+                                <table className="w-full text-left border-collapse">
+                                    <thead>
+                                        <tr className="border-b border-white/5 bg-white/[0.01]">
+                                            <th className="px-8 py-5 text-[10px] font-black uppercase tracking-[0.2em] text-white/30">资产代码</th>
+                                            <th className="px-8 py-5 text-[10px] font-black uppercase tracking-[0.2em] text-white/30">类型</th>
+                                            <th className="px-8 py-5 text-[10px] font-black uppercase tracking-[0.2em] text-white/30 text-center">处理状态</th>
+                                            <th className="px-8 py-5 text-[10px] font-black uppercase tracking-[0.2em] text-white/30 text-right">入队时间</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-white/[0.03]">
+                                        {queueLoading && !queueData.length ? (
+                                            <tr>
+                                                <td colSpan="4" className="px-8 py-20 text-center text-white/10 italic text-sm font-black uppercase tracking-widest">
+                                                    正在从 D1 提取队列清单...
+                                                </td>
+                                            </tr>
+                                        ) : queueData.length ? (
+                                            queueData.map((item, idx) => (
+                                                <tr key={`${item.code}-${item.type}`} className="group hover:bg-white/[0.02] transition-colors">
+                                                    <td className="px-8 py-6">
+                                                        <span className="font-mono font-bold text-white/80 group-hover:text-orange-400 transition-colors">{item.code}</span>
+                                                    </td>
+                                                    <td className="px-8 py-6">
+                                                        <span className={`text-[10px] font-black px-2 py-1 rounded-md uppercase tracking-tighter ${item.type === 'fund' ? 'bg-blue-500/10 text-blue-400' : 'bg-emerald-500/10 text-emerald-400'}`}>
+                                                            {item.type === 'fund' ? '基金' : '股票'}
+                                                        </span>
+                                                    </td>
+                                                    <td className="px-8 py-6">
+                                                        <div className="flex justify-center">
+                                                            {item.status === 'pending' ? (
+                                                                <div className="flex items-center gap-2 px-3 py-1 bg-white/5 text-white/40 rounded-full text-[10px] font-black uppercase tracking-tighter border border-white/10">
+                                                                    等待中
+                                                                </div>
+                                                            ) : item.status === 'syncing' ? (
+                                                                <div className="flex items-center gap-2 px-3 py-1 bg-orange-500/10 text-orange-400 rounded-full text-[10px] font-black uppercase tracking-tighter border border-orange-500/20">
+                                                                    <div className="w-1.5 h-1.5 rounded-full bg-orange-400 animate-pulse"></div>
+                                                                    正在同步
+                                                                </div>
+                                                            ) : item.status === 'error' ? (
+                                                                <div className="flex items-center gap-2 px-3 py-1 bg-red-500/10 text-red-400 rounded-full text-[10px] font-black uppercase tracking-tighter border border-red-500/20">
+                                                                    同步失败
+                                                                </div>
+                                                            ) : (
+                                                                <div className="flex items-center gap-2 px-3 py-1 bg-emerald-500/10 text-emerald-400 rounded-full text-[10px] font-black uppercase tracking-tighter border border-emerald-500/20">
+                                                                    已完成
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    </td>
+                                                    <td className="px-8 py-6 text-right font-mono text-[10px] text-white/30 group-hover:text-white/60 transition-colors">
+                                                        {new Date(item.created_at).toLocaleString('zh-CN', { hour12: false })}
                                                     </td>
                                                 </tr>
-                                            )}
-                                        </tbody>
-                                    </table>
-                                </div>
+                                            ))
+                                        ) : (
+                                            <tr>
+                                                <td colSpan="4" className="px-8 py-20 text-center text-white/10 italic text-sm font-black uppercase tracking-widest">
+                                                    当前工作队列已清空
+                                                </td>
+                                            </tr>
+                                        )}
+                                    </tbody>
+                                </table>
                             </div>
                         </div>
                     )}
@@ -320,9 +449,9 @@ export default function AdminDashboard({ isOpen, onClose }) {
                 {/* Footer */}
                 <div className="px-10 py-6 border-t border-white/5 bg-white/[0.01] flex justify-between items-center">
                     <div className="flex items-center gap-3">
-                        <span className="text-[9px] font-black text-white/10 uppercase tracking-[0.3em]">遥测链路已激活</span>
-                        <div className="w-1 h-1 rounded-full bg-white/20"></div>
-                        <span className="text-[9px] font-black text-white/10 uppercase tracking-[0.3em]">{new Date().toLocaleTimeString()}</span>
+                        <span className="text-[9px] font-black text-white/10 uppercase tracking-[0.3em]">遥测链路状态: 建立连接</span>
+                        <div className="w-1 h-1 rounded-full bg-cyan-500/40"></div>
+                        <span className="text-[9px] font-black text-white/10 uppercase tracking-[0.3em] font-mono">{new Date().toLocaleTimeString()}</span>
                     </div>
                 </div>
             </motion.div>
