@@ -2,7 +2,6 @@ import { NextResponse } from 'next/server';
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
-import { queryOne } from '@/lib/storage/d1Client';
 import { isAdminAuthorized } from '@/lib/auth';
 import { getAllApiHealth } from '@/lib/storage/healthRepo';
 import { memoryCache } from '@/lib/storage/memoryCache';
@@ -19,26 +18,18 @@ export async function GET(request) {
         return NextResponse.json({ error: 'Unauthorized' }, { status: 403 });
     }
 
-    const cached = memoryCache.get(STATS_CACHE_KEY);
-    if (cached && (Date.now() - cached.timestamp < CACHE_TTL)) {
-        return NextResponse.json(cached.data);
+    const { searchParams } = new URL(request.url);
+    const shouldSync = searchParams.get('sync') === 'true';
+
+    // 只有在非同步请求时才走缓存逻辑
+    if (!shouldSync) {
+        const cached = memoryCache.get(STATS_CACHE_KEY);
+        if (cached && (Date.now() - cached.timestamp < CACHE_TTL)) {
+            return NextResponse.json(cached.data);
+        }
     }
 
     try {
-        const wrapQuery = async (sql) => {
-            try {
-                const res = await queryOne(sql);
-                return res?.count || 0;
-            }
-            catch (e) {
-                console.error(`[AdminStats] DB Query Failure [${sql}]:`, e.message);
-                return 0;
-            }
-        };
-
-        const { searchParams } = new URL(request.url);
-        const shouldSync = searchParams.get('sync') === 'true';
-
         // 1. 如果带了 sync 参数，执行昂贵的全量校准 (仅限管理员手动操作)
         if (shouldSync) {
             const { syncCounterFromTable } = await import('@/lib/storage/statsRepo');

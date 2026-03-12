@@ -686,10 +686,12 @@ function AdminCommandCenter() {
                                                         }
                                                     }}
                                                     disabled={queueLoading}
-                                                    className="flex items-center gap-2 px-6 py-3 bg-cyan-600/10 hover:bg-cyan-600/20 text-cyan-400 rounded-2xl border border-cyan-500/10 transition-all group"
+                                                    className={`flex items-center gap-2 px-6 py-3 rounded-2xl border transition-all group ${(stats.queue_count || 0) > 0 ? 'bg-cyan-600/10 hover:bg-cyan-600/20 text-cyan-400 border-cyan-500/10' : 'bg-white/5 text-white/20 border-white/5 cursor-not-allowed'}`}
                                                 >
                                                     <Zap size={14} className={queueLoading ? 'animate-pulse' : ''} />
-                                                    <span className="text-[10px] font-black uppercase tracking-widest">手动消化批处理 (25)</span>
+                                                    <span className="text-[10px] font-black uppercase tracking-widest">
+                                                        手动消化批处理 {(stats.queue_count || 0) > 0 ? `(剩余 ${stats.queue_count})` : '(已排空)'}
+                                                    </span>
                                                 </button>
                                                 <button
                                                     onClick={fetchQueue}
