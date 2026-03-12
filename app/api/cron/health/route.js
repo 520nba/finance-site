@@ -6,6 +6,7 @@ import { updateApiHealth } from '@/lib/storage/healthRepo';
 import { fetchStockEastmoney, fetchStockTencent, fetchStockSina, fetchFundHistory } from '@/lib/services/historyFetcher';
 import { addSystemLog } from '@/lib/storage/logRepo';
 import { queryOne } from '@/lib/storage/d1Client';
+import { syncCounterFromTable } from '@/lib/storage/statsRepo';
 
 /**
  * 外部 API 深度巡检器 (Sentinel V2: Parallel, Tiny Logs, Status Logic Optimized)
@@ -146,6 +147,10 @@ export async function GET() {
 
     // 更新系统汇总日志 (排除 down 状态即算广义成功)
     const successCount = results.filter(r => r.status !== 'down').length;
+
+    // 自动修正同步队列计数器 (防止长期的计数偏离)
+    await syncCounterFromTable('queue_count', 'sync_queue');
+
     const msg = `Sentinel verified ${results.length} nodes. Success: ${successCount}`;
     await addSystemLog('INFO', 'Sentinel', msg);
 
