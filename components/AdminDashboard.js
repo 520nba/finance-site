@@ -295,7 +295,7 @@ export default function AdminDashboard({ isOpen, onClose }) {
                                                             </div>
                                                         </td>
                                                         <td className="px-8 py-6 text-right">
-                                                            <span className="font-mono font-black text-lg text-white/60">{api.success_rate ?? 0}%</span>
+                                                            <span className="font-mono font-black text-lg text-white/60">{api.success_rate ?? '0/0'}</span>
                                                         </td>
                                                         <td className="px-8 py-6 text-right">
                                                             <span className={`font-mono font-black ${(api.avg_latency ?? 0) > 3000 ? 'text-red-400' : (api.avg_latency ?? 0) > 1500 ? 'text-yellow-400' : 'text-white/40'}`}>{api.avg_latency ?? '--'}ms</span>

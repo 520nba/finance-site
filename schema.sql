@@ -94,7 +94,7 @@ CREATE INDEX IF NOT EXISTS idx_sync_queue_status ON sync_queue(status);
 CREATE TABLE IF NOT EXISTS api_health (
     api_name TEXT PRIMARY KEY,
     status TEXT DEFAULT 'unknown',
-    success_rate REAL DEFAULT 0,
+    success_rate TEXT DEFAULT '0/0',
     avg_latency INTEGER DEFAULT 0,
     success_count INTEGER DEFAULT 0,
     fail_count INTEGER DEFAULT 0,
