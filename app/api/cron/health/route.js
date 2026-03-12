@@ -145,14 +145,21 @@ export async function GET() {
         await updateApiHealth(r.name, r);
     }
 
-    // 更新系统汇总日志 (排除 down 状态即算广义成功)
-    const successCount = results.filter(r => r.status !== 'down').length;
-
     // 自动修正同步队列计数器 (防止长期的计数偏离)
     await syncCounterFromTable('queue_count', 'sync_queue');
 
-    const msg = `Sentinel verified ${results.length} nodes. Success: ${successCount}`;
+    // 拆分可用性 (Availability) 与 服务水平 (SLA) 统计
+    const availabilitySuccess = results.filter(r => r.status !== 'down').length;
+    const slaSuccess = results.filter(r => ['healthy', 'wary'].includes(r.status)).length;
+
+    const msg = `Sentinel verified ${results.length} nodes. Availability: ${availabilitySuccess}/${results.length}, SLA OK: ${slaSuccess}/${results.length}`;
     await addSystemLog('INFO', 'Sentinel', msg);
 
-    return NextResponse.json({ success: true, count: results.length, data: results });
+    return NextResponse.json({
+        success: true,
+        count: results.length,
+        availabilitySuccess,
+        slaSuccess,
+        data: results
+    });
 }
