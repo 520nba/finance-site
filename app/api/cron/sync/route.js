@@ -67,10 +67,18 @@ export async function GET(request) {
                 }
             } else {
                 // Fetch promise was rejected (e.g., network error, API error, or timeout)
-                const { code, type } = res.reason.task || { code: 'unknown', type: 'unknown' }; // Attempt to get code/type from reason if available
-                console.error(`[SyncCron] Fetch Error for ${type}:${code}:`, res.reason.message || res.reason);
-                await updateSyncStatus(code, type, 'error');
-                await addSystemLog('ERROR', 'SyncCron', `Fetch Error [${type}:${code}]: ${res.reason.message || res.reason}`);
+                // 稳健提取错误上下文：res.reason 可能本身就是 Error 对象或字符串
+                const errorObj = res.reason || {};
+                const taskContext = errorObj.task || { code: 'unknown', type: 'unknown' };
+                const errorMsg = errorObj.message || String(errorObj);
+
+                console.error(`[SyncCron] Fetch Error for ${taskContext.type}:${taskContext.code}:`, errorMsg);
+
+                if (taskContext.code !== 'unknown') {
+                    await updateSyncStatus(taskContext.code, taskContext.type, 'error');
+                }
+
+                await addSystemLog('ERROR', 'SyncCron', `Fetch Error [${taskContext.type}:${taskContext.code}]: ${errorMsg}`);
                 failed++;
             }
         }
