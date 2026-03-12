@@ -24,15 +24,19 @@ export async function POST(request) {
             return NextResponse.json({ success: true, message: `No ${type}s found in user tracking lists.` });
         }
 
-        // 2. 清理原有队列并注入新任务 (维度 1 优化)
-        // 移除提前 DELETE 逻辑，防止同步期间出现空白数据。
-        // 现在 fetcher 已具备 250d 全量强制抓取和数量校验能力，同步成功后会自动覆盖并对齐历史。
+        // 2. 注入新任务
+        // 移除原有该类型的非完成任务，准确定位新任务数
         await runSql('DELETE FROM sync_queue WHERE type = ? AND status != "done"', [type]);
 
         const { addToSyncQueue } = await import('@/lib/storage/historyRepo');
         await addToSyncQueue(assets);
 
-        // 3. 记录审计日志
+        // 3. 维度 3 优化: 全量校准计数器
+        // 由于 DELETE 操作和批量 INSERT 可能会导致简易 Counter 偏差，这里强制执行一次表级校准
+        const { syncCounterFromTable } = await import('@/lib/storage/statsRepo');
+        await syncCounterFromTable('queue_count', 'sync_queue');
+
+        // 4. 记录审计日志
         const { addSystemLog } = await import('@/lib/storage/logRepo');
         await addSystemLog('WARN', 'ForceSync', `Standard Re-Sync Queued [${type}]: ${assets.length} items. New standard points will overwrite old data in background.`);
 
