@@ -24,6 +24,15 @@ jobs:
       - name: Install dependencies
         run: npm install
 
+      - name: Setup Next.js cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            .next/cache
+          key: ${{ runner.os }}-nextjs-${{ hashFiles('**/package-lock.json') }}-${{ hashFiles('**.[jt]s', '**.[jt]sx') }}
+          restore-keys: |
+            ${{ runner.os }}-nextjs-${{ hashFiles('**/package-lock.json') }}-
+
       # 由于 OpenNext 构建需要特定的 Windows 二进制包，但在 Linux 环境下 npm 会根据平台自动处理。
       # 我们直接运行 package.json 中定义的 deploy 脚本。
       - name: Build and Deploy
