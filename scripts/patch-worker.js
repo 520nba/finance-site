@@ -47,8 +47,27 @@ if (fs.existsSync(workerPath)) {
     if (match) {
       const insertionPoint = match.index + match[0].length;
       content = content.slice(0, insertionPoint) + scheduledFunction + content.slice(insertionPoint);
+
+      // 在 fetch 句柄的最前面增加调试路由
+      const fetchStartRegex = /async\s+fetch\s*\(request,\s*env,\s*ctx\)\s*\{/;
+      const fetchMatch = content.match(fetchStartRegex);
+      if (fetchMatch) {
+        const debugRoute = `
+    const debugUrl = new URL(request.url);
+    if (debugUrl.pathname === "/__manual_scheduled") {
+       console.log("[Debug] Manually triggering scheduled handler via /__manual_scheduled");
+       const cron = debugUrl.searchParams.get("cron") || "*/10 * * * *";
+       // @ts-ignore
+       await this.scheduled({ cron }, env, ctx);
+       return new Response("OK: Scheduled Triggered", { status: 200 });
+    }
+`;
+        const fetchInsertionPoint = fetchMatch.index + fetchMatch[0].length;
+        content = content.slice(0, fetchInsertionPoint) + debugRoute + content.slice(fetchInsertionPoint);
+      }
+
       fs.writeFileSync(workerPath, content);
-      console.log('Successfully patched .open-next/worker.js with robust scheduled() handler');
+      console.log('Successfully patched .open-next/worker.js with robust scheduled() handler and debug route');
     } else {
       console.error('Could not find export default in .open-next/worker.js');
     }
