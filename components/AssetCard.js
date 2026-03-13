@@ -11,14 +11,29 @@ import { fetchBulkHistory } from '@/services/api/historyService';
 import { fetchBulkIntradayData } from '@/services/api/intradayService';
 
 // 独立子组件，展示具体时段的表现
+// 独立子组件，展示具体时段的表现
 function MetricPanel({ label, value, history = [], days }) {
+    if (value === null || value === undefined) {
+        return (
+            <div className="flex flex-col gap-2 opacity-50">
+                <div className="flex justify-between items-end">
+                    <span className="text-sm font-bold opacity-40 uppercase tracking-tighter">{label}表现</span>
+                    <span className="text-base font-mono font-bold text-white/20">--</span>
+                </div>
+                <div className="h-[80px] bg-white/5 rounded-lg border border-white/5 flex items-center justify-center text-[10px] italic">
+                    无数据
+                </div>
+            </div>
+        );
+    }
+
     const isPositive = value >= 0;
     return (
         <div className="flex flex-col gap-2">
             <div className="flex justify-between items-end">
                 <span className="text-sm font-bold opacity-40 uppercase tracking-tighter">{label}表现</span>
                 <span className={`text-base font-mono font-bold ${isPositive ? 'text-red-400' : 'text-green-400'}`}>
-                    {isPositive ? '+' : ''}{value?.toFixed(2)}%
+                    {isPositive ? '+' : ''}{value.toFixed(2)}%
                 </span>
             </div>
             {history.length > 0 ? (
@@ -31,7 +46,7 @@ function MetricPanel({ label, value, history = [], days }) {
                 />
             ) : (
                 <div className="h-[80px] flex items-center justify-center text-white/20 text-[10px] italic bg-white/5 rounded-lg">
-                    数据加载中...
+                    图表加载中...
                 </div>
             )}
         </div>
@@ -43,14 +58,17 @@ function AssetCardComponent({ asset, onRemove, mode = 'volatility' }) {
     const containerRef = useRef(null);
 
     // 监听进入视口，实现真正的懒加载请求
+    // 监听进入视口，实现延迟实例化与数据拉取
     useEffect(() => {
+        if (!containerRef.current) return;
         const obs = new IntersectionObserver(([entry]) => {
             if (entry.isIntersecting) {
                 setIsVisible(true);
                 obs.disconnect();
             }
         }, { rootMargin: '200px' });
-        if (containerRef.current) obs.observe(containerRef.current);
+
+        obs.observe(containerRef.current);
         return () => obs.disconnect();
     }, []);
 
@@ -72,7 +90,8 @@ function AssetCardComponent({ asset, onRemove, mode = 'volatility' }) {
     );
 
     const history = (historyData?.history?.length > 0) ? historyData.history : (asset.history ?? []);
-    const summary = (historyData?.summary) ?? (asset.summary ?? { perf5d: 0, perf22d: 0, perf250d: 0 });
+    // 修改：初始值设为 null，防止 +0.00% 的误导 (High Prio Fix)
+    const summary = (historyData?.summary) ?? (asset.summary ?? { perf5d: null, perf22d: null, perf250d: null });
     const isHistorySyncing = historyData?.status === 'syncing';
 
     const intraPoints = intradayData?.points ?? [];
@@ -85,7 +104,7 @@ function AssetCardComponent({ asset, onRemove, mode = 'volatility' }) {
             id={`asset-${asset.code}`}
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.9 }}
+            exit={{ opacity: 0 }} // 移除 scale 以防止 layout 动画抖动 (Low Prio Fix)
             className="glass-effect p-4 lg:p-5 group"
         >
             <div className="flex justify-between items-center mb-4">
@@ -118,10 +137,11 @@ function AssetCardComponent({ asset, onRemove, mode = 'volatility' }) {
                             <div className="h-[120px] flex items-center justify-center text-white/20 text-sm bg-white/5 rounded-xl border border-white/5">
                                 <span className="italic">场外基金不支持分时数据</span>
                             </div>
-                        ) : intraPoints.length > 0 ? (
+                        ) : (intraPoints.length > 0 && (asset.prevClose || intradayData?.prevClose)) ? (
                             <IntradayChart
                                 data={intraPoints}
-                                prevClose={asset.prevClose || intradayData?.prevClose || asset.price}
+                                // 修复：移除 asset.price 强制回退，防止误导性的分时渲染 (Mid Prio Fix)
+                                prevClose={asset.prevClose || intradayData?.prevClose}
                                 height={120}
                             />
                         ) : isIntraValidating ? (
@@ -165,10 +185,10 @@ function AssetCardComponent({ asset, onRemove, mode = 'volatility' }) {
 export default memo(AssetCardComponent, (prev, next) => {
     return (
         prev.mode === next.mode &&
+        prev.onRemove === next.onRemove && // 接入函数比对，防止闭包失效 (High Prio Fix)
         prev.asset.code === next.asset.code &&
         prev.asset.price === next.asset.price &&
         prev.asset.changePercent === next.asset.changePercent &&
-        // 修复：比对最新时间或最新值而不是固定长度来感知变动 (如滑动窗口)
         prev.asset.history?.[prev.asset.history.length - 1]?.date === next.asset.history?.[next.asset.history.length - 1]?.date &&
         prev.asset.intraday?.price === next.asset.intraday?.price
     );
