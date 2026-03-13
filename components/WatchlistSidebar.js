@@ -41,7 +41,12 @@ export default function WatchlistSidebar({ assets, mode = 'volatility', selected
     const [sortDesc, setSortDesc] = useState(true);
     const [statsData, setStatsData] = useState({});
 
-    // 每次 assets 变化或进入 volatility 模式时，批量拉取服务端 D1 缓存 (极速响应，不请求外部)
+    // ── 1. 稳定性优化：生成稳定的依赖 Key (High Prio Fix) ──────────────────
+    const assetKeys = useMemo(() =>
+        assets.map(a => `${a.type}:${a.code}`).sort().join(','),
+        [assets]);
+
+    // 每次 assets 变化或进入 volatility 模式时，批量拉取缓存
     useEffect(() => {
         if (mode !== 'volatility' || assets.length === 0) return;
         const itemsToFetch = assets.map(a => ({ code: a.code, type: a.type }));
@@ -52,9 +57,10 @@ export default function WatchlistSidebar({ assets, mode = 'volatility', selected
                     newStats[key] = res[key].summary;
                 }
             }
-            setStatsData(prev => ({ ...prev, ...newStats }));
+            // 使用完全替换而非增量合并，防止内存泄漏 (Mid Prio Fix)
+            setStatsData(newStats);
         }).catch(e => console.error("Sidebar bulk fetch failed:", e));
-    }, [assets, mode]);
+    }, [assetKeys, mode]);
 
     const handleSort = (key) => {
         if (sortKey === key) {
@@ -65,7 +71,7 @@ export default function WatchlistSidebar({ assets, mode = 'volatility', selected
         }
     };
 
-    // 预计算每个资产的涨跌幅，优先使用缓存的 summary
+    // 预计算每个资产的涨跌幅，并进行字段归一化 (High Prio Fix)
     const rows = useMemo(() => assets.map(asset => {
         const key = `${asset.type}:${asset.code}`;
         const summary = statsData[key] || asset.summary;
@@ -75,8 +81,25 @@ export default function WatchlistSidebar({ assets, mode = 'volatility', selected
             d5: summary?.perf5d ?? lastPerf(h, 5),
             d22: summary?.perf22d ?? lastPerf(h, 22),
             d250: summary?.perf250d ?? lastPerf(h, 250),
+            changePercent: asset.changePercent ?? null // 归一化以支持排序
         };
     }), [assets, statsData]);
+
+    // ── 3. 性能优化：缓存日期计算 (Mid Prio Fix) ──────────────────────────
+    const latestDateStr = useMemo(() => {
+        let latest = '';
+        assets.forEach(a => {
+            const key = `${a.type}:${a.code}`;
+            const h = (statsData[key]?.history) || a.history || [];
+            if (h.length > 0) {
+                const d = h[h.length - 1].date;
+                if (d > latest) latest = d;
+            }
+        });
+        if (!latest) return '';
+        const [y, m, d] = latest.split('-');
+        return `(更新至${parseInt(m)}月${parseInt(d)}日)`;
+    }, [assets, statsData]);
 
     // 排序：null 值排最后
     const sorted = useMemo(() => {
@@ -91,6 +114,8 @@ export default function WatchlistSidebar({ assets, mode = 'volatility', selected
     }, [rows, sortKey, sortDesc]);
 
     const scrollToAsset = (code) => {
+        if (typeof window === 'undefined' || typeof document === 'undefined') return;
+
         if (mode === 'realtime') {
             if (onSelect) onSelect(code);
         }
@@ -123,20 +148,7 @@ export default function WatchlistSidebar({ assets, mode = 'volatility', selected
                     </span>
                     {mode !== 'realtime' && (
                         <span className="text-[10px] font-bold text-cyan-400/60 uppercase tracking-tighter ml-1">
-                            {(() => {
-                                let latest = '';
-                                assets.forEach(a => {
-                                    const key = `${a.type}:${a.code}`;
-                                    const h = (statsData[key]?.history) || a.history || [];
-                                    if (h.length > 0) {
-                                        const d = h[h.length - 1].date;
-                                        if (d > latest) latest = d;
-                                    }
-                                });
-                                if (!latest) return '';
-                                const [y, m, d] = latest.split('-');
-                                return `(更新至${parseInt(m)}月${parseInt(d)}日)`;
-                            })()}
+                            {latestDateStr}
                         </span>
                     )}
                     <span className="ml-auto text-xs font-mono opacity-20">{assets.length}</span>
@@ -201,7 +213,7 @@ export default function WatchlistSidebar({ assets, mode = 'volatility', selected
                                             </p>
                                         </div>
                                         <div className="w-16 text-right">
-                                            <PerfCell value={row.changePercent ?? 0} />
+                                            <PerfCell value={row.changePercent ?? null} />
                                         </div>
                                     </>
                                 )}
