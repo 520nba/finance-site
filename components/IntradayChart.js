@@ -19,55 +19,58 @@ function getFullTimePeriods() {
         start.setMinutes(start.getMinutes() + 1);
     }
 
-    // 13:01 - 15:00 (120个点，避免与 11:30 重复或留白过多)
-    // A股惯例分时图通常是 242 个点：09:30-11:30 (121点) + 13:00(实质是13:01)-15:00 (120/121点)
-    start = new Date(2020, 0, 1, 13, 1);
+    // 13:00 - 15:00 (121个点)
+    start = new Date(2020, 0, 1, 13, 0);
     const end = new Date(2020, 0, 1, 15, 0);
     while (start <= end) {
         afternoon.push(start.toTimeString().substring(0, 5));
         start.setMinutes(start.getMinutes() + 1);
     }
 
+    // 总计 242 个点
     return [...morning, ...afternoon];
 }
 
 const FULL_TIME_AXIS = getFullTimePeriods();
 
 export default function IntradayChart({ data, prevClose, height = 300 }) {
-    const option = useMemo(() => {
-        if (!data || !prevClose) return {};
+    // 稳定性优化：提取长度和最后点的时间戳作为依赖项，避免轮询导致的引用变化频繁计算 (Mid Prio Fix)
+    const dataLen = data?.length || 0;
+    const dataTimestamp = data?.[dataLen - 1]?.time || '';
 
-        // 将原始数据根据时间映射到完整时间轴上
+    const option = useMemo(() => {
+        if (!data || !prevClose) return {
+            xAxis: { show: false },
+            yAxis: { show: false },
+            series: []
+        };
+
+        // ... (保持现有映射逻辑)
         const dataMap = new Map();
         data.forEach(d => {
             dataMap.set(d.time, d.value);
         });
 
-        // 记录最后一个有效价格，用于辅助计算涨跌幅
-        let lastValidPrice = null;
         const prices = FULL_TIME_AXIS.map(time => {
             const val = dataMap.get(time);
-            if (val !== undefined) {
-                lastValidPrice = val;
-                return val;
-            }
-            return null;
+            return val !== undefined ? val : null;
         });
 
-        // 计算百分比数据
+        // 计算百分比数据 - 确保是数字而非字符串 (Mid Prio Fix)
         const percentData = prices.map(price => {
             if (price === null) return null;
-            return ((price / prevClose - 1) * 100).toFixed(2);
+            return Number(((price / prevClose - 1) * 100).toFixed(4));
         });
 
-        // 计算 Y 轴范围 (百分比)，确保对称
-        const validPercents = percentData.filter(p => p !== null).map(Number);
-        const maxAbs = Math.max(...validPercents.map(Math.abs), 0.5); // 最小给 0.5% 范围
+        // 计算 Y 轴范围 (百分比)，确保对称 - 优化大数组下的计算性能 (Mid Prio Fix)
+        const validPercents = percentData.filter(p => p !== null);
+        const maxAbs = validPercents.reduce((m, p) => Math.max(m, Math.abs(p)), 0.5);
         const yMin = -maxAbs;
         const yMax = maxAbs;
 
         return {
             backgroundColor: 'transparent',
+            // ... (保持其它配置不变)
             tooltip: {
                 trigger: 'axis',
                 backgroundColor: 'rgba(10, 14, 20, 0.8)',
@@ -142,7 +145,8 @@ export default function IntradayChart({ data, prevClose, height = 300 }) {
                     data: percentData,
                     smooth: false,
                     showSymbol: false,
-                    connectNulls: true,
+                    // 关闭 connectNulls 以正确显示 A 股午间休息断点 (High Prio Fix)
+                    connectNulls: false,
                     lineStyle: { width: 1.5, color: '#3b82f6' },
                     areaStyle: {
                         color: {
@@ -164,7 +168,7 @@ export default function IntradayChart({ data, prevClose, height = 300 }) {
             ],
             animation: false
         };
-    }, [data, prevClose]);
+    }, [dataLen, dataTimestamp, prevClose]);
 
     return (
         <div className="w-full" style={{ height: `${height}px` }}>
