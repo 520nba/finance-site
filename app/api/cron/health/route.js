@@ -2,18 +2,18 @@ import { NextResponse } from 'next/server';
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
-import { updateApiHealth } from '@/lib/storage/healthRepo';
+import { batchUpdateApiHealth } from '@/lib/storage/healthRepo';
 import { fetchStockEastmoney, fetchStockTencent, fetchStockSina, fetchFundHistory } from '@/lib/services/historyFetcher';
 import { addSystemLog } from '@/lib/storage/logRepo';
-import { queryOne } from '@/lib/storage/d1Client';
 import { syncCounterFromTable } from '@/lib/storage/statsRepo';
 
 /**
- * 外部 API 深度巡检器 (Sentinel V2: Parallel, Tiny Logs, Status Logic Optimized)
+ * 外部 API 深度巡检器 (Sentinel V3: Parallel, Batch Writes, Optimized Timeouts)
  */
 export async function GET() {
     const STOCK_TEST = 'sh600036';
     const FUND_TEST = '110020';
+    const GLOBAL_TIMEOUT = 4500; // 与 computeStatus 阈值对齐，设为 4.5s
 
     const BASE_HEADERS = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -21,11 +21,13 @@ export async function GET() {
 
     /**
      * Timeout 封装：防止单个 API 挂起导致整个 Sentinel 被杀死
+     * 确保信号被透传，且超时时间严格控制。
      */
-    async function safeFetchWithVerify(taskFn, timeout = 5000) {
+    async function safeFetchWithVerify(taskFn, timeout = GLOBAL_TIMEOUT) {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), timeout);
         try {
+            // taskFn 必须接收并透传 signal 给底层的 fetch
             return await taskFn(controller.signal);
         } finally {
             clearTimeout(timeoutId);
@@ -39,7 +41,7 @@ export async function GET() {
         if (!success) return 'down';
         if (latency < 1200) return 'healthy';
         if (latency < 2200) return 'wary';
-        if (latency < 4000) return 'slow';
+        if (latency < 3500) return 'slow';
         return 'critical';
     }
 
@@ -48,28 +50,28 @@ export async function GET() {
             name: 'Hist: EastMoney (Stock)',
             fn: async (signal) => {
                 const data = await fetchStockEastmoney(STOCK_TEST, 1, signal);
-                return data && data.length > 0 && typeof data[0].value === 'number';
+                return !!(data && data.length > 0 && typeof data[0].value === 'number');
             }
         },
         {
             name: 'Hist: Tencent (Stock)',
             fn: async (signal) => {
                 const data = await fetchStockTencent(STOCK_TEST, 1, signal);
-                return data && data.length > 0 && typeof data[0].value === 'number';
+                return !!(data && data.length > 0 && typeof data[0].value === 'number');
             }
         },
         {
             name: 'Hist: Sina (Stock)',
             fn: async (signal) => {
                 const data = await fetchStockSina(STOCK_TEST, 1, signal);
-                return data && data.length > 0 && typeof data[0].value === 'number';
+                return !!(data && data.length > 0 && typeof data[0].value === 'number');
             }
         },
         {
             name: 'Hist: EastMoney (Fund)',
             fn: async (signal) => {
                 const data = await fetchFundHistory(FUND_TEST, 1, signal);
-                return data && data.length > 0 && typeof data[0].value === 'number';
+                return !!(data && data.length > 0 && typeof data[0].value === 'number');
             }
         },
         {
@@ -85,7 +87,7 @@ export async function GET() {
             fn: async (signal) => {
                 const res = await fetch(`https://push2.eastmoney.com/api/qt/stock/trends2/get?secid=1.600036&fields1=f1&fields2=f51`, { headers: { 'Referer': 'https://quote.eastmoney.com/' }, signal });
                 const d = await res.json();
-                return res.ok && d?.data?.trends?.length > 0;
+                return !!(res.ok && d?.data?.trends?.length > 0);
             }
         },
         {
@@ -93,7 +95,7 @@ export async function GET() {
             fn: async (signal) => {
                 const res = await fetch(`https://push2.eastmoney.com/api/qt/stock/get?secid=1.600036&fields=f58`, { headers: { 'Referer': 'https://quote.eastmoney.com/' }, signal });
                 const d = await res.json();
-                return res.ok && d?.data?.f58 === '招商银行';
+                return !!(res.ok && d?.data?.f58 === '招商银行');
             }
         },
         {
@@ -122,44 +124,43 @@ export async function GET() {
         let errorMsg = '';
 
         try {
-            success = await safeFetchWithVerify(task.fn, 6000);
+            success = await safeFetchWithVerify(task.fn, GLOBAL_TIMEOUT);
             latency = Date.now() - start;
-            if (!success) errorMsg = 'Data Integrity Error';
+            if (!success) errorMsg = 'Data Integrity Mocked / Empty Response';
         } catch (e) {
             latency = Date.now() - start;
-            errorMsg = e.name === 'AbortError' ? 'Timeout (6s)' : e.message;
+            errorMsg = e.name === 'AbortError' ? `Timeout (${GLOBAL_TIMEOUT}ms)` : e.message;
         }
 
         return {
             name: task.name,
             status: computeStatus(success, latency),
-            successRate: `${success ? 1 : 0}/1`,
             avgLatency: latency,
-            isSuccess: success, // 显式传递成功标志，增强健壮性
+            isSuccess: success,
             errorMsg: success ? '' : (errorMsg || 'IO Error')
         };
     }));
 
-    // 串行写入 D1，防止 SQLite 并发写瓶颈
-    for (const r of results) {
-        await updateApiHealth(r.name, r);
-    }
+    // 批量写入 D1，优化 Wall Time 并减少 CPU 消耗
+    await batchUpdateApiHealth(results);
 
     // 自动修正同步队列计数器 (防止长期的计数偏离)
     await syncCounterFromTable('queue_count', 'sync_queue');
 
-    // 拆分可用性 (Availability) 与 服务水平 (SLA) 统计
+    // 精细化可用性与 SLA 指标
+    // Availability: 节点尚存 (状态不为 down)
+    // SLA OK: 服务质量达标 (healthy 或 wary)
     const availabilitySuccess = results.filter(r => r.status !== 'down').length;
     const slaSuccess = results.filter(r => ['healthy', 'wary'].includes(r.status)).length;
 
-    const msg = `Sentinel verified ${results.length} nodes. Availability: ${availabilitySuccess}/${results.length}, SLA OK: ${slaSuccess}/${results.length}`;
+    const msg = `Sentinel V3 Verified. Availability: ${availabilitySuccess}/${results.length}, SLA OK: ${slaSuccess}/${results.length}`;
     await addSystemLog('INFO', 'Sentinel', msg);
 
     return NextResponse.json({
         success: true,
         count: results.length,
-        availabilitySuccess,
-        slaSuccess,
+        availability_rate: `${Math.round((availabilitySuccess / results.length) * 100)}%`,
+        sla_rate: `${Math.round((slaSuccess / results.length) * 100)}%`,
         data: results
     });
 }
