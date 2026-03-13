@@ -111,21 +111,22 @@ content =
 // 这样 scheduled / fetch 内部可以直接用 workerExport.fetch() 引用自身，
 // 完全不依赖 this。
 
-// 找到文件末尾的 `}` (导出对象的闭合括号) ── 用最后一个顶层 `}` 定位
-const lastBrace = content.lastIndexOf('\n}');
-if (lastBrace === -1) {
-  console.error('Could not locate closing brace of export default object — aborting patch.');
-  process.exit(1);
-}
-
 // 替换 export default { → const workerExport = {
 content = content.replace(exportRegex, 'const workerExport = {');
 
-// 在最后的 } 之后追加 export default workerExport;
-content =
-  content.slice(0, lastBrace + 2) +
-  '\nexport default workerExport;\n' +
-  content.slice(lastBrace + 2);
+// ─── 3. 稳健地在对象末尾注入 export default (Fix: Unexpected export) ──────
+//
+// 之前的 lastIndexOf('\\n}') 太脆弱，容易匹配到 inner block。
+// 我们改用正则匹配文件末尾的顶层闭合括号。
+const finalExportSuffix = '\n\nexport default workerExport;\n';
+if (content.trim().endsWith('};')) {
+  // 标准 OpenNext 格式：对象以 }; 结尾
+  content = content.replace(/\}\s*;\s*$/, '};' + finalExportSuffix);
+} else {
+  // 备选方案：尝试更通用的匹配或直接追加
+  console.warn('[patch] Unexpected file end format, using fallback append.');
+  content += finalExportSuffix;
+}
 
 // ─── 3. 注入 debug 路由（/__manual_scheduled）────────────────────────────────
 
