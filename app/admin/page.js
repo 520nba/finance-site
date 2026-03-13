@@ -47,13 +47,14 @@ function AdminCommandCenter() {
     const [queueData, setQueueData] = useState([]);
     const [queueLoading, setQueueLoading] = useState(false);
     const [confirmAction, setConfirmAction] = useState(null); // { message, onConfirm, critical }
-    const [currentTime, setCurrentTime] = useState(new Date());
+    const [currentTime, setCurrentTime] = useState(null); // (Fix: Hydration Error) 初始值设为 null，避免服务器时间与客户端不一致导致的闪退
     const router = useRouter();
     const searchParamsHooks = useSearchParams();
     const urlKey = searchParamsHooks.get('key') || searchParamsHooks.get('token');
 
     // ── 1. 时钟驱动 (Low Prio Fix) ──────────────────────────────────────────
     useEffect(() => {
+        setCurrentTime(new Date()); // 初始客户端时刻
         const timer = setInterval(() => setCurrentTime(new Date()), 1000);
         return () => clearInterval(timer);
     }, []);
@@ -99,7 +100,7 @@ function AdminCommandCenter() {
             });
             if (res.ok) {
                 const data = await res.json();
-                setQueueData(data.queue || []);
+                setQueueData(data?.queue || []);
             }
         } catch (e) {
             console.error('Failed to fetch queue:', e);
@@ -425,8 +426,8 @@ function AdminCommandCenter() {
                                     <div className="w-px h-3 bg-white/10 mx-1" />
                                     <button onClick={triggerCleanup} title="全量环境洗消" className="p-1.5 hover:text-orange-400 transition-colors"><Zap size={16} /></button>
                                 </div>
-                                <div className="text-[10px] font-mono font-bold text-white/20 bg-white/5 px-4 py-2 rounded-xl border border-white/5">
-                                    {currentTime.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })}
+                                <div className="text-[10px] font-mono font-bold text-white/20 bg-white/5 px-4 py-2 rounded-xl border border-white/5 min-w-[160px] text-center">
+                                    {currentTime ? currentTime.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false }) : '--:--:--'}
                                 </div>
                             </div>
                         </header>
