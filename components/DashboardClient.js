@@ -32,6 +32,7 @@ export default function DashboardClient() {
         removeAsset,
         refreshAssets,
         toast,
+        setToast,
     } = useAsset();
 
     const filteredAssets = assets.filter(a => activeTab === 'watchlist' ? a.type === 'stock' : a.type === activeTab);
@@ -53,7 +54,7 @@ export default function DashboardClient() {
                             ${toast.type === 'error' ? 'bg-red-500/90 text-white' : 'bg-green-500/90 text-white'}`}
                     >
                         {toast.msg}
-                        <button onClick={() => { }} className="opacity-60 hover:opacity-100"><X size={14} /></button>
+                        <button onClick={() => setToast(null)} className="opacity-60 hover:opacity-100"><X size={14} /></button>
                     </motion.div>
                 )}
             </AnimatePresence>
@@ -125,8 +126,12 @@ export default function DashboardClient() {
                 </div>
             </div>
 
-            <LogsModal isOpen={showLogs} onClose={() => setShowLogs(false)} />
-            <AdminDashboard isOpen={showAdmin} onClose={() => setShowAdmin(false)} />
+            {isLogged && (
+                <>
+                    <LogsModal isOpen={showLogs} onClose={() => setShowLogs(false)} />
+                    <AdminDashboard isOpen={showAdmin} onClose={() => setShowAdmin(false)} />
+                </>
+            )}
 
             <div className="flex flex-col lg:flex-row gap-6 lg:gap-8 items-start">
                 {isLogged && assets.length > 0 && (
