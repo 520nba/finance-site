@@ -26,6 +26,7 @@ if (fs.existsSync(workerPath)) {
           \`/api/cron/sync?token=\${secret}\`
         ],
         "0 19 * * 1-6": [
+          \`/api/cron/daily?token=\${secret}\`, // 19:00 重新排队，捕获收盘数据
           \`/api/cron/sync?token=\${secret}\`
         ],
         "*/5 1-7 * * 1-5": [
