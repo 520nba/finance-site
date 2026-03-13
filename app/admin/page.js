@@ -7,6 +7,7 @@ import {
     LogOut, Code, FileText, Wifi, Zap, Database, BarChart3, Clock, LayoutGrid
 } from 'lucide-react';
 import { useRouter, useSearchParams } from 'next/navigation';
+import { useCallback } from 'react';
 
 /**
  * Admin Dashboard - Integrated Command Center
@@ -45,37 +46,57 @@ function AdminCommandCenter() {
     const [activeSection, setActiveSection] = useState('overview'); // overview, users, logs, health, queue
     const [queueData, setQueueData] = useState([]);
     const [queueLoading, setQueueLoading] = useState(false);
-    const [confirmAction, setConfirmAction] = useState(null); // { message, onConfirm }
+    const [confirmAction, setConfirmAction] = useState(null); // { message, onConfirm, critical }
+    const [currentTime, setCurrentTime] = useState(new Date());
+    const router = useRouter();
     const searchParamsHooks = useSearchParams();
     const urlKey = searchParamsHooks.get('key') || searchParamsHooks.get('token');
 
+    // ── 1. 时钟驱动 (Low Prio Fix) ──────────────────────────────────────────
+    useEffect(() => {
+        const timer = setInterval(() => setCurrentTime(new Date()), 1000);
+        return () => clearInterval(timer);
+    }, []);
+
+    // ── 2. 安全鉴权与 URL 洗消 (High Prio Fix) ─────────────────────────────────
     useEffect(() => {
         const cachedKey = sessionStorage.getItem('tracker_admin_secret');
         const finalKey = urlKey || cachedKey;
 
         if (finalKey) {
             setSecretKey(finalKey);
+            sessionStorage.setItem('tracker_admin_secret', finalKey);
+
+            // 如果密钥来自 URL，执行地址栏洗消，防止泄露到历史记录或 Logs
+            if (urlKey) {
+                const newUrl = window.location.pathname;
+                window.history.replaceState({}, '', newUrl);
+            }
+
             fetchAllData(finalKey);
         }
-    }, [urlKey]); // Only re-run if the key in URL actually changes
+    }, [urlKey]);
 
     useEffect(() => {
-        if (activeSection === 'queue' && secretKey) {
+        if (activeSection === 'queue') {
             fetchQueue();
         }
-    }, [activeSection, secretKey]);
+    }, [activeSection, fetchQueue]);
 
-    const showToast = (msg, type = 'error') => {
+    const showToast = useCallback((msg, type = 'error') => {
         setToast({ msg, type });
         setTimeout(() => setToast(null), 3000);
-    };
+    }, []);
 
-    const fetchQueue = async () => {
+    // ── 3. 函数进行 useCallback 封装 (Mid Prio Fix) ──────────────────────────
+    const fetchQueue = useCallback(async () => {
+        if (!secretKey) return;
         setQueueLoading(true);
         try {
-            const url = new URL('/api/admin/queue', window.location.origin);
-            url.searchParams.set('token', secretKey);
-            const res = await fetch(url.toString(), { headers: { 'x-admin-key': secretKey } });
+            // URL 传参已移除，仅通过 Header 传递 Secret (Security Fix)
+            const res = await fetch('/api/admin/queue', {
+                headers: { 'x-admin-key': secretKey }
+            });
             if (res.ok) {
                 const data = await res.json();
                 setQueueData(data.queue || []);
@@ -86,35 +107,30 @@ function AdminCommandCenter() {
         } finally {
             setQueueLoading(false);
         }
-    };
+    }, [secretKey, showToast]);
 
-    const fetchAllData = async (keyToUse, forceSyncStats = false) => {
-        if (!keyToUse) return;
+    const fetchAllData = useCallback(async (keyToUse, forceSyncStats = false) => {
+        const k = keyToUse || secretKey;
+        if (!k) return;
         setLoading(true);
 
         try {
-            const statsUrl = new URL('/api/admin/stats', window.location.origin);
-            statsUrl.searchParams.set('token', keyToUse);
-            if (forceSyncStats) statsUrl.searchParams.set('sync', 'true');
+            const statsUrl = forceSyncStats ? '/api/admin/stats?sync=true' : '/api/admin/stats';
+            const usersUrl = '/api/user/list';
+            const logsUrl = '/api/admin/logs?hours=72';
 
-            const usersUrl = new URL('/api/user/list', window.location.origin);
-            usersUrl.searchParams.set('token', keyToUse);
-
-            const logsUrl = new URL('/api/admin/logs', window.location.origin);
-            logsUrl.searchParams.set('hours', '72');
-            logsUrl.searchParams.set('token', keyToUse);
+            const headers = { 'x-admin-key': k };
 
             const [usersRes, statsRes, logsRes] = await Promise.all([
-                fetch(usersUrl.toString(), { headers: { 'x-admin-key': keyToUse } }),
-                fetch(statsUrl.toString(), { headers: { 'x-admin-key': keyToUse } }),
-                fetch(logsUrl.toString(), { headers: { 'x-admin-key': keyToUse } })
+                fetch(usersUrl, { headers }),
+                fetch(statsUrl, { headers }),
+                fetch(logsUrl, { headers })
             ]);
 
             if (statsRes.ok) {
                 const statsData = await statsRes.json();
                 setStats(prev => ({ ...prev, ...statsData }));
                 setIsAuthenticated(true);
-                sessionStorage.setItem('tracker_admin_secret', keyToUse);
             }
 
             if (usersRes.ok) {
@@ -124,13 +140,7 @@ function AdminCommandCenter() {
 
             if (logsRes.ok) {
                 const logsData = await logsRes.json();
-                // 性能优化: 限制日志渲染数量
                 setLogs(logsData.logs?.slice(0, 500) || []);
-            }
-
-            // 如果当前在队列页面或初始加载，则获取队列列表
-            if (activeSection === 'queue') {
-                fetchQueue();
             }
 
             if (!statsRes.ok && !usersRes.ok) {
@@ -143,7 +153,7 @@ function AdminCommandCenter() {
         } finally {
             setLoading(false);
         }
-    };
+    }, [secretKey, showToast]);
 
     const deleteUser = async (targetUserId) => {
         setConfirmAction({
@@ -151,7 +161,8 @@ function AdminCommandCenter() {
             onConfirm: async () => {
                 setLoading(true);
                 try {
-                    const res = await fetch(`/api/user/delete?token=${secretKey}`, {
+                    // 敏感 Token 移出 URL (Security Fix)
+                    const res = await fetch('/api/user/delete', {
                         method: 'POST',
                         headers: {
                             'Content-Type': 'application/json',
@@ -189,7 +200,8 @@ function AdminCommandCenter() {
             onConfirm: async () => {
                 setLoading(true);
                 try {
-                    const res = await fetch(`/api/admin/force-sync?token=${secretKey}`, {
+                    // Token 移出 URL (Security Fix)
+                    const res = await fetch('/api/admin/force-sync', {
                         method: 'POST',
                         headers: {
                             'Content-Type': 'application/json',
@@ -220,7 +232,7 @@ function AdminCommandCenter() {
             onConfirm: async () => {
                 setLoading(true);
                 try {
-                    const res = await fetch(`/api/admin/cleanup?token=${secretKey}`, {
+                    const res = await fetch('/api/admin/cleanup', {
                         method: 'POST',
                         headers: { 'x-admin-key': secretKey }
                     });
@@ -270,7 +282,7 @@ function AdminCommandCenter() {
                             animate={{ opacity: 1 }}
                             exit={{ opacity: 0 }}
                             className="absolute inset-0 bg-black/80 backdrop-blur-md"
-                            onClick={() => setConfirmAction(null)}
+                            onClick={() => !confirmAction.critical && setConfirmAction(null)}
                         />
                         <motion.div
                             initial={{ scale: 0.9, opacity: 0, y: 20 }}
@@ -414,7 +426,7 @@ function AdminCommandCenter() {
                                     <button onClick={triggerCleanup} title="全量环境洗消" className="p-1.5 hover:text-orange-400 transition-colors"><Zap size={16} /></button>
                                 </div>
                                 <div className="text-[10px] font-mono font-bold text-white/20 bg-white/5 px-4 py-2 rounded-xl border border-white/5">
-                                    {new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })}
+                                    {currentTime.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })}
                                 </div>
                             </div>
                         </header>
@@ -631,8 +643,8 @@ function AdminCommandCenter() {
                                             <div className="max-h-[600px] overflow-y-auto custom-scrollbar px-6 py-4">
                                                 {logs.length > 0 ? (
                                                     <div className="space-y-1">
-                                                        {logs.map((log, idx) => (
-                                                            <div key={idx} className="group flex flex-col md:flex-row gap-4 py-2 px-5 rounded-xl hover:bg-white/[0.02] border border-transparent hover:border-white/5 transition-all">
+                                                        {logs.map((log) => (
+                                                            <div key={log.id || `${log.timestamp}-${log.module}`} className="group flex flex-col md:flex-row gap-4 py-2 px-5 rounded-xl hover:bg-white/[0.02] border border-transparent hover:border-white/5 transition-all">
                                                                 <div className="flex items-center gap-4 min-w-[150px]">
                                                                     <div className={`w-1 h-1 rounded-full ${log.level === 'INFO' ? 'bg-blue-500' : log.level === 'WARN' ? 'bg-orange-500' : 'bg-red-500'}`} />
                                                                     <span className="text-[10px] font-mono font-bold text-white/20">
@@ -753,7 +765,7 @@ function AdminCommandCenter() {
                                                         </tr>
                                                     ) : queueData.length > 0 ? (
                                                         queueData.map((item) => (
-                                                            <tr key={`${item.code}-${item.type}`} className="group hover:bg-white/[0.02] transition-colors">
+                                                            <tr key={item.id || `${item.code}-${item.type}-${item.created_at}`} className="group hover:bg-white/[0.02] transition-colors">
                                                                 <td className="px-10 py-6 font-mono text-lg font-bold text-white/80 group-hover:text-orange-400 transition-colors tracking-tight">
                                                                     {item.code}
                                                                 </td>
