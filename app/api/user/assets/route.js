@@ -4,13 +4,15 @@ import { cleanupSingleAssetIfNotUsed } from '@/lib/storage/maintenanceRepo';
 import { getD1Storage, getCloudflareCtx } from '@/lib/storage/d1Client';
 import { syncHistoryBulk } from '@/app/api/history/bulk/route';
 import { syncNamesBulk } from '@/app/api/names/bulk/route';
+import { requireUser } from '@/lib/auth/requireUser';
+
+const MAX_ASSETS_PER_USER = 100;
 
 export async function GET(request) {
-    const { searchParams } = new URL(request.url);
-    const userId = searchParams.get('userId');
+    const userId = await requireUser(request);
 
     if (!userId) {
-        return NextResponse.json({ success: false, error: 'Missing userId', code: 'BAD_REQUEST' }, { status: 400 });
+        return NextResponse.json({ success: false, error: 'Unauthorized', code: 'UNAUTHORIZED' }, { status: 401 });
     }
 
     try {
@@ -23,15 +25,14 @@ export async function GET(request) {
 }
 
 export async function POST(request) {
-    let currentUserId = 'unknown';
+    const userId = await requireUser(request);
+    if (!userId) {
+        return NextResponse.json({ success: false, error: 'Unauthorized', code: 'UNAUTHORIZED' }, { status: 401 });
+    }
+
     try {
         const payload = await request.json();
-        const { userId, assets } = payload || {};
-        currentUserId = userId || 'unknown';
-
-        if (!userId) {
-            return NextResponse.json({ success: false, error: 'Missing userId', code: 'BAD_REQUEST' }, { status: 400 });
-        }
+        const { assets } = payload || {};
 
         const db = await getD1Storage();
         if (!db) {
@@ -42,6 +43,14 @@ export async function POST(request) {
         const cleanAssets = (Array.isArray(assets) ? assets : [])
             .filter(a => a && a.code && a.type)
             .map(a => ({ code: String(a.code).toLowerCase(), type: a.type }));
+
+        if (cleanAssets.length > MAX_ASSETS_PER_USER) {
+            return NextResponse.json({
+                success: false,
+                error: `Tracking limit reached: max ${MAX_ASSETS_PER_USER} assets per account`,
+                code: 'QUOTA_EXCEEDED'
+            }, { status: 400 });
+        }
 
         const addedAssets = cleanAssets.filter(c => !oldAssets.some(o => o.code === c.code && o.type === c.type));
         const removedAssets = oldAssets.filter(old => !cleanAssets.some(a => a.code === old.code && a.type === old.type));
@@ -85,7 +94,7 @@ export async function POST(request) {
 
         return NextResponse.json({ success: true, data: { added: addedAssets.length, removed: removedAssets.length } });
     } catch (e) {
-        console.error(`[Assets] POST critical failure for ${currentUserId}:`, e.message);
+        console.error(`[Assets] POST critical failure for ${userId}:`, e.message);
         return NextResponse.json({
             success: false,
             error: e.message,

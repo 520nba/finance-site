@@ -20,7 +20,12 @@ export default function DashboardClient() {
         isLogged,
         loginInput,
         setLoginInput,
+        passwordInput,
+        setPasswordInput,
+        isRegistering,
+        setIsRegistering,
         handleLogin,
+        handleRegister,
         handleLogout,
         assets,
         isSyncing,
@@ -154,22 +159,39 @@ export default function DashboardClient() {
                                 className="max-w-md mx-auto py-24 text-center"
                             >
                                 <h2 className="text-2xl font-black italic mb-2 tracking-tighter">账户登录</h2>
-                                <p className="text-white/30 text-sm mb-8">输入您的 ID 以保存和同步自选列表</p>
-                                <div className="flex gap-2">
+                                <p className="text-white/30 text-sm mb-8">
+                                    {isRegistering ? '创建一个新账户以开启同步' : '输入您的凭据以访问自选列表'}
+                                </p>
+                                <div className="space-y-4 max-w-sm mx-auto">
                                     <input
                                         type="text"
-                                        placeholder="输入用户 ID"
+                                        placeholder="用户名"
                                         value={loginInput}
                                         onChange={(e) => setLoginInput(e.target.value)}
-                                        className="flex-1 bg-white/5 border border-white/10 rounded-xl px-4 py-3 outline-none focus:border-blue-500/50 transition-all text-sm font-mono"
-                                        onKeyDown={(e) => e.key === 'Enter' && handleLogin()}
+                                        className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 outline-none focus:border-blue-500/50 transition-all text-sm font-mono"
                                     />
-                                    <button
-                                        onClick={handleLogin}
-                                        className="bg-blue-600 hover:bg-blue-500 text-white px-8 py-3 rounded-xl font-bold text-sm transition-all"
-                                    >
-                                        进入
-                                    </button>
+                                    <input
+                                        type="password"
+                                        placeholder="密码 (不少于8位)"
+                                        value={passwordInput}
+                                        onChange={(e) => setPasswordInput(e.target.value)}
+                                        className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 outline-none focus:border-blue-500/50 transition-all text-sm font-mono"
+                                        onKeyDown={(e) => e.key === 'Enter' && (isRegistering ? handleRegister() : handleLogin())}
+                                    />
+                                    <div className="flex flex-col gap-3 pt-2">
+                                        <button
+                                            onClick={isRegistering ? handleRegister : handleLogin}
+                                            className="w-full bg-blue-600 hover:bg-blue-500 text-white py-3 rounded-xl font-black uppercase tracking-widest text-sm transition-all shadow-lg shadow-blue-600/20"
+                                        >
+                                            {isRegistering ? '立即注册' : '安全登入'}
+                                        </button>
+                                        <button
+                                            onClick={() => setIsRegistering(!isRegistering)}
+                                            className="text-xs font-bold text-white/20 hover:text-white/60 transition-colors uppercase tracking-widest"
+                                        >
+                                            {isRegistering ? '已有账号？返回登录' : '没有账号？创建新身份'}
+                                        </button>
+                                    </div>
                                 </div>
                             </motion.div>
                         ) : (

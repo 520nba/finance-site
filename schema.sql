@@ -1,8 +1,21 @@
 -- 用户索引表
 CREATE TABLE IF NOT EXISTS users (
-    id TEXT PRIMARY KEY,
-    last_login DATETIME DEFAULT CURRENT_TIMESTAMP
+    id          TEXT PRIMARY KEY,
+    password_hash TEXT,
+    email       TEXT UNIQUE,
+    created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+    last_login  DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+
+-- 会话表 (SaaS 认证)
+CREATE TABLE IF NOT EXISTS user_sessions (
+    token       TEXT PRIMARY KEY,
+    user_id     TEXT NOT NULL,
+    created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+    expires_at  DATETIME NOT NULL,
+    FOREIGN KEY(user_id) REFERENCES users(id)
+);
+CREATE INDEX IF NOT EXISTS idx_sessions_user ON user_sessions(user_id);
 
 -- 用户资产关联表
 CREATE TABLE IF NOT EXISTS user_assets (
@@ -79,17 +92,6 @@ CREATE TABLE IF NOT EXISTS admin_sessions (
     expires_at DATETIME NOT NULL
 );
 
--- 同步队列 (异步抓取任务)
-CREATE TABLE IF NOT EXISTS sync_queue (
-    code TEXT NOT NULL,
-    type TEXT NOT NULL,
-    status TEXT DEFAULT 'pending', -- pending, syncing, done, error
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY(code, type)
-);
-CREATE INDEX IF NOT EXISTS idx_sync_queue_status ON sync_queue(status);
-
 -- 外部 API 健康监控
 CREATE TABLE IF NOT EXISTS api_health (
     api_name TEXT PRIMARY KEY,
@@ -113,9 +115,6 @@ CREATE TABLE IF NOT EXISTS system_stats (
 );
 
 CREATE INDEX IF NOT EXISTS idx_logs_timestamp ON system_logs(timestamp);
-
--- [Optimization] 提升同步队列死锁恢复/任务提取逻辑的扫描效率 (维度 1 优化)
-CREATE INDEX IF NOT EXISTS idx_sync_queue_lookup ON sync_queue (status, updated_at);
 
 -- [Optimization] 提升近期统计查询速度 (用于 recent_growth)
 CREATE INDEX IF NOT EXISTS idx_asset_history_created_at ON asset_history (created_at);

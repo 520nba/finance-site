@@ -103,7 +103,7 @@ export function useAssetSync({ userId, isLogged }) {
             // 切换账号时立即清空资产，避免短暂显示旧账号数据
             setAssets([]);
             try {
-                const res = await fetch(`/api/user/assets?userId=${userId}`, {
+                const res = await fetch('/api/user/assets', {
                     signal: controller.signal
                 });
                 const json = await res.json();
@@ -123,13 +123,11 @@ export function useAssetSync({ userId, isLogged }) {
             // 只在请求未被取消时更新 Session 状态
             if (!controller.signal.aborted) {
                 setIsSessionReady(true);
-                setLoadedUserId(userId);
                 setIsSyncing(false);
             }
         };
 
         load();
-        localStorage.setItem('tracker_user_id', userId);
 
         // Cleanup：当 userId 变化或组件卸载时，取消正在进行的请求
         return () => controller.abort();
@@ -140,7 +138,7 @@ export function useAssetSync({ userId, isLogged }) {
 
     // 数据变化后同步到服务端（暴露给外部主动调用）
     const syncAssetsToServer = useCallback(async (currentAssets) => {
-        if (!isLogged || !userId || !isSessionReady || userId !== loadedUserId) return;
+        if (!isLogged || !isSessionReady) return;
         // 优先使用传入的列表，否则读取 Ref（避免把 assets 列入 useCallback 依赖，防止实时报价更新时重建函数引用）
         const listToSync = Array.isArray(currentAssets) ? currentAssets : assetsRef.current;
         const skeleton = listToSync.map(a => ({ code: a.code, type: a.type }));
@@ -148,7 +146,7 @@ export function useAssetSync({ userId, isLogged }) {
             await fetch('/api/user/assets', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ userId, assets: skeleton }),
+                body: JSON.stringify({ assets: skeleton }),
             });
             localStorage.setItem('tracker_assets_updated', Date.now().toString());
         } catch (e) {
@@ -165,8 +163,8 @@ export function useAssetSync({ userId, isLogged }) {
     // 监听多标签页同步防冲突 (跨 Tab 数据漂移保护)
     useEffect(() => {
         const handleStorage = (e) => {
-            if (e.key === 'tracker_assets_updated' && isLogged && userId) {
-                fetch(`/api/user/assets?userId=${userId}`).then(r => r.json()).then(json => {
+            if (e.key === 'tracker_assets_updated' && isLogged) {
+                fetch('/api/user/assets').then(r => r.json()).then(json => {
                     const list = json?.data ?? json;
                     if (Array.isArray(list)) {
                         const newStr = list.map(a => `${a.type}:${a.code}`).sort().join(',');

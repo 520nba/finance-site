@@ -2,12 +2,13 @@ import { NextResponse } from 'next/server';
 import pLimit from 'p-limit';
 import { getIntraday, saveIntraday, getBulkIntraday, saveIntradayBatch } from '@/lib/storage/intradayRepo';
 
+import { memoryCache } from '@/lib/storage/memoryCache';
+
 function todayStr() {
     return new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' });
 }
 
-// 全局内存缓存，用于合并高频重复请求 (有效期 30 秒)
-const INTRADAY_CACHE = new Map();
+const CACHE_KEY_PREFIX = 'api_intraday_';
 const CACHE_TTL = 30 * 1000;
 
 const BASE_HEADERS = {
@@ -29,7 +30,7 @@ function resolveMarket(code) {
     return { market, clean };
 }
 
-async function fetchSingleIntradayServer(code, forcePersist = false, preFetchedDbData = null) {
+async function fetchSingleIntradayServer(code, forcePersist = false, preFetchedDbData = null, externalAbortSignal = null) {
     const { market, clean } = resolveMarket(code);
     const today = todayStr();
     const now = Date.now();
@@ -38,9 +39,9 @@ async function fetchSingleIntradayServer(code, forcePersist = false, preFetchedD
         const url = `https://push2.eastmoney.com/api/qt/stock/trends2/get?secid=${market}.${clean}&fields1=f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13&fields2=f51,f52,f53,f54,f55,f56,f57,f58`;
 
         // 检查内存缓存 (30秒)
-        const cached = INTRADAY_CACHE.get(code);
-        if (cached && (now - cached.timestamp < CACHE_TTL)) {
-            return cached.data;
+        const cached = memoryCache.get(CACHE_KEY_PREFIX + code);
+        if (cached) {
+            return cached;
         }
 
         // 2. 优先尝试从持久化层获取 (有效期 1 分钟)
@@ -64,21 +65,30 @@ async function fetchSingleIntradayServer(code, forcePersist = false, preFetchedD
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), 15000); // 增加到 15s
 
+        // 绑定外部信号 (如果有)
+        const combinedSignal = externalAbortSignal
+            ? AbortSignal.any([controller.signal, externalAbortSignal])
+            : controller.signal;
+
         let res;
         try {
             res = await fetch(url, {
                 headers: BASE_HEADERS,
-                signal: controller.signal
+                signal: combinedSignal
             });
         } catch (fetchError) {
             if (fetchError.name === 'AbortError') {
                 // 第一次超时，尝试最后一次重试 (10s)
                 const retryController = new AbortController();
                 const retryTimeout = setTimeout(() => retryController.abort(), 10000);
+                const retryCombinedSignal = externalAbortSignal
+                    ? AbortSignal.any([retryController.signal, externalAbortSignal])
+                    : retryController.signal;
+
                 try {
                     res = await fetch(url, {
                         headers: BASE_HEADERS,
-                        signal: retryController.signal
+                        signal: retryCombinedSignal
                     });
                 } catch (retryError) {
                     throw retryError;
@@ -129,7 +139,7 @@ async function fetchSingleIntradayServer(code, forcePersist = false, preFetchedD
             points
         };
 
-        INTRADAY_CACHE.set(code, { timestamp: now, data: result });
+        memoryCache.set(CACHE_KEY_PREFIX + code, result, CACHE_TTL);
         console.log(`[Intraday] External Fetch: ${code}`);
 
         return result;
@@ -149,9 +159,9 @@ export async function syncIntradayBulk(items, allowExternal = false, request = n
     // 1. 先过一层内存缓存
     const toFetchFromPersist = [];
     for (const item of items) {
-        const cached = INTRADAY_CACHE.get(item.code);
-        if (cached && (now - cached.timestamp < CACHE_TTL)) {
-            result[item.code] = cached.data;
+        const cached = memoryCache.get(CACHE_KEY_PREFIX + item.code);
+        if (cached) {
+            result[item.code] = cached;
         } else {
             toFetchFromPersist.push(item);
         }
@@ -165,27 +175,33 @@ export async function syncIntradayBulk(items, allowExternal = false, request = n
         for (const item of toFetchFromPersist) {
             const dbData = dbDataMap[item.code];
             if (dbData && dbData.points && dbData.points.length > 0) {
-                // 判断是否为今日数据 (分时点的时间通常不带横杠日期)
                 const isToday = dbData.points[0]?.time?.includes(':') && !dbData.points[0]?.time?.includes('-');
                 const updatedAt = dbData.updated_at ? new Date(dbData.updated_at).getTime() : 0;
 
-                // 1. 如果是今日数据且足够新鲜，直接用
-                // 普通用户请求 (allowExternal=false) 容忍 5 分钟 D1 陈旧度，Cron (allowExternal=true) 容忍 1 分钟
+                // 这里的逻辑关键：
+                // 1. 如果足够新鲜（1分钟/5分钟），直接用
                 const stalenessThreshold = allowExternal ? 60000 : 300000;
                 if (isToday && (now - updatedAt < stalenessThreshold)) {
                     result[item.code] = dbData;
+                    memoryCache.set(CACHE_KEY_PREFIX + item.code, dbData, CACHE_TTL); // 回填内存
                     continue;
                 }
 
-                // 2. 如果不是今日数据（比如之前存的历史备份），但在非交易时段，也可以直接用
-                // 此处我们允许在非外部抓取模式下直接返回已有的任何数据
-                if (!allowExternal || !isToday) {
+                // 2. 如果数据已过期，但不是强制同步模式（allowExternal=false）
+                //    则依然直接返回旧数据，拒绝发起外部请求
+                if (!allowExternal) {
                     result[item.code] = dbData;
+                    memoryCache.set(CACHE_KEY_PREFIX + item.code, dbData, CACHE_TTL); // 回填内存
                     continue;
                 }
-            }
-            if (allowExternal) {
+
+                // 3. 只有 Cron 且数据过期，才放入外部抓取列表
                 externalFetchList.push(item);
+            } else {
+                // 没有任何 D1 数据，且允许外部拉取
+                if (allowExternal) {
+                    externalFetchList.push(item);
+                }
             }
         }
 
@@ -201,10 +217,14 @@ export async function syncIntradayBulk(items, allowExternal = false, request = n
             const limit = pLimit(5);
             const recordsToSave = [];
 
+            // 为整个并发任务增加全局 25s 超时，防止 Worker 被 Cloudflare 判定为 Hang 而强制取消
+            const globalController = new AbortController();
+            const globalTimeout = setTimeout(() => globalController.abort(), 25000);
+
             const fetchPromises = safeFetchList.map(item =>
                 limit(async () => {
-                    // 传入之前在 dbDataMap 中查到的旧数据，避免 fetchSingleIntradayServer 重复查 D1
-                    const data = await fetchSingleIntradayServer(item.code, allowExternal, dbDataMap[item.code]);
+                    // 传入之前在 dbDataMap 中查到的旧数据，并传递全局中止信号
+                    const data = await fetchSingleIntradayServer(item.code, allowExternal, dbDataMap[item.code], globalController.signal);
                     if (data) {
                         return { code: item.code, data };
                     }
@@ -212,16 +232,9 @@ export async function syncIntradayBulk(items, allowExternal = false, request = n
                 })
             );
 
-            // 为整个并发任务增加全局 25s 超时，防止 Worker 被 Cloudflare 判定为 Hang 而强制取消
-            const timeoutPromise = new Promise((_, reject) =>
-                setTimeout(() => reject(new Error('GLOBAL_FETCH_TIMEOUT')), 25000)
-            );
-
             try {
-                const fetchedResults = await Promise.race([
-                    Promise.all(fetchPromises),
-                    timeoutPromise
-                ]);
+                const fetchedResults = await Promise.all(fetchPromises);
+                clearTimeout(globalTimeout);
 
                 for (const res of fetchedResults) {
                     if (res && res.data) {

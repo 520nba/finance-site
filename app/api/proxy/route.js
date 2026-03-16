@@ -57,6 +57,10 @@ export async function GET(request) {
 
         const contentTypeHeader = res.headers.get('content-type') || 'text/plain';
         const status = res.status;
+        if (status >= 300) {
+            const errorMsg = `Proxy Status ${status} for ${targetUrl}`;
+            console.error(`[Proxy] Error: ${errorMsg}, Type: ${contentTypeHeader}`);
+        }
 
         // 记录响应头，辅助调试
         console.log(`[Proxy] Response status: ${status}, Type: ${contentTypeHeader} for ${targetUrl}`);
@@ -77,10 +81,8 @@ export async function GET(request) {
     } catch (error) {
         console.error(`[Proxy] Critical error for ${targetUrl}:`, error.message);
         return NextResponse.json({
-            error: error.message,
-            stack: error.stack,
-            context: 'proxy_catch',
-            url: targetUrl
+            error: process.env.NODE_ENV === 'production' ? 'Internal Proxy Error' : error.message,
+            ...(process.env.NODE_ENV !== 'production' && { context: 'proxy_catch', url: targetUrl })
         }, { status: 500 });
     }
 }

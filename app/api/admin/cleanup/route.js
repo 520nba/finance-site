@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { purgeZombieAssets } from '@/lib/storage/maintenanceRepo';
-import { isAdminAuthorized } from '@/lib/auth';
+import { isAdminAuthorized } from '@/lib/storage/authRepo';
 
 export async function POST(request) {
     if (!(await isAdminAuthorized(request))) {

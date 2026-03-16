@@ -14,7 +14,7 @@ export function useRealtimeQuotes({ activeTab, isLogged, assets, isSyncing, user
             // 1. 每 5 分钟才做一次跨设备检查（节省 4/5 的 D1 读取）
             if (tickCount % 5 === 0) {
                 try {
-                    const res = await fetch(`/api/user/assets?userId=${userId}`);
+                    const res = await fetch('/api/user/assets');
                     const json = await res.json();
                     // 后端统一返回 { success, data: [] } envelope 格式
                     const remoteList = json?.data ?? json;

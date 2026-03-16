@@ -187,6 +187,7 @@ export default memo(AssetCardComponent, (prev, next) => {
         prev.mode === next.mode &&
         prev.onRemove === next.onRemove && // 接入函数比对，防止闭包失效 (High Prio Fix)
         prev.asset.code === next.asset.code &&
+        prev.asset.name === next.asset.name &&
         prev.asset.price === next.asset.price &&
         prev.asset.changePercent === next.asset.changePercent &&
         prev.asset.history?.[prev.asset.history.length - 1]?.date === next.asset.history?.[next.asset.history.length - 1]?.date &&

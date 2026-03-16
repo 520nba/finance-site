@@ -107,8 +107,10 @@ async function fetchFundName(code) {
     return null;
 }
 
-// 全局内存缓存 (L1 Cache) - 存储最常访问的资产名称，减少 D1 查询压力
-const GLOBAL_NAME_CACHE = new Map();
+import { memoryCache } from '@/lib/storage/memoryCache';
+
+const CACHE_KEY_PREFIX = 'api_name_';
+const CACHE_TTL = 3600 * 1000; // 1小时缓存
 
 /**
  * 检测名称是否有效（乱码、404 错误页、或未抓取成功的占位符）
@@ -154,7 +156,7 @@ export async function syncNamesBulk(items, allowExternal = false) {
     // 1. 优先尝试 L1 (内存缓存)
     for (const item of items) {
         const key = `${item.type}:${item.code}`;
-        const cached = GLOBAL_NAME_CACHE.get(key);
+        const cached = memoryCache.get(CACHE_KEY_PREFIX + key);
         if (cached && !isInvalidName(cached)) {
             result[key] = cached;
         } else {
@@ -174,7 +176,7 @@ export async function syncNamesBulk(items, allowExternal = false) {
         if (name && !isInvalidName(name)) {
             result[key] = name;
             // 回填到 L1
-            GLOBAL_NAME_CACHE.set(key, name);
+            memoryCache.set(CACHE_KEY_PREFIX + key, name, CACHE_TTL);
         } else {
             toFetch.push(item);
         }
@@ -206,7 +208,7 @@ export async function syncNamesBulk(items, allowExternal = false) {
             if (name) {
                 result[key] = name;
                 newNames[key] = name;
-                GLOBAL_NAME_CACHE.set(key, name); // 同步更新 L1 内存缓存
+                memoryCache.set(CACHE_KEY_PREFIX + key, name, CACHE_TTL); // 同步更新 L1 内存缓存
             }
         }
         if (Object.keys(newNames).length > 0) {

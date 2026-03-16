@@ -60,7 +60,7 @@ function calcStats(history) {
  * =============================
  */
 
-export async function syncHistoryBulk(items, days = HISTORY_DAYS) {
+export async function syncHistoryBulk(items, days = HISTORY_DAYS, allowExternal = false) {
     if (!items?.length) return {}
 
     // 1. 从 D1 获取缓存的历史数据

@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { deleteUser } from '@/lib/storage/userRepo';
-import { isAdminAuthorized } from '@/lib/auth';
+import { isAdminAuthorized } from '@/lib/storage/authRepo';
 
 export async function POST(request) {
     try {
