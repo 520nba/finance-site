@@ -3,8 +3,7 @@ import pLimit from 'p-limit'
 
 import {
     insertDailyPricesBatch,
-    getBulkHistory,
-    addToSyncQueue
+    getBulkHistory
 } from '@/lib/storage/historyRepo'
 
 const HISTORY_DAYS = 250
@@ -102,10 +101,8 @@ export async function syncHistoryBulk(items, days = HISTORY_DAYS) {
         }
     }
 
-    // 2. 异步入队：将缺失数据或需要更新的资产推入 sync_queue
-    if (toSyncQueue.length > 0) {
-        await addToSyncQueue(toSyncQueue)
-    }
+    // 2. 异步入队：已废弃两阶段队列，由定期 Cron 任务自动更新
+    // 原代码推入 sync_queue 的逻辑已移除
 
     return result
 }

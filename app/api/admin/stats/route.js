@@ -7,12 +7,8 @@ import { getAllApiHealth } from '@/lib/storage/healthRepo';
 import { memoryCache } from '@/lib/storage/memoryCache';
 
 const STATS_CACHE_KEY = 'admin_stats_full';
-const CACHE_TTL = 10000; // 10s 缓存 (Dashboard 需求近实时)
+const CACHE_TTL = 10000; // 10s 缓存
 
-/**
- * 管理后台核心统计接口
- * 获取用户数、资产数、数据库量级以及外部 API 健康巡检结果。
- */
 export async function GET(request) {
     if (!(await isAdminAuthorized(request))) {
         return NextResponse.json({ error: 'Unauthorized' }, { status: 403 });
@@ -21,7 +17,6 @@ export async function GET(request) {
     const { searchParams } = new URL(request.url);
     const shouldSync = searchParams.get('sync') === 'true';
 
-    // 只有在非同步请求时才走缓存逻辑
     if (!shouldSync) {
         const cached = memoryCache.get(STATS_CACHE_KEY);
         if (cached && (Date.now() - cached.timestamp < CACHE_TTL)) {
@@ -30,25 +25,20 @@ export async function GET(request) {
     }
 
     try {
-        // 1. 如果带了 sync 参数，执行昂贵的全量校准 (仅限管理员手动操作)
         if (shouldSync) {
             const { syncCounterFromTable } = await import('@/lib/storage/statsRepo');
             await Promise.all([
                 syncCounterFromTable('users', 'users'),
                 syncCounterFromTable('asset_stocks', 'asset_names', 'type = "stock"'),
                 syncCounterFromTable('asset_funds', 'asset_names', 'type = "fund"'),
-                syncCounterFromTable('history_points', 'asset_history'),
-                syncCounterFromTable('intraday_points', 'asset_intraday_points'),
-                syncCounterFromTable('quotes_count', 'asset_quotes'),
-                syncCounterFromTable('queue_count', 'sync_queue')
+                syncCounterFromTable('quotes_count', 'asset_quotes')
             ]);
         }
 
-        // 2. 从计数器批量获取数据 (O(1) 复杂度)
         const { getCounters } = await import('@/lib/storage/statsRepo');
         const counters = await getCounters([
             'users', 'asset_stocks', 'asset_funds', 'history_points',
-            'intraday_points', 'quotes_count', 'queue_count'
+            'intraday_points', 'quotes_count'
         ]);
 
         const healthData = await (async () => {
@@ -62,12 +52,10 @@ export async function GET(request) {
             history_points: counters.history_points,
             intraday_points: counters.intraday_points,
             quotes_count: counters.quotes_count,
-            queue_count: counters.queue_count,
             db_engine: 'Cloudflare D1 (SQLite) + Counters',
             api_health: healthData || []
         };
 
-        // 写入内存缓存
         memoryCache.set(STATS_CACHE_KEY, {
             data: finalStats,
             timestamp: Date.now()

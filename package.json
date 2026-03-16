@@ -7,10 +7,9 @@
     "dev": "next dev",
     "build": "next build",
     "preview": "opennextjs-cloudflare build && opennextjs-cloudflare preview",
-    "deploy": "opennextjs-cloudflare build && node scripts/patch-worker.js && opennextjs-cloudflare deploy",
+    "deploy": "opennextjs-cloudflare build && opennextjs-cloudflare deploy",
     "start": "next start",
-    "pages:build": "npx @opennextjs/cloudflare@latest build && node scripts/patch-worker.js",
-    "pages:patch": "node scripts/patch-worker.js",
+    "pages:build": "npx @opennextjs/cloudflare@latest build",
     "lint": "eslint"
   },
   "dependencies": {
