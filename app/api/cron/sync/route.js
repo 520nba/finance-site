@@ -17,6 +17,7 @@ import { NextResponse } from 'next/server';
 import { runHistorySync } from '@/lib/cron/historySync';
 import { runRealtimeSync } from '@/lib/cron/realtimeSync';
 import { runSentinel } from '@/lib/cron/sentinel';
+import { isAdminAuthorized } from '@/lib/storage/authRepo';
 
 export const dynamic = 'force-dynamic';
 
@@ -27,11 +28,8 @@ const TASK_MAP = {
 };
 
 export async function GET(request) {
-    // ── 鉴权 ────────────────────────────────────────────────────────────────
-    const { searchParams } = new URL(request.url);
-    const secret = searchParams.get('secret');
-
-    if (!process.env.CRON_SECRET || secret !== process.env.CRON_SECRET) {
+    // ── 鉴权：统一使用管理员校验 ───────────────────────────────────────
+    if (!(await isAdminAuthorized(request))) {
         return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
 
