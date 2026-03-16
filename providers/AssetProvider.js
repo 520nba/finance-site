@@ -58,8 +58,18 @@ export function AssetProvider({ children }) {
         assetsRef,
     });
 
+    const handleAuthAction = useCallback(async (actionFn) => {
+        const result = await actionFn();
+        if (result && !result.ok) {
+            showToast(result.error);
+        }
+        return result;
+    }, [showToast]);
+
     const value = useMemo(() => ({
         ...auth,
+        handleLogin: () => handleAuthAction(() => auth.handleLogin()),
+        handleRegister: () => handleAuthAction(() => auth.handleRegister()),
         assets,
         isSyncing,
         activeTab,
@@ -72,7 +82,26 @@ export function AssetProvider({ children }) {
         toast,
         setToast,
         showToast
-    }), [auth, assets, isSyncing, activeTab, selectedCode, addAsset, removeAsset, refreshAssets, toast, showToast]);
+    }), [
+        auth.userId,
+        auth.isLogged,
+        auth.isPending,
+        auth.loginInput,
+        auth.passwordInput,
+        auth.isRegistering,
+        auth.handleLogin,
+        auth.handleRegister,
+        auth.handleLogout,
+        assets,
+        isSyncing,
+        activeTab,
+        selectedCode,
+        addAsset,
+        removeAsset,
+        refreshAssets,
+        toast,
+        showToast
+    ]);
 
     return (
         <AssetContext.Provider value={value}>

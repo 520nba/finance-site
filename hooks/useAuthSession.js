@@ -9,6 +9,7 @@ export function useAuthSession() {
     const [loginInput, setLoginInput] = useState('');
     const [passwordInput, setPasswordInput] = useState('');
     const [isRegistering, setIsRegistering] = useState(false);
+    const [isPending, setIsPending] = useState(false);
 
     // SaaS 化改造: 服务端验证会话
     useEffect(() => {
@@ -30,6 +31,7 @@ export function useAuthSession() {
     }, []);
 
     const handleLogin = async () => {
+        setIsPending(true);
         try {
             const res = await fetch('/api/auth/login', {
                 method: 'POST',
@@ -38,17 +40,21 @@ export function useAuthSession() {
             });
             const data = await res.json();
             if (res.ok) {
+                setPasswordInput('');
                 setUserId(data.userId);
                 setIsLogged(true);
                 return { ok: true };
             }
-            return { ok: false, error: data.error };
+            return { ok: false, error: data.error || 'Login failed' };
         } catch (e) {
             return { ok: false, error: 'Network error during login' };
+        } finally {
+            setIsPending(false);
         }
     };
 
     const handleRegister = async () => {
+        setIsPending(true);
         try {
             const res = await fetch('/api/auth/register', {
                 method: 'POST',
@@ -57,13 +63,16 @@ export function useAuthSession() {
             });
             const data = await res.json();
             if (res.ok) {
+                setPasswordInput('');
                 setUserId(data.userId);
                 setIsLogged(true);
                 return { ok: true };
             }
-            return { ok: false, error: data.error };
+            return { ok: false, error: data.error || 'Registration failed' };
         } catch (e) {
             return { ok: false, error: 'Network error during registration' };
+        } finally {
+            setIsPending(false);
         }
     };
 
@@ -87,6 +96,7 @@ export function useAuthSession() {
         setPasswordInput,
         isRegistering,
         setIsRegistering,
+        isPending,
         handleLogin,
         handleRegister,
         handleLogout,

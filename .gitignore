@@ -39,7 +39,11 @@ yarn-error.log*
 # cloudflare / opennext
 .open-next
 .dev.vars
+.wrangler/
 
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# data & testing
+data/users.json
