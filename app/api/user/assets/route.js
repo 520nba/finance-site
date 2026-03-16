@@ -2,8 +2,7 @@ import { NextResponse } from 'next/server';
 import { getUserAssets, saveUserAssets } from '@/lib/storage/userRepo';
 import { cleanupSingleAssetIfNotUsed } from '@/lib/storage/maintenanceRepo';
 import { getD1Storage, getCloudflareCtx } from '@/lib/storage/d1Client';
-import { syncHistoryBulk } from '@/app/api/history/bulk/route';
-import { syncNamesBulk } from '@/app/api/names/bulk/route';
+import { syncHistoryBulk, syncNamesBulk } from '@/lib/services/assetSyncService';
 import { requireUser } from '@/lib/auth/requireUser';
 
 const MAX_ASSETS_PER_USER = 100;
