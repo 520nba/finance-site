@@ -128,8 +128,8 @@ export function useAdminData(secretKey, showToast, onAuthFailure) {
             onConfirm: async () => {
                 setLoading(true);
                 try {
-                    // 全量历史重刷使用 task=history&force=1
-                    const url = `/api/cron/sync?task=history&force=1&key=${secretKey}`;
+                    // 全量历史重刷使用 task=history&force=1，并带上资产类型
+                    const url = `/api/cron/sync?task=history&force=1&type=${type}&key=${secretKey}`;
                     const res = await fetch(url);
                     const data = await res.json();
                     if (res.ok && data.success) {
