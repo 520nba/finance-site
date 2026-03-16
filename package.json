@@ -29,7 +29,6 @@
     "eslint": "^9.14.0",
     "eslint-config-next": "16.1.6",
     "tailwindcss": "^4",
-    "vercel": "^50.26.0",
     "wrangler": "^4.70.0"
   }
 }
