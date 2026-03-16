@@ -41,6 +41,26 @@ export default function AdminDashboard({ isOpen, onClose }) {
         }
     }, [searchParams, stats]); // stats is used to avoid refetching if already present in useEffect, but fetchStats itself replaces it.
 
+    const handleForceHistorySync = async () => {
+        setLoading(true);
+        setConfirmAction(null);
+        try {
+            const key = searchParams.get('secret') || searchParams.get('key') || sessionStorage.getItem('tracker_admin_secret');
+            const res = await fetch(`/api/cron/sync?task=history&force=1&secret=${key}`);
+            const data = await res.json();
+            if (res.ok && data.success) {
+                showToast('全量刷新任务已启动：日期偏移已修正。', 'success');
+                fetchStats(true);
+            } else {
+                showToast(`任务启动失败: ${data.error || '未知错误'}`);
+            }
+        } catch (e) {
+            showToast('请求失败');
+        } finally {
+            setLoading(false);
+        }
+    };
+
 
     useEffect(() => {
         if (isOpen) {
@@ -186,6 +206,30 @@ export default function AdminDashboard({ isOpen, onClose }) {
                                         <div className="text-[10px] text-white/20 font-bold uppercase tracking-widest">{kpi.label}</div>
                                     </div>
                                 ))}
+                            </div>
+
+                            {/* Section: Dangerous / Admin Actions */}
+                            <div className="bg-red-500/5 border border-red-500/10 p-8 rounded-[2rem] flex flex-col md:flex-row items-center justify-between gap-6">
+                                <div className="space-y-2">
+                                    <div className="flex items-center gap-3">
+                                        <RefreshCw size={18} className="text-red-400" />
+                                        <h3 className="text-sm font-black italic uppercase tracking-widest text-red-100">底层数据热重置</h3>
+                                    </div>
+                                    <p className="text-xs text-white/30 max-w-lg leading-relaxed">
+                                        此操作将强制从天天基金/东财全量重新抓取最近 1 年的历史数据，并使用最新的<b>时区对齐逻辑</b>覆盖数据库。用于修正日期偏差。
+                                    </p>
+                                </div>
+                                <button
+                                    onClick={() => setConfirmAction({
+                                        message: '此操作将消耗大量 D1 写入额度（约为 资产数 * 1 写请求）。确认要全量重刷所有资产的历史日期吗？',
+                                        onConfirm: handleForceHistorySync
+                                    })}
+                                    disabled={loading}
+                                    className="px-8 py-4 bg-red-600 hover:bg-red-500 disabled:opacity-50 text-white rounded-2xl font-black uppercase tracking-[0.2em] text-xs transition-all shadow-xl shadow-red-600/20 active:scale-95 flex items-center gap-3"
+                                >
+                                    <Zap size={14} fill="currentColor" />
+                                    执行全量刷新
+                                </button>
                             </div>
 
                             {/* Section: API Realtime Health Monitoring */}

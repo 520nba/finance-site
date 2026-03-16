@@ -54,9 +54,10 @@ export async function GET(request) {
 
     try {
         const t0 = Date.now();
-        await runner(env);
+        const force = searchParams.get('force') === '1';
+        await runner(env, { force });
         const elapsed = Date.now() - t0;
-        return NextResponse.json({ success: true, task, elapsed_ms: elapsed });
+        return NextResponse.json({ success: true, task, force, elapsed_ms: elapsed });
     } catch (e) {
         console.error(`[CronRoute] task=${task} failed:`, e.message);
         return NextResponse.json({ success: false, task, error: e.message }, { status: 500 });
