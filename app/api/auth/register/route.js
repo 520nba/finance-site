@@ -5,8 +5,7 @@
  */
 
 import { NextResponse } from 'next/server';
-import { getRequiredDb } from '@/lib/storage/d1Client';
-import { hashPassword, generateToken } from '@/lib/auth';
+import { isUsernameTaken, registerUser, SESSION_COOKIE_OPTIONS } from '@/lib/storage/authRepo';
 
 export async function POST(request) {
     try {
@@ -21,44 +20,18 @@ export async function POST(request) {
             return NextResponse.json({ error: 'Password must be at least 8 characters' }, { status: 400 });
         }
 
-        const db = await getRequiredDb();
-
-        // 1. 检查冲突
-        const existing = await db.prepare('SELECT id FROM users WHERE id = ?')
-            .bind(username.toLowerCase()).first();
-        if (existing) {
+        if (await isUsernameTaken(username)) {
             return NextResponse.json({ error: 'Username already taken' }, { status: 409 });
         }
 
-        // 2. 准备数据
-        const hash = await hashPassword(password);
-        const token = generateToken();
-        const expiresAt = new Date(Date.now() + 7 * 24 * 3600 * 1000).toISOString();
+        const { userId, token } = await registerUser(username, password);
 
-        // 3. 原子写入
-        await db.batch([
-            db.prepare('INSERT INTO users (id, password_hash) VALUES (?, ?)').bind(username.toLowerCase(), hash),
-            db.prepare('INSERT INTO user_sessions (token, user_id, expires_at) VALUES (?, ?, ?)')
-                .bind(token, username.toLowerCase(), expiresAt)
-        ]);
-
-        // 4. 返回并设置 Cookie
-        const res = NextResponse.json({ success: true, userId: username.toLowerCase() });
-        res.cookies.set('session', token, {
-            httpOnly: true,
-            secure: process.env.NODE_ENV === 'production',
-            sameSite: 'strict',
-            maxAge: 7 * 24 * 3600,
-            path: '/'
-        });
+        const res = NextResponse.json({ success: true, userId });
+        res.cookies.set('session', token, SESSION_COOKIE_OPTIONS);
 
         return res;
     } catch (e) {
         console.error('[Auth:Register] Error:', e);
-        return NextResponse.json({
-            error: 'Server error during registration',
-            details: e.message,
-            stack: process.env.NODE_ENV === 'development' ? e.stack : undefined
-        }, { status: 500 });
+        return NextResponse.json({ error: 'Registration failed' }, { status: 500 });
     }
 }
