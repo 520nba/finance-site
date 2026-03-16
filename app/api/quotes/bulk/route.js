@@ -1,11 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getBulkQuotes, saveQuotes } from '@/lib/storage/quoteRepo';
 
-const BASE_HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
-    'Accept': '*/*, application/json',
-    'Referer': 'https://quote.eastmoney.com/'
-};
+import { EASTMONEY_HEADERS } from '@/lib/constants/headers';
 
 // 移除 resolveMarket，强制用户传前缀
 

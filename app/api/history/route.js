@@ -7,10 +7,7 @@ function todayStr(date = new Date()) {
     return date.toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' });
 }
 
-const BASE_HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    'Accept': '*/*',
-};
+import { EASTMONEY_HEADERS } from '@/lib/constants/headers';
 
 function resolveMarket(code) {
     const match = code.match(/^([a-zA-Z]{2})(\d+)$/i);
