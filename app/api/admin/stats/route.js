@@ -19,8 +19,8 @@ export async function GET(request) {
 
     if (!shouldSync) {
         const cached = memoryCache.get(STATS_CACHE_KEY);
-        if (cached && (Date.now() - cached.timestamp < CACHE_TTL)) {
-            return NextResponse.json(cached.data);
+        if (cached) {
+            return NextResponse.json(cached);
         }
     }
 
@@ -56,10 +56,7 @@ export async function GET(request) {
             api_health: healthData || []
         };
 
-        memoryCache.set(STATS_CACHE_KEY, {
-            data: finalStats,
-            timestamp: Date.now()
-        });
+        memoryCache.set(STATS_CACHE_KEY, finalStats, CACHE_TTL);
 
         return NextResponse.json(finalStats);
     } catch (e) {
