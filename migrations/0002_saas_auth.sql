@@ -4,7 +4,6 @@
 -- 扩展用户表
 ALTER TABLE users ADD COLUMN password_hash TEXT;
 ALTER TABLE users ADD COLUMN email TEXT UNIQUE;
-ALTER TABLE users ADD COLUMN created_at DATETIME DEFAULT CURRENT_TIMESTAMP;
 
 -- 创建会话表
 CREATE TABLE IF NOT EXISTS user_sessions (
