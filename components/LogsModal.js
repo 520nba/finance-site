@@ -12,7 +12,7 @@ export default function LogsModal({ isOpen, onClose }) {
     const fetchLogs = async () => {
         setLoading(true);
         try {
-            const res = await fetch(`/api/logs?hours=${hours}`);
+            const res = await fetch(`/api/admin/logs?hours=${hours}`);
             if (res.ok) {
                 const data = await res.json();
                 setLogs(data);
@@ -31,7 +31,7 @@ export default function LogsModal({ isOpen, onClose }) {
     }, [isOpen, hours]);
 
     const handleDownload = () => {
-        window.open(`/api/logs?hours=${hours}&format=csv`, '_blank');
+        window.open(`/api/admin/logs?hours=${hours}&format=csv`, '_blank');
     };
 
     if (!isOpen) return null;

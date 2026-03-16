@@ -9,7 +9,6 @@ export function useAssetSync({ userId, isLogged }) {
     const [assets, setAssets] = useState([]);
     const [isSyncing, setIsSyncing] = useState(false);
     const [isSessionReady, setIsSessionReady] = useState(false);
-    const [loadedUserId, setLoadedUserId] = useState('');
 
     const refreshAssets = useCallback(async (list) => {
         if (!list || list.length === 0) return;
@@ -80,7 +79,7 @@ export function useAssetSync({ userId, isLogged }) {
                     }
                     return a;
                 }));
-            }).catch(() => { });
+            }).catch(e => console.warn('[Frontend:History] Background fetch failed:', e));
 
         } catch (e) {
             console.error('[Frontend] Refresh failed:', e);
@@ -133,8 +132,11 @@ export function useAssetSync({ userId, isLogged }) {
         return () => controller.abort();
     }, [userId, refreshAssets]);
 
-    // 使用 code 拼接的字符串作为依赖，避免轮询引发价格变动导致持续的高频 D1 覆写
-    const assetCodesStr = assets.map(a => `${a.type}:${a.code}`).sort().join(',');
+
+    const assetsRef = useRef(assets);
+    useEffect(() => {
+        assetsRef.current = assets;
+    }, [assets]);
 
     // 数据变化后同步到服务端（暴露给外部主动调用）
     const syncAssetsToServer = useCallback(async (currentAssets) => {
@@ -152,13 +154,9 @@ export function useAssetSync({ userId, isLogged }) {
         } catch (e) {
             console.error('Sync failed:', e);
         }
-    }, [isLogged, userId, isSessionReady, loadedUserId]);
+    }, [isLogged, userId, isSessionReady]);
 
 
-    const assetsRef = useRef(assets);
-    useEffect(() => {
-        assetsRef.current = assets;
-    }, [assets]);
 
     // 监听多标签页同步防冲突 (跨 Tab 数据漂移保护)
     useEffect(() => {
@@ -171,7 +169,7 @@ export function useAssetSync({ userId, isLogged }) {
                         const oldStr = assetsRef.current.map(a => `${a.type}:${a.code}`).sort().join(',');
                         if (newStr !== oldStr) refreshAssets(list);
                     }
-                }).catch(() => { });
+                }).catch(e => console.warn('[Frontend:StorageSync] Cross-tab fetch failed:', e));
             }
         };
         window.addEventListener('storage', handleStorage);

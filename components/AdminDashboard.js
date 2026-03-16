@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X, ShieldCheck, Activity, Wifi, WifiOff, Zap, BarChart3, Database, RefreshCw, TrendingUp, PieChart } from 'lucide-react';
 import { useSearchParams } from 'next/navigation';
@@ -16,16 +16,15 @@ export default function AdminDashboard({ isOpen, onClose }) {
         setTimeout(() => setToast(null), 3000);
     };
 
-    const searchParamsHooks = useSearchParams();
+    const searchParams = useSearchParams();
 
-    const fetchStats = async (forceSync = false) => {
+    const fetchStats = useCallback(async (forceSync = false) => {
         setLoading(true);
         try {
-            const key = searchParamsHooks.get('key') || searchParamsHooks.get('token') || sessionStorage.getItem('tracker_admin_secret');
+            const key = searchParams.get('key') || searchParams.get('token') || sessionStorage.getItem('tracker_admin_secret');
             const headers = key ? { 'x-admin-key': key } : {};
 
             const url = new URL(forceSync ? '/api/admin/stats?sync=true' : '/api/admin/stats', window.location.origin);
-            if (key) url.searchParams.set('token', key);
 
             const res = await fetch(url.toString(), { headers });
             if (res.ok) {
@@ -40,14 +39,14 @@ export default function AdminDashboard({ isOpen, onClose }) {
         } finally {
             setLoading(false);
         }
-    };
+    }, [searchParams, stats]); // stats is used to avoid refetching if already present in useEffect, but fetchStats itself replaces it.
 
 
     useEffect(() => {
         if (isOpen) {
             if (!stats) fetchStats();
         }
-    }, [isOpen]);
+    }, [isOpen, stats, fetchStats]);
 
     if (!isOpen) return null;
 

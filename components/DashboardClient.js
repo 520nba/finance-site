@@ -170,6 +170,7 @@ export default function DashboardClient() {
                                     <input
                                         type="text"
                                         placeholder="用户名"
+                                        autoComplete="username"
                                         value={loginInput}
                                         onChange={(e) => setLoginInput(e.target.value)}
                                         className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 outline-none focus:border-blue-500/50 transition-all text-sm font-mono"
@@ -177,6 +178,7 @@ export default function DashboardClient() {
                                     <input
                                         type="password"
                                         placeholder="密码 (不少于8位)"
+                                        autoComplete="current-password"
                                         value={passwordInput}
                                         onChange={(e) => setPasswordInput(e.target.value)}
                                         className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 outline-none focus:border-blue-500/50 transition-all text-sm font-mono"
