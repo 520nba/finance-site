@@ -2,8 +2,10 @@ import { NextResponse } from 'next/server';
 import { isAdminAuthorized } from '@/lib/storage/authRepo';
 
 export const dynamic = 'force-dynamic';
+export const revalidate = 0;
 
 export async function GET(request) {
+    console.log(`[AdminQueue] Incoming request: ${request.url}`);
     if (!(await isAdminAuthorized(request))) {
         return NextResponse.json({ error: 'Unauthorized' }, { status: 403 });
     }
