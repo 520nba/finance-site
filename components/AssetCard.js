@@ -4,14 +4,11 @@ import { useState, useEffect, useRef, memo, useMemo } from 'react';
 import useSWR from 'swr';
 import { motion } from 'framer-motion';
 import { Trash2 } from 'lucide-react';
-import dynamic from 'next/dynamic';
+import VolatilityChart from './VolatilityChart';
+import IntradayChart from './IntradayChart';
 import { calculatePerformance } from '@/lib/utils';
 import { fetchBulkHistory } from '@/services/api/historyService';
 import { fetchBulkIntradayData } from '@/services/api/intradayService';
-
-// 懒加载重型图表库，显式禁用 SSR 以减小边缘运行时包体积
-const VolatilityChart = dynamic(() => import('./VolatilityChart'), { ssr: false });
-const IntradayChart = dynamic(() => import('./IntradayChart'), { ssr: false });
 
 // 独立子组件，展示具体时段的表现
 function MetricPanel({ label, value, history = [], days }) {
