@@ -33,6 +33,7 @@ export async function GET(request) {
     }
 
     // ── 路由 ────────────────────────────────────────────────────────────────
+    const { searchParams } = new URL(request.url);
     const task = searchParams.get('task') ?? 'realtime';
     const runner = TASK_MAP[task];
 
