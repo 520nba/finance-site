@@ -3,7 +3,7 @@
 import { motion } from 'framer-motion';
 import {
     Users, Wifi, RefreshCcw, FileText, LayoutGrid,
-    Database, Zap, Activity, Clock, Trash2,
+    Database, Zap, Activity, Clock, Trash2, PieChart,
 } from 'lucide-react';
 
 // ── OverviewSection ───────────────────────────────────────────────────────
