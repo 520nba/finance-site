@@ -13,15 +13,15 @@
  *   CRON_SECRET  调用密钥，必须配置，否则非生产环境也拒绝访问
  */
 
-import { NextResponse }     from 'next/server';
-import { runHistorySync }   from '@/lib/cron/historySync';
-import { runRealtimeSync }  from '@/lib/cron/realtimeSync';
-import { runSentinel }      from '@/lib/cron/sentinel';
+import { NextResponse } from 'next/server';
+import { runHistorySync } from '@/lib/cron/historySync';
+import { runRealtimeSync } from '@/lib/cron/realtimeSync';
+import { runSentinel } from '@/lib/cron/sentinel';
 
 export const dynamic = 'force-dynamic';
 
 const TASK_MAP = {
-    history:  runHistorySync,
+    history: runHistorySync,
     realtime: runRealtimeSync,
     sentinel: runSentinel,
 };
@@ -47,10 +47,10 @@ export async function GET(request) {
     }
 
     // ── 执行 ────────────────────────────────────────────────────────────────
-    // Next.js route handler 无法直接访问 env.DB（D1 binding 只在 Workers runtime 可用）
-    // 此处通过 process.env.__D1_BINDING__ 或全局 DB 获取，具体取决于 open-next 的注入方式。
-    // 推荐做法：在 next.config.js 或 d1Client.js 中统一封装 DB 获取逻辑。
-    const env = { DB: globalThis.__D1_BINDING__ ?? process.env.DB };
+    // 统合规范：直接使用 getD1Storage() 获取绑定，支持 context 与 global 注入
+    const { getD1Storage } = await import('@/lib/storage/d1Client');
+    const db = await getD1Storage();
+    const env = { DB: db };
 
     try {
         const t0 = Date.now();
