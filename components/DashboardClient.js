@@ -57,7 +57,7 @@ export default function DashboardClient() {
                             ${toast.type === 'error' ? 'bg-red-500/90 text-white' : 'bg-green-500/90 text-white'}`}
                     >
                         {toast.msg}
-                        <button onClick={() => setToast(null)} className="opacity-60 hover:opacity-100"><X size={14} /></button>
+                        <button onClick={() => setToast(null)} className="opacity-60 hover:opacity-100 italic"><X size={14} /></button>
                     </motion.div>
                 )}
             </AnimatePresence>
@@ -119,7 +119,7 @@ export default function DashboardClient() {
                         )}
                         <button
                             onClick={() => setShowLogs(true)}
-                            className="flex items-center gap-2 px-4 py-2 rounded-full border border-white/10 opacity-40 hover:opacity-100 transition-all"
+                            className="flex items-center gap-2 px-4 py-2 rounded-full border border-white/10 opacity-40 hover:opacity-100 transition-all font-bold"
                         >
                             <Activity size={14} />
                             <span className="text-xs font-bold uppercase tracking-widest hidden sm:inline">日志</span>
@@ -130,7 +130,7 @@ export default function DashboardClient() {
                             className={`flex items-center gap-2 px-4 py-2 rounded-full border border-white/10 opacity-40 hover:opacity-100 transition-all disabled:cursor-not-allowed ${isSyncing ? 'animate-pulse' : ''}`}
                         >
                             <RefreshCw size={14} className={isSyncing ? 'animate-spin' : ''} />
-                            <span className="text-xs font-bold uppercase tracking-widest hidden sm:inline">同步数据</span>
+                            <span className="text-xs font-bold uppercase tracking-widest hidden sm:inline">同步</span>
                         </button>
                     </div>
                 </div>
@@ -167,7 +167,7 @@ export default function DashboardClient() {
                                         autoComplete="username"
                                         value={loginInput}
                                         onChange={(e) => setLoginInput(e.target.value)}
-                                        className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 outline-none focus:border-blue-500/50 transition-all text-sm font-mono"
+                                        className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 outline-none focus:border-blue-500/50 transition-all text-sm font-mono text-white"
                                     />
                                     <input
                                         type="password"
@@ -175,14 +175,14 @@ export default function DashboardClient() {
                                         autoComplete="current-password"
                                         value={passwordInput}
                                         onChange={(e) => setPasswordInput(e.target.value)}
-                                        className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 outline-none focus:border-blue-500/50 transition-all text-sm font-mono"
+                                        className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 outline-none focus:border-blue-500/50 transition-all text-sm font-mono text-white"
                                         onKeyDown={(e) => e.key === 'Enter' && !isPending && (isRegistering ? handleRegister() : handleLogin())}
                                     />
                                     <div className="flex flex-col gap-3 pt-2">
                                         <button
                                             onClick={isRegistering ? handleRegister : handleLogin}
                                             disabled={isPending}
-                                            className={`w-full ${isPending ? 'bg-blue-600/50 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-500'} text-white py-3 rounded-xl font-black uppercase tracking-widest text-sm transition-all shadow-lg shadow-blue-600/20 flex items-center justify-center gap-2`}
+                                            className={`w-full ${isPending ? 'bg-blue-600/50 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-500 text-white'} py-3 rounded-xl font-black uppercase tracking-widest text-sm transition-all shadow-lg shadow-blue-600/20 flex items-center justify-center gap-2`}
                                         >
                                             {isPending && <RefreshCw size={14} className="animate-spin" />}
                                             {isRegistering ? (isPending ? '注册中...' : '立即注册') : (isPending ? '验证中...' : '安全登入')}
@@ -198,31 +198,29 @@ export default function DashboardClient() {
                                 </div>
                             </motion.div>
                         ) : (
-                            <>
-                                <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-                                    {filteredAssets.length > 0 ? (
-                                        filteredAssets.map(asset => (
-                                            <AssetCard
-                                                key={asset.code}
-                                                asset={asset}
-                                                onRemove={removeAsset}
-                                                mode={activeTab === 'watchlist' ? 'realtime' : 'volatility'}
-                                            />
-                                        ))
-                                    ) : (
-                                        <motion.div
-                                            key="empty"
-                                            initial={{ opacity: 0 }}
-                                            animate={{ opacity: 1 }}
-                                            className="col-span-full text-center py-24 glass-effect border-dashed border-white/5"
-                                        >
-                                            <p className="text-white/20 italic tracking-widest">
-                                                暂无相关数据，输入代码开启追踪
-                                            </p>
-                                        </motion.div>
-                                    )}
-                                </div>
-                            </>
+                            <div className="grid grid-cols-1 xl:grid-cols-2 gap-6" key="cards">
+                                {filteredAssets.length > 0 ? (
+                                    filteredAssets.map(asset => (
+                                        <AssetCard
+                                            key={asset.code}
+                                            asset={asset}
+                                            onRemove={removeAsset}
+                                            mode={activeTab === 'watchlist' ? 'realtime' : 'volatility'}
+                                        />
+                                    ))
+                                ) : (
+                                    <motion.div
+                                        key="empty"
+                                        initial={{ opacity: 0 }}
+                                        animate={{ opacity: 1 }}
+                                        className="col-span-full text-center py-24 glass-effect border-dashed border-white/5"
+                                    >
+                                        <p className="text-white/20 italic tracking-widest">
+                                            暂无相关数据，输入代码开启追踪
+                                        </p>
+                                    </motion.div>
+                                )}
+                            </div>
                         )}
                     </AnimatePresence>
                 </div>
