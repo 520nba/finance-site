@@ -76,7 +76,13 @@ function AdminCommandCenter() {
             >
                 <AnimatePresence mode="wait">
                     {activeSection === 'overview' && (
-                        <OverviewSection stats={data.stats} onNavigate={setActiveSection} />
+                        <OverviewSection
+                            stats={data.stats}
+                            onNavigate={setActiveSection}
+                            onForceSync={data.triggerForceSync}
+                            onCleanup={data.triggerCleanup}
+                            loading={data.loading}
+                        />
                     )}
                     {activeSection === 'health' && (
                         <HealthSection apiHealth={data.stats.api_health} />

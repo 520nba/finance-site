@@ -7,12 +7,10 @@ import SearchBar from '@/components/SearchBar';
 import AssetCard from '@/components/AssetCard';
 import WatchlistSidebar from '@/components/WatchlistSidebar';
 import LogsModal from '@/components/LogsModal';
-import AdminDashboard from '@/components/AdminDashboard';
 import { useAsset } from '@/providers/AssetProvider';
 
 export default function DashboardClient() {
     const [showLogs, setShowLogs] = useState(false);
-    const [showAdmin, setShowAdmin] = useState(false);
 
     const {
         userId,
@@ -105,42 +103,38 @@ export default function DashboardClient() {
                             </button>
                         )}
                     </div>
-                    {isLogged && (
-                        <div className="flex items-center gap-2">
+
+                    <div className="flex items-center gap-2">
+                        {isLogged && (
                             <button
-                                onClick={() => setShowAdmin(true)}
+                                onClick={() => {
+                                    const key = sessionStorage.getItem('tracker_admin_secret');
+                                    window.open(`/admin${key ? `?key=${key}` : ''}`, '_blank');
+                                }}
                                 className="p-2.5 rounded-full border border-white/10 opacity-20 hover:opacity-100 transition-all hover:bg-cyan-500/10 hover:border-cyan-500/30"
-                                title="Admin Dashboard"
+                                title="管理员控制中心"
                             >
                                 <ShieldCheck size={14} className="text-cyan-400" />
                             </button>
-
-                            <button
-                                onClick={() => setShowLogs(true)}
-                                className="flex items-center gap-2 px-4 py-2 rounded-full border border-white/10 opacity-40 hover:opacity-100 transition-all"
-                            >
-                                <Activity size={14} />
-                                <span className="text-xs font-bold uppercase tracking-widest hidden sm:inline">日志</span>
-                            </button>
-                            <button
-                                onClick={refreshAssets}
-                                disabled={isSyncing}
-                                className={`flex items-center gap-2 px-4 py-2 rounded-full border border-white/10 opacity-40 hover:opacity-100 transition-all disabled:cursor-not-allowed ${isSyncing ? 'animate-pulse' : ''}`}
-                            >
-                                <RefreshCw size={14} className={isSyncing ? 'animate-spin' : ''} />
-                                <span className="text-xs font-bold uppercase tracking-widest hidden sm:inline">同步数据</span>
-                            </button>
-                        </div>
-                    )}
+                        )}
+                        <button
+                            onClick={() => setShowLogs(true)}
+                            className="flex items-center gap-2 px-4 py-2 rounded-full border border-white/10 opacity-40 hover:opacity-100 transition-all"
+                        >
+                            <Activity size={14} />
+                            <span className="text-xs font-bold uppercase tracking-widest hidden sm:inline">日志</span>
+                        </button>
+                        <button
+                            onClick={refreshAssets}
+                            disabled={isSyncing}
+                            className={`flex items-center gap-2 px-4 py-2 rounded-full border border-white/10 opacity-40 hover:opacity-100 transition-all disabled:cursor-not-allowed ${isSyncing ? 'animate-pulse' : ''}`}
+                        >
+                            <RefreshCw size={14} className={isSyncing ? 'animate-spin' : ''} />
+                            <span className="text-xs font-bold uppercase tracking-widest hidden sm:inline">同步数据</span>
+                        </button>
+                    </div>
                 </div>
             </div>
-
-            {isLogged && (
-                <>
-                    <LogsModal isOpen={showLogs} onClose={() => setShowLogs(false)} />
-                    <AdminDashboard isOpen={showAdmin} onClose={() => setShowAdmin(false)} />
-                </>
-            )}
 
             <div className="flex flex-col lg:flex-row gap-6 lg:gap-8 items-start">
                 {isLogged && assets.length > 0 && (
@@ -233,6 +227,8 @@ export default function DashboardClient() {
                     </AnimatePresence>
                 </div>
             </div>
+
+            <LogsModal isOpen={showLogs} onClose={() => setShowLogs(false)} />
 
             <footer className="mt-24 pt-12 border-t border-white/5 text-center text-white/20 text-sm">
                 <p>&copy; 2026 Antigravity 金融实验室。数据源由 腾讯 &amp; 天天基金 提供。</p>

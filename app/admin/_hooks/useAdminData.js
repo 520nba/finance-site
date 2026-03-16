@@ -124,18 +124,16 @@ export function useAdminData(secretKey, showToast, onAuthFailure) {
     const triggerForceSync = useCallback((type) => {
         const typeZh = type === 'fund' ? '基金' : '股票';
         setConfirmAction({
-            message: `!! 协议强制覆盖 !!\n\n系统将从外部节点重新同步所有 ${typeZh} 的历史 K 线，这将替换当前的本地数据集。\n\n执行指令？`,
+            message: `!! 协议强制覆盖 !!\n\n系统将调用同步内核全量重新抓取所有 ${typeZh} 的历史 K 线，并使用最新的“时区修复逻辑”覆盖数据库记录。\n\n执行指令？`,
             onConfirm: async () => {
                 setLoading(true);
                 try {
-                    const res = await fetch('/api/admin/force-sync', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json', 'x-admin-key': secretKey },
-                        body: JSON.stringify({ type }),
-                    });
+                    // 全量历史重刷使用 task=history&force=1
+                    const url = `/api/cron/sync?task=history&force=1&secret=${secretKey}`;
+                    const res = await fetch(url);
                     const data = await res.json();
-                    if (res.ok) {
-                        showToast(`[成功] 任务已注入队列\n${data.message}`, 'success');
+                    if (res.ok && data.success) {
+                        showToast(`[成功] 全量刷新任务已启动\n日期偏移已修正`, 'success');
                         await fetchAllData(secretKey, true);
                     } else {
                         showToast(data.error || '指令被拒绝');
