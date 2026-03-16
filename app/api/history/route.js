@@ -9,16 +9,7 @@ function todayStr(date = new Date()) {
 
 import { EASTMONEY_HEADERS } from '@/lib/constants/headers';
 
-function resolveMarket(code) {
-    const match = code.match(/^([a-zA-Z]{2})(\d+)$/i);
-    let prefix = '';
-    let clean = code;
-    if (match) {
-        prefix = match[1].toLowerCase();
-        clean = match[2];
-    }
-    return { prefix, clean };
-}
+
 
 
 async function fetchWithTimeout(url, options = {}, timeoutMs = 8000) {
