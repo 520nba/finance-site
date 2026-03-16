@@ -1,16 +1,15 @@
 'use client';
 
-import { useState, useEffect, useRef, memo } from 'react';
+import { useState, useEffect, useRef, memo, useMemo } from 'react';
+import useSWR from 'swr';
 import { motion } from 'framer-motion';
 import { Trash2 } from 'lucide-react';
 import VolatilityChart from './VolatilityChart';
 import IntradayChart from './IntradayChart';
 import { calculatePerformance } from '@/lib/utils';
-import { useAssetData } from '@/hooks/useAssetData';
 import { fetchBulkHistory } from '@/services/api/historyService';
 import { fetchBulkIntradayData } from '@/services/api/intradayService';
 
-// 独立子组件，展示具体时段的表现
 // 独立子组件，展示具体时段的表现
 function MetricPanel({ label, value, history = [], days }) {
     if (value === null || value === undefined) {
@@ -57,7 +56,6 @@ function AssetCardComponent({ asset, onRemove, mode = 'volatility' }) {
     const [isVisible, setIsVisible] = useState(false);
     const containerRef = useRef(null);
 
-    // 监听进入视口，实现真正的懒加载请求
     // 监听进入视口，实现延迟实例化与数据拉取
     useEffect(() => {
         if (!containerRef.current) return;
@@ -72,20 +70,40 @@ function AssetCardComponent({ asset, onRemove, mode = 'volatility' }) {
         return () => obs.disconnect();
     }, []);
 
+    // 取得 localStorage 中的缓存作为首屏 fallback
+    const cachedHistory = useMemo(() => {
+        try { return JSON.parse(localStorage.getItem(`tracker_cache_hist:${asset.type}:${asset.code}`)) }
+        catch { return undefined }
+    }, [asset.type, asset.code]);
+
+    const cachedIntraday = useMemo(() => {
+        try { return JSON.parse(localStorage.getItem(`tracker_cache_intra:${asset.type}:${asset.code}`)) }
+        catch { return undefined }
+    }, [asset.type, asset.code]);
+
     // 1. 历史数据获取 (仅在 volatility 模式且可见时启用)
-    const { data: historyData } = useAssetData(
-        `hist:${asset.type}:${asset.code}`,
+    const { data: historyData } = useSWR(
+        isVisible && mode === 'volatility' ? `hist:${asset.type}:${asset.code}` : null,
         () => fetchBulkHistory([{ code: asset.code, type: asset.type }], false).then(res => res[`${asset.type}:${asset.code}`]),
-        { enabled: isVisible && mode === 'volatility' }
+        {
+            fallbackData: cachedHistory,
+            revalidateOnFocus: false, // 历史数据不随切换 Tab 刷新
+            onSuccess: (data) => {
+                if (data) localStorage.setItem(`tracker_cache_hist:${asset.type}:${asset.code}`, JSON.stringify(data));
+            }
+        }
     );
 
-    // 2. 分时数据获取 (仅在 realtime 模式且可见时启用，开启自动轮询 2 分钟)
-    const { data: intradayData, isValidating: isIntraValidating } = useAssetData(
-        `intra:${asset.type}:${asset.code}`,
+    // 2. 分时数据获取 (仅在 realtime 模式且可见时启用，自动轮询 2 分钟)
+    const { data: intradayData, isValidating: isIntraValidating } = useSWR(
+        isVisible && mode === 'realtime' ? `intra:${asset.type}:${asset.code}` : null,
         () => fetchBulkIntradayData([{ code: asset.code, type: asset.type }], true).then(res => res[asset.code]),
         {
-            enabled: isVisible && mode === 'realtime',
-            refreshInterval: 120000 // 2 分钟更新一次
+            fallbackData: cachedIntraday,
+            refreshInterval: 120000,
+            onSuccess: (data) => {
+                if (data) localStorage.setItem(`tracker_cache_intra:${asset.type}:${asset.code}`, JSON.stringify(data));
+            }
         }
     );
 
