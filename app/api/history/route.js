@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getHistory, insertDailyPricesBatch } from '@/lib/storage/historyRepo';
 import { fetchStockHistory, fetchFundHistory } from '@/lib/services/historyFetcher'
+import { calculateStats } from '@/lib/utils'
 
 function todayStr(date = new Date()) {
     return date.toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' });
@@ -22,20 +23,6 @@ function resolveMarket(code) {
     return { prefix, clean };
 }
 
-function calcStats(history) {
-    if (!history || history.length < 2) return { perf5d: 0, perf22d: 0, perf250d: 0 };
-    const getPerf = (days) => {
-        const data = history.slice(-(days + 1));
-        if (data.length < 2 || !data[0].value || data[0].value === 0) return 0;
-        const perf = ((data[data.length - 1].value / data[0].value) - 1) * 100;
-        return isNaN(perf) || !isFinite(perf) ? 0 : perf;
-    };
-    return {
-        perf5d: getPerf(5),
-        perf22d: getPerf(22),
-        perf250d: getPerf(250)
-    };
-}
 
 async function fetchWithTimeout(url, options = {}, timeoutMs = 8000) {
     const controller = new AbortController();
@@ -76,7 +63,7 @@ export async function GET(request) {
                 console.log(`[History] D1 hit ${isFresh ? '(Fresh)' : '(Enough)'}: ${code}`);
                 return NextResponse.json({
                     history: kvHistory,
-                    summary: calcStats(kvHistory),
+                    summary: calculateStats(kvHistory),
                     source: 'd1_storage'
                 });
             }
@@ -101,7 +88,7 @@ export async function GET(request) {
 
         return NextResponse.json({
             history,
-            summary: calcStats(history),
+            summary: calculateStats(history),
             source: 'external_api'
         });
     } catch (e) {

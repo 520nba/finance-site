@@ -127,58 +127,6 @@ worker-entry.js
 <files>
 This section contains the contents of the repository's files.
 
-<file path=".gitignore">
-# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
-
-# dependencies
-/node_modules
-/.pnp
-.pnp.*
-.yarn/*
-!.yarn/patches
-!.yarn/plugins
-!.yarn/releases
-!.yarn/versions
-
-# testing
-/coverage
-
-# next.js
-/.next/
-/out/
-
-# production
-/build
-
-# misc
-.DS_Store
-*.pem
-
-# debug
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-.pnpm-debug.log*
-
-# env files (can opt-in for committing if needed)
-.env*
-
-# vercel
-.vercel
-
-# cloudflare / opennext
-.open-next
-.dev.vars
-.wrangler/
-
-# typescript
-*.tsbuildinfo
-next-env.d.ts
-
-# data & testing
-data/users.json
-</file>
-
 <file path=".npmrc">
 legacy-peer-deps=true
 </file>
@@ -406,65 +354,6 @@ export default function RootLayout({ children }) {
     </html>
   );
 }
-</file>
-
-<file path="DEPLOYMENT.md">
-# Cloudflare Workers 部署指南
-
-本项目基于 **Next.js (App Router)** 并通过 **@opennextjs/cloudflare** 部署在 Cloudflare Workers 边缘运行时。
-
-## 1. 基础环境准备
-
-1.  **Node.js (LTS)**：推荐使用 v20 或更高版本。
-2.  **Cloudflare 账户**：需要一个活跃的 Cloudflare 账户并开通 D1 数据库功能。
-
-## 2. 获取代码与安装依赖
-
-```powershell
-git clone <repository-url>
-cd stock-tracker
-npm install
-```
-
-## 3. 环境变量配置
-
-在项目根目录创建 `.dev.vars` (本地开发) 并确保 Cloudflare 控制台已配置以下环境变量：
-
-- `ADMIN_API_KEY`: 管理员 API 访问密钥 (PSK)。
-- `NEXT_PUBLIC_SITE_URL`: 网站访问地址。
-
-## 4. 数据库初始化 (D1)
-
-1.  **创建数据库**：
-    ```powershell
-    npx wrangler d1 create stock-tracker-db
-    ```
-2.  **更新配置文件**：将输出中的 `database_id` 填入 `wrangler.toml` 的 `[[d1_databases]]` 部分。
-3.  **应用迁移**：
-    ```powershell
-    # 本地预览环境
-    npx wrangler d1 migrations apply stock-tracker-db --local
-    # 生产环境
-    npx wrangler d1 migrations apply stock-tracker-db --remote
-    ```
-
-## 5. 本地开发与预览
-
-- **开发模式**：`npm run dev`
-- **边缘模拟预览**：`npm run preview` (使用 Miniflare 模拟实时环境)
-
-## 6. 构建与部署
-
-```powershell
-# 执行 OpenNext 构建并推送到 Cloudflare
-npm run deploy
-```
-
-## 7. 重要注意事项
-
-- **离线任务 (Crons)**：部署后，Cloudflare 会根据 `wrangler.toml` 中的 `[triggers.crons]` 自动运行同步任务。
-- **存储配额**：请关注 D1 的读写限制（免费额度通常足够中小型每日使用）。
-- **缓存说明**：应用使用了 `memoryCache.js` 进行 L1 缓存，但在多实例环境下可能存在短暂不一致。
 </file>
 
 <file path="eslint.config.mjs">
@@ -778,97 +667,6 @@ const config = {
 export default config;
 </file>
 
-<file path="providers/AssetProvider.js">
-'use client';
-
-import React, { createContext, useContext, useState, useCallback, useMemo } from 'react';
-import { useAuthSession } from '@/hooks/useAuthSession';
-import { useAssetSync } from '@/hooks/useAssetSync';
-import { useRealtimeQuotes } from '@/hooks/useRealtimeQuotes';
-import { useAssetActions } from '@/hooks/useAssetActions';
-
-const AssetContext = createContext(null);
-
-export function AssetProvider({ children }) {
-    const [activeTab, setActiveTab] = useState('stock');
-    const [selectedCode, setSelectedCode] = useState(null);
-    const [toast, setToast] = useState(null);
-
-    // Layer 1: 认证状态
-    const auth = useAuthSession();
-    const { userId, isLogged } = auth;
-
-    // Layer 2: 资产同步（加载服务端数据 & KV 写回）
-    const {
-        assets,
-        setAssets,
-        isSyncing,
-        setIsSyncing,
-        assetsRef,
-        refreshAssets,
-        syncAssetsToServer
-    } = useAssetSync({ userId, isLogged });
-
-    // Layer 3: 实时行情轮询（仅在 watchlist tab 下启动）
-    useRealtimeQuotes({
-        activeTab,
-        isLogged,
-        assets,
-        isSyncing,
-        userId,
-        setAssets,
-        assetsRef,
-        refreshAssets
-    });
-
-    const showToast = useCallback((msg, type = 'error') => {
-        setToast({ msg, type });
-        setTimeout(() => setToast(null), 3500);
-    }, []);
-
-    // Layer 4: 用户写操作（添加 / 移除资产）
-    // 业务逻辑已下放至 useAssetActions，Provider 只负责传参和透出结果
-    const { addAsset, removeAsset } = useAssetActions({
-        activeTab,
-        setAssets,
-        setIsSyncing,
-        showToast,
-        selectedCode,
-        setSelectedCode,
-        syncAssetsToServer,
-        assetsRef,
-    });
-
-    const value = useMemo(() => ({
-        ...auth,
-        assets,
-        isSyncing,
-        activeTab,
-        setActiveTab,
-        selectedCode,
-        setSelectedCode,
-        addAsset,
-        removeAsset,
-        refreshAssets: () => refreshAssets(assets.map(a => ({ code: a.code, type: a.type }))),
-        toast,
-        setToast,
-        showToast
-    }), [auth, assets, isSyncing, activeTab, selectedCode, addAsset, removeAsset, refreshAssets, toast, showToast]);
-
-    return (
-        <AssetContext.Provider value={value}>
-            {children}
-        </AssetContext.Provider>
-    );
-}
-
-export function useAsset() {
-    const context = useContext(AssetContext);
-    if (!context) throw new Error('useAsset must be used within AssetProvider');
-    return context;
-}
-</file>
-
 <file path="public/_headers">
 /_next/static/*
   Cache-Control: public,max-age=31536000,immutable
@@ -1060,6 +858,58 @@ export async function apiClient(endpoint, options = {}) {
 }
 </file>
 
+<file path=".gitignore">
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# dependencies
+/node_modules
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# testing
+/coverage
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# env files (can opt-in for committing if needed)
+.env*
+
+# vercel
+.vercel
+
+# cloudflare / opennext
+.open-next
+.dev.vars
+.wrangler/
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+
+# data & testing
+data/users.json
+</file>
+
 <file path="app/api/admin/cleanup/route.js">
 import { NextResponse } from 'next/server';
 import { purgeZombieAssets } from '@/lib/storage/maintenanceRepo';
@@ -1193,69 +1043,6 @@ export async function GET(request) {
         return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
     return NextResponse.json({ userId });
-}
-</file>
-
-<file path="app/api/auth/register/route.js">
-/**
- * app/api/auth/register/route.js
- * 
- * 用户注册接口
- */
-
-import { NextResponse } from 'next/server';
-import { getRequiredDb } from '@/lib/storage/d1Client';
-import { hashPassword, generateToken } from '@/lib/auth';
-
-export async function POST(request) {
-    try {
-        const { username, password } = await request.json();
-
-        // 格式校验
-        if (!/^[a-zA-Z0-9_-]{3,30}$/.test(username)) {
-            return NextResponse.json({ error: 'Username must be 3-30 chars (letters/numbers/_/-)' }, { status: 400 });
-        }
-
-        if (!password || password.length < 8) {
-            return NextResponse.json({ error: 'Password must be at least 8 characters' }, { status: 400 });
-        }
-
-        const db = await getRequiredDb();
-
-        // 1. 检查冲突
-        const existing = await db.prepare('SELECT id FROM users WHERE id = ?')
-            .bind(username.toLowerCase()).first();
-        if (existing) {
-            return NextResponse.json({ error: 'Username already taken' }, { status: 409 });
-        }
-
-        // 2. 准备数据
-        const hash = await hashPassword(password);
-        const token = generateToken();
-        const expiresAt = new Date(Date.now() + 7 * 24 * 3600 * 1000).toISOString();
-
-        // 3. 原子写入
-        await db.batch([
-            db.prepare('INSERT INTO users (id, password_hash) VALUES (?, ?)').bind(username.toLowerCase(), hash),
-            db.prepare('INSERT INTO user_sessions (token, user_id, expires_at) VALUES (?, ?, ?)')
-                .bind(token, username.toLowerCase(), expiresAt)
-        ]);
-
-        // 4. 返回并设置 Cookie
-        const res = NextResponse.json({ success: true, userId: username.toLowerCase() });
-        res.cookies.set('session', token, {
-            httpOnly: true,
-            secure: process.env.NODE_ENV === 'production',
-            sameSite: 'strict',
-            maxAge: 7 * 24 * 3600,
-            path: '/'
-        });
-
-        return res;
-    } catch (e) {
-        console.error('[Auth:Register] Error:', e.message);
-        return NextResponse.json({ error: 'Server error during registration' }, { status: 500 });
-    }
 }
 </file>
 
@@ -2749,6 +2536,65 @@ export default function VolatilityChart({ data, title, color = '#3b82f6', height
 }
 </file>
 
+<file path="DEPLOYMENT.md">
+# Cloudflare Workers 部署指南
+
+本项目基于 **Next.js (App Router)** 并通过 **@opennextjs/cloudflare** 部署在 Cloudflare Workers 边缘运行时。
+
+## 1. 基础环境准备
+
+1.  **Node.js (LTS)**：推荐使用 v20 或更高版本。
+2.  **Cloudflare 账户**：需要一个活跃的 Cloudflare 账户并开通 D1 数据库功能。
+
+## 2. 获取代码与安装依赖
+
+```powershell
+git clone <repository-url>
+cd stock-tracker
+npm install
+```
+
+## 3. 环境变量配置
+
+在项目根目录创建 `.dev.vars` (本地开发) 并确保 Cloudflare 控制台已配置以下环境变量：
+
+- `ADMIN_API_KEY`: 管理员 API 访问密钥 (PSK)。
+- `NEXT_PUBLIC_SITE_URL`: 网站访问地址。
+
+## 4. 数据库初始化 (D1)
+
+1.  **创建数据库**：
+    ```powershell
+    npx wrangler d1 create stock-tracker-db
+    ```
+2.  **更新配置文件**：将输出中的 `database_id` 填入 `wrangler.toml` 的 `[[d1_databases]]` 部分。
+3.  **应用迁移**：
+    ```powershell
+    # 本地预览环境
+    npx wrangler d1 migrations apply stock-tracker-db --local
+    # 生产环境
+    npx wrangler d1 migrations apply stock-tracker-db --remote
+    ```
+
+## 5. 本地开发与预览
+
+- **开发模式**：`npm run dev`
+- **边缘模拟预览**：`npm run preview` (使用 Miniflare 模拟实时环境)
+
+## 6. 构建与部署
+
+```powershell
+# 执行 OpenNext 构建并推送到 Cloudflare
+npm run deploy
+```
+
+## 7. 重要注意事项
+
+- **离线任务 (Crons)**：部署后，Cloudflare 会根据 `wrangler.toml` 中的 `[triggers.crons]` 自动运行同步任务。
+- **存储配额**：请关注 D1 的读写限制（免费额度通常足够中小型每日使用）。
+- **缓存说明**：应用使用了 `memoryCache.js` 进行 L1 缓存，但在多实例环境下可能存在短暂不一致。
+</file>
+
 <file path="hooks/useAssetData.js">
 'use client';
 
@@ -3023,103 +2869,6 @@ export function useAssetSync({ userId, isLogged }) {
 }
 </file>
 
-<file path="hooks/useAuthSession.js">
-'use client';
-
-import { useState, useEffect } from 'react';
-
-export function useAuthSession() {
-    const [userId, setUserId] = useState('');
-    const [isLogged, setIsLogged] = useState(false);
-
-    const [loginInput, setLoginInput] = useState('');
-    const [passwordInput, setPasswordInput] = useState('');
-    const [isRegistering, setIsRegistering] = useState(false);
-
-    // SaaS 化改造: 服务端验证会话
-    useEffect(() => {
-        const checkSession = async () => {
-            try {
-                const res = await fetch('/api/auth/me');
-                if (res.ok) {
-                    const data = await res.json();
-                    if (data?.userId) {
-                        setUserId(data.userId);
-                        setIsLogged(true);
-                    }
-                }
-            } catch (e) {
-                console.error('[SessionCheck] Failed:', e);
-            }
-        };
-        checkSession();
-    }, []);
-
-    const handleLogin = async () => {
-        try {
-            const res = await fetch('/api/auth/login', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ username: loginInput.trim(), password: passwordInput }),
-            });
-            const data = await res.json();
-            if (res.ok) {
-                setUserId(data.userId);
-                setIsLogged(true);
-                return { ok: true };
-            }
-            return { ok: false, error: data.error };
-        } catch (e) {
-            return { ok: false, error: 'Network error during login' };
-        }
-    };
-
-    const handleRegister = async () => {
-        try {
-            const res = await fetch('/api/auth/register', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ username: loginInput.trim(), password: passwordInput }),
-            });
-            const data = await res.json();
-            if (res.ok) {
-                setUserId(data.userId);
-                setIsLogged(true);
-                return { ok: true };
-            }
-            return { ok: false, error: data.error };
-        } catch (e) {
-            return { ok: false, error: 'Network error during registration' };
-        }
-    };
-
-    const handleLogout = async () => {
-        try {
-            await fetch('/api/auth/logout', { method: 'POST' });
-        } finally {
-            // 无条件清理前端状态或强刷页面
-            setUserId('');
-            setIsLogged(false);
-            window.location.reload();
-        }
-    };
-
-    return {
-        userId,
-        isLogged,
-        loginInput,
-        setLoginInput,
-        passwordInput,
-        setPasswordInput,
-        isRegistering,
-        setIsRegistering,
-        handleLogin,
-        handleRegister,
-        handleLogout,
-    };
-}
-</file>
-
 <file path="hooks/useRealtimeQuotes.js">
 import { useEffect } from 'react';
 import { fetchBulkStockQuotes } from '@/services/api/quotesService';
@@ -3173,59 +2922,6 @@ export function useRealtimeQuotes({ activeTab, isLogged, assets, isSyncing, user
         tick();
         return () => clearInterval(timer);
     }, [activeTab, isLogged, assets.length, isSyncing, userId, assetsRef, refreshAssets, setAssets]);
-}
-</file>
-
-<file path="lib/auth.js">
-/**
- * lib/auth.js
- * 
- * 基于 WebCrypto 的安全认证逻辑 (Cloudflare Workers 原生支持)
- */
-
-export async function hashPassword(password) {
-    const salt = crypto.getRandomValues(new Uint8Array(16));
-    const keyMaterial = await crypto.subtle.importKey(
-        'raw', new TextEncoder().encode(password),
-        'PBKDF2', false, ['deriveBits']
-    );
-    const bits = await crypto.subtle.deriveBits(
-        { name: 'PBKDF2', salt, iterations: 100000, hash: 'SHA-256' },
-        keyMaterial, 256
-    );
-    const saltHex = Array.from(salt).map(b => b.toString(16).padStart(2, '0')).join('');
-    const hashHex = Array.from(new Uint8Array(bits)).map(b => b.toString(16).padStart(2, '0')).join('');
-    return `pbkdf2:${saltHex}:${hashHex}`;
-}
-
-export async function verifyPassword(password, stored) {
-    if (!stored || !stored.includes(':')) return false;
-    const [, saltHex, hashHex] = stored.split(':');
-    if (!saltHex || !hashHex) return false;
-
-    const salt = new Uint8Array(saltHex.match(/.{2}/g).map(b => parseInt(b, 16)));
-    const keyMaterial = await crypto.subtle.importKey(
-        'raw', new TextEncoder().encode(password),
-        'PBKDF2', false, ['deriveBits']
-    );
-    const bits = await crypto.subtle.deriveBits(
-        { name: 'PBKDF2', salt, iterations: 100000, hash: 'SHA-256' },
-        keyMaterial, 256
-    );
-    const candidate = Array.from(new Uint8Array(bits)).map(b => b.toString(16).padStart(2, '0')).join('');
-
-    // 常量时间比较防止时序攻击 (Manual XOR loop for Workers)
-    if (candidate.length !== hashHex.length) return false;
-    let diff = 0;
-    for (let i = 0; i < candidate.length; i++) {
-        diff |= candidate.charCodeAt(i) ^ hashHex.charCodeAt(i);
-    }
-    return diff === 0;
-}
-
-export function generateToken() {
-    return Array.from(crypto.getRandomValues(new Uint8Array(32)))
-        .map(b => b.toString(16).padStart(2, '0')).join('');
 }
 </file>
 
@@ -3554,6 +3250,126 @@ class MemoryCache {
 export const memoryCache = new MemoryCache(1500);
 </file>
 
+<file path="providers/AssetProvider.js">
+'use client';
+
+import React, { createContext, useContext, useState, useCallback, useMemo } from 'react';
+import { useAuthSession } from '@/hooks/useAuthSession';
+import { useAssetSync } from '@/hooks/useAssetSync';
+import { useRealtimeQuotes } from '@/hooks/useRealtimeQuotes';
+import { useAssetActions } from '@/hooks/useAssetActions';
+
+const AssetContext = createContext(null);
+
+export function AssetProvider({ children }) {
+    const [activeTab, setActiveTab] = useState('stock');
+    const [selectedCode, setSelectedCode] = useState(null);
+    const [toast, setToast] = useState(null);
+
+    // Layer 1: 认证状态
+    const auth = useAuthSession();
+    const { userId, isLogged } = auth;
+
+    // Layer 2: 资产同步（加载服务端数据 & KV 写回）
+    const {
+        assets,
+        setAssets,
+        isSyncing,
+        setIsSyncing,
+        assetsRef,
+        refreshAssets,
+        syncAssetsToServer
+    } = useAssetSync({ userId, isLogged });
+
+    // Layer 3: 实时行情轮询（仅在 watchlist tab 下启动）
+    useRealtimeQuotes({
+        activeTab,
+        isLogged,
+        assets,
+        isSyncing,
+        userId,
+        setAssets,
+        assetsRef,
+        refreshAssets
+    });
+
+    const showToast = useCallback((msg, type = 'error') => {
+        setToast({ msg, type });
+        setTimeout(() => setToast(null), 3500);
+    }, []);
+
+    // Layer 4: 用户写操作（添加 / 移除资产）
+    // 业务逻辑已下放至 useAssetActions，Provider 只负责传参和透出结果
+    const { addAsset, removeAsset } = useAssetActions({
+        activeTab,
+        setAssets,
+        setIsSyncing,
+        showToast,
+        selectedCode,
+        setSelectedCode,
+        syncAssetsToServer,
+        assetsRef,
+    });
+
+    const handleAuthAction = useCallback(async (actionFn) => {
+        const result = await actionFn();
+        if (result && !result.ok) {
+            showToast(result.error);
+        }
+        return result;
+    }, [showToast]);
+
+    const value = useMemo(() => ({
+        ...auth,
+        handleLogin: () => handleAuthAction(() => auth.handleLogin()),
+        handleRegister: () => handleAuthAction(() => auth.handleRegister()),
+        assets,
+        isSyncing,
+        activeTab,
+        setActiveTab,
+        selectedCode,
+        setSelectedCode,
+        addAsset,
+        removeAsset,
+        refreshAssets: () => refreshAssets(assets.map(a => ({ code: a.code, type: a.type }))),
+        toast,
+        setToast,
+        showToast
+    }), [
+        auth.userId,
+        auth.isLogged,
+        auth.isPending,
+        auth.loginInput,
+        auth.passwordInput,
+        auth.isRegistering,
+        auth.handleLogin,
+        auth.handleRegister,
+        auth.handleLogout,
+        assets,
+        isSyncing,
+        activeTab,
+        selectedCode,
+        addAsset,
+        removeAsset,
+        refreshAssets,
+        toast,
+        showToast
+    ]);
+
+    return (
+        <AssetContext.Provider value={value}>
+            {children}
+        </AssetContext.Provider>
+    );
+}
+
+export function useAsset() {
+    const context = useContext(AssetContext);
+    if (!context) throw new Error('useAsset must be used within AssetProvider');
+    return context;
+}
+</file>
+
 <file path="worker-entry.js">
 /**
  * worker-entry.js
@@ -3607,6 +3423,233 @@ export default {
         }
     },
 };
+</file>
+
+<file path="app/api/auth/register/route.js">
+/**
+ * app/api/auth/register/route.js
+ * 
+ * 用户注册接口
+ */
+
+import { NextResponse } from 'next/server';
+import { getRequiredDb } from '@/lib/storage/d1Client';
+import { hashPassword, generateToken } from '@/lib/auth';
+
+export async function POST(request) {
+    try {
+        const { username, password } = await request.json();
+
+        // 格式校验
+        if (!/^[a-zA-Z0-9_-]{3,30}$/.test(username)) {
+            return NextResponse.json({ error: 'Username must be 3-30 chars (letters/numbers/_/-)' }, { status: 400 });
+        }
+
+        if (!password || password.length < 8) {
+            return NextResponse.json({ error: 'Password must be at least 8 characters' }, { status: 400 });
+        }
+
+        const db = await getRequiredDb();
+
+        // 1. 检查冲突
+        const existing = await db.prepare('SELECT id FROM users WHERE id = ?')
+            .bind(username.toLowerCase()).first();
+        if (existing) {
+            return NextResponse.json({ error: 'Username already taken' }, { status: 409 });
+        }
+
+        // 2. 准备数据
+        const hash = await hashPassword(password);
+        const token = generateToken();
+        const expiresAt = new Date(Date.now() + 7 * 24 * 3600 * 1000).toISOString();
+
+        // 3. 原子写入
+        await db.batch([
+            db.prepare('INSERT INTO users (id, password_hash) VALUES (?, ?)').bind(username.toLowerCase(), hash),
+            db.prepare('INSERT INTO user_sessions (token, user_id, expires_at) VALUES (?, ?, ?)')
+                .bind(token, username.toLowerCase(), expiresAt)
+        ]);
+
+        // 4. 返回并设置 Cookie
+        const res = NextResponse.json({ success: true, userId: username.toLowerCase() });
+        res.cookies.set('session', token, {
+            httpOnly: true,
+            secure: process.env.NODE_ENV === 'production',
+            sameSite: 'strict',
+            maxAge: 7 * 24 * 3600,
+            path: '/'
+        });
+
+        return res;
+    } catch (e) {
+        console.error('[Auth:Register] Error:', e);
+        return NextResponse.json({
+            error: 'Server error during registration',
+            details: e.message,
+            stack: process.env.NODE_ENV === 'development' ? e.stack : undefined
+        }, { status: 500 });
+    }
+}
+</file>
+
+<file path="hooks/useAuthSession.js">
+'use client';
+
+import { useState, useEffect } from 'react';
+
+export function useAuthSession() {
+    const [userId, setUserId] = useState('');
+    const [isLogged, setIsLogged] = useState(false);
+
+    const [loginInput, setLoginInput] = useState('');
+    const [passwordInput, setPasswordInput] = useState('');
+    const [isRegistering, setIsRegistering] = useState(false);
+    const [isPending, setIsPending] = useState(false);
+
+    // SaaS 化改造: 服务端验证会话
+    useEffect(() => {
+        const checkSession = async () => {
+            try {
+                const res = await fetch('/api/auth/me');
+                if (res.ok) {
+                    const data = await res.json();
+                    if (data?.userId) {
+                        setUserId(data.userId);
+                        setIsLogged(true);
+                    }
+                }
+            } catch (e) {
+                console.error('[SessionCheck] Failed:', e);
+            }
+        };
+        checkSession();
+    }, []);
+
+    const handleLogin = async () => {
+        setIsPending(true);
+        try {
+            const res = await fetch('/api/auth/login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username: loginInput.trim(), password: passwordInput }),
+            });
+            const data = await res.json();
+            if (res.ok) {
+                setPasswordInput('');
+                setUserId(data.userId);
+                setIsLogged(true);
+                return { ok: true };
+            }
+            return { ok: false, error: data.error || 'Login failed' };
+        } catch (e) {
+            return { ok: false, error: 'Network error during login' };
+        } finally {
+            setIsPending(false);
+        }
+    };
+
+    const handleRegister = async () => {
+        setIsPending(true);
+        try {
+            const res = await fetch('/api/auth/register', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username: loginInput.trim(), password: passwordInput }),
+            });
+            const data = await res.json();
+            if (res.ok) {
+                setPasswordInput('');
+                setUserId(data.userId);
+                setIsLogged(true);
+                return { ok: true };
+            }
+            return { ok: false, error: data.error || 'Registration failed' };
+        } catch (e) {
+            return { ok: false, error: 'Network error during registration' };
+        } finally {
+            setIsPending(false);
+        }
+    };
+
+    const handleLogout = async () => {
+        try {
+            await fetch('/api/auth/logout', { method: 'POST' });
+        } finally {
+            // 无条件清理前端状态或强刷页面
+            setUserId('');
+            setIsLogged(false);
+            window.location.reload();
+        }
+    };
+
+    return {
+        userId,
+        isLogged,
+        loginInput,
+        setLoginInput,
+        passwordInput,
+        setPasswordInput,
+        isRegistering,
+        setIsRegistering,
+        isPending,
+        handleLogin,
+        handleRegister,
+        handleLogout,
+    };
+}
+</file>
+
+<file path="lib/auth.js">
+/**
+ * lib/auth.js
+ * 
+ * 基于 WebCrypto 的安全认证逻辑 (Cloudflare Workers 原生支持)
+ */
+
+export async function hashPassword(password) {
+    const salt = crypto.getRandomValues(new Uint8Array(16));
+    const keyMaterial = await crypto.subtle.importKey(
+        'raw', new TextEncoder().encode(password),
+        'PBKDF2', false, ['deriveBits']
+    );
+    const bits = await crypto.subtle.deriveBits(
+        { name: 'PBKDF2', salt, iterations: 10000, hash: 'SHA-256' },
+        keyMaterial, 256
+    );
+    const saltHex = Array.from(salt).map(b => b.toString(16).padStart(2, '0')).join('');
+    const hashHex = Array.from(new Uint8Array(bits)).map(b => b.toString(16).padStart(2, '0')).join('');
+    return `pbkdf2:${saltHex}:${hashHex}`;
+}
+
+export async function verifyPassword(password, stored) {
+    if (!stored || !stored.includes(':')) return false;
+    const [, saltHex, hashHex] = stored.split(':');
+    if (!saltHex || !hashHex) return false;
+
+    const salt = new Uint8Array(saltHex.match(/.{2}/g).map(b => parseInt(b, 16)));
+    const keyMaterial = await crypto.subtle.importKey(
+        'raw', new TextEncoder().encode(password),
+        'PBKDF2', false, ['deriveBits']
+    );
+    const bits = await crypto.subtle.deriveBits(
+        { name: 'PBKDF2', salt, iterations: 10000, hash: 'SHA-256' },
+        keyMaterial, 256
+    );
+    const candidate = Array.from(new Uint8Array(bits)).map(b => b.toString(16).padStart(2, '0')).join('');
+
+    // 常量时间比较防止时序攻击 (Manual XOR loop for Workers)
+    if (candidate.length !== hashHex.length) return false;
+    let diff = 0;
+    for (let i = 0; i < candidate.length; i++) {
+        diff |= candidate.charCodeAt(i) ^ hashHex.charCodeAt(i);
+    }
+    return diff === 0;
+}
+
+export function generateToken() {
+    return Array.from(crypto.getRandomValues(new Uint8Array(32)))
+        .map(b => b.toString(16).padStart(2, '0')).join('');
+}
 </file>
 
 <file path="lib/storage/intradayRepo.js">
@@ -4337,242 +4380,6 @@ export default memo(AssetCardComponent, (prev, next) => {
         prev.asset.intraday?.price === next.asset.intraday?.price
     );
 });
-</file>
-
-<file path="components/DashboardClient.js">
-'use client';
-
-import { useState } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
-import { TrendingUp, PieChart, RefreshCw, X, Activity, ShieldCheck } from 'lucide-react';
-import SearchBar from '@/components/SearchBar';
-import AssetCard from '@/components/AssetCard';
-import WatchlistSidebar from '@/components/WatchlistSidebar';
-import LogsModal from '@/components/LogsModal';
-import AdminDashboard from '@/components/AdminDashboard';
-import { useAsset } from '@/providers/AssetProvider';
-
-export default function DashboardClient() {
-    const [showLogs, setShowLogs] = useState(false);
-    const [showAdmin, setShowAdmin] = useState(false);
-
-    const {
-        // ... (保持现有解构)
-        userId,
-        isLogged,
-        loginInput,
-        setLoginInput,
-        passwordInput,
-        setPasswordInput,
-        isRegistering,
-        setIsRegistering,
-        handleLogin,
-        handleRegister,
-        handleLogout,
-        assets,
-        isSyncing,
-        activeTab,
-        setActiveTab,
-        selectedCode,
-        setSelectedCode,
-        addAsset,
-        removeAsset,
-        refreshAssets,
-        toast,
-        setToast,
-    } = useAsset();
-
-    const filteredAssets = assets.filter(a => activeTab === 'watchlist' ? a.type === 'stock' : a.type === activeTab);
-
-    const handleSelectAsset = (code) => {
-        if (activeTab === 'watchlist') return;
-        setSelectedCode(code);
-    };
-
-    return (
-        <main className="container mx-auto px-4 py-12 max-w-[1400px] min-h-screen">
-            <AnimatePresence>
-                {toast && (
-                    <motion.div
-                        initial={{ opacity: 0, y: -20 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        exit={{ opacity: 0, y: -20 }}
-                        className={`fixed top-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 px-5 py-3 rounded-xl shadow-2xl text-sm font-bold
-                            ${toast.type === 'error' ? 'bg-red-500/90 text-white' : 'bg-green-500/90 text-white'}`}
-                    >
-                        {toast.msg}
-                        <button onClick={() => setToast(null)} className="opacity-60 hover:opacity-100"><X size={14} /></button>
-                    </motion.div>
-                )}
-            </AnimatePresence>
-
-            <div className="flex flex-col lg:flex-row items-center lg:items-start justify-between mb-8 lg:mb-12 gap-6 lg:gap-8">
-                <div className="flex w-full lg:w-auto glass-effect p-1 bg-white/5 border-white/5 flex-shrink-0">
-                    <button
-                        onClick={() => setActiveTab('stock')}
-                        className={`flex-1 lg:px-8 py-2.5 rounded-lg transition-all flex items-center justify-center lg:justify-start gap-2 font-bold text-sm ${activeTab === 'stock' ? 'bg-blue-600 shadow-lg text-white' : 'hover:bg-white/5 opacity-50'}`}
-                    >
-                        <PieChart size={18} /> 股票
-                    </button>
-                    <button
-                        onClick={() => setActiveTab('fund')}
-                        className={`flex-1 lg:px-8 py-2.5 rounded-lg transition-all flex items-center justify-center lg:justify-start gap-2 font-bold text-sm ${activeTab === 'fund' ? 'bg-cyan-600 shadow-lg text-white' : 'hover:bg-white/5 opacity-50'}`}
-                    >
-                        <TrendingUp size={18} /> 基金
-                    </button>
-                    <button
-                        onClick={() => setActiveTab('watchlist')}
-                        className={`flex-1 lg:px-8 py-2.5 rounded-lg transition-all flex items-center justify-center lg:justify-start gap-2 font-bold text-sm ${activeTab === 'watchlist' ? 'bg-indigo-600 shadow-lg text-white' : 'hover:bg-white/5 opacity-50'}`}
-                    >
-                        <Activity size={18} /> 实时
-                    </button>
-                </div>
-
-                <div className="flex-1 w-full lg:max-w-xl">
-                    <SearchBar onAdd={(code) => addAsset(code, activeTab === 'watchlist' ? 'stock' : activeTab)} />
-                </div>
-
-                <div className="flex items-center justify-between w-full lg:w-auto gap-4 flex-shrink-0 pt-1">
-                    <div className="flex items-center gap-4">
-                        <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-white/5 border border-white/5">
-                            <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
-                            <span className="text-[10px] font-mono opacity-40 uppercase tracking-widest">{userId}</span>
-                        </div>
-                        <button
-                            onClick={handleLogout}
-                            className="text-[10px] font-bold opacity-20 hover:opacity-100 hover:text-red-400 uppercase tracking-widest transition-all"
-                        >
-                            退出
-                        </button>
-                    </div>
-                    <div className="flex items-center gap-2">
-                        <button
-                            onClick={() => setShowAdmin(true)}
-                            className="p-2.5 rounded-full border border-white/10 opacity-20 hover:opacity-100 transition-all hover:bg-cyan-500/10 hover:border-cyan-500/30"
-                            title="Admin Dashboard"
-                        >
-                            <ShieldCheck size={14} className="text-cyan-400" />
-                        </button>
-
-                        <button
-                            onClick={() => setShowLogs(true)}
-                            className="flex items-center gap-2 px-4 py-2 rounded-full border border-white/10 opacity-40 hover:opacity-100 transition-all"
-                        >
-                            <Activity size={14} />
-                            <span className="text-xs font-bold uppercase tracking-widest hidden sm:inline">日志</span>
-                        </button>
-                        <button
-                            onClick={refreshAssets}
-                            disabled={isSyncing}
-                            className={`flex items-center gap-2 px-4 py-2 rounded-full border border-white/10 opacity-40 hover:opacity-100 transition-all disabled:cursor-not-allowed ${isSyncing ? 'animate-pulse' : ''}`}
-                        >
-                            <RefreshCw size={14} className={isSyncing ? 'animate-spin' : ''} />
-                            <span className="text-xs font-bold uppercase tracking-widest hidden sm:inline">同步数据</span>
-                        </button>
-                    </div>
-                </div>
-            </div>
-
-            {isLogged && (
-                <>
-                    <LogsModal isOpen={showLogs} onClose={() => setShowLogs(false)} />
-                    <AdminDashboard isOpen={showAdmin} onClose={() => setShowAdmin(false)} />
-                </>
-            )}
-
-            <div className="flex flex-col lg:flex-row gap-6 lg:gap-8 items-start">
-                {isLogged && assets.length > 0 && (
-                    <WatchlistSidebar
-                        key={userId}
-                        assets={filteredAssets}
-                        mode={activeTab === 'watchlist' ? 'realtime' : 'volatility'}
-                        selectedCode={selectedCode}
-                        onSelect={handleSelectAsset}
-                    />
-                )}
-
-                <div className="flex-1 min-w-0 min-h-[400px] w-full">
-                    <AnimatePresence mode="popLayout">
-                        {!isLogged ? (
-                            <motion.div
-                                key="login"
-                                initial={{ opacity: 0, y: 20 }}
-                                animate={{ opacity: 1, y: 0 }}
-                                className="max-w-md mx-auto py-24 text-center"
-                            >
-                                <h2 className="text-2xl font-black italic mb-2 tracking-tighter">账户登录</h2>
-                                <p className="text-white/30 text-sm mb-8">
-                                    {isRegistering ? '创建一个新账户以开启同步' : '输入您的凭据以访问自选列表'}
-                                </p>
-                                <div className="space-y-4 max-w-sm mx-auto">
-                                    <input
-                                        type="text"
-                                        placeholder="用户名"
-                                        value={loginInput}
-                                        onChange={(e) => setLoginInput(e.target.value)}
-                                        className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 outline-none focus:border-blue-500/50 transition-all text-sm font-mono"
-                                    />
-                                    <input
-                                        type="password"
-                                        placeholder="密码 (不少于8位)"
-                                        value={passwordInput}
-                                        onChange={(e) => setPasswordInput(e.target.value)}
-                                        className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 outline-none focus:border-blue-500/50 transition-all text-sm font-mono"
-                                        onKeyDown={(e) => e.key === 'Enter' && (isRegistering ? handleRegister() : handleLogin())}
-                                    />
-                                    <div className="flex flex-col gap-3 pt-2">
-                                        <button
-                                            onClick={isRegistering ? handleRegister : handleLogin}
-                                            className="w-full bg-blue-600 hover:bg-blue-500 text-white py-3 rounded-xl font-black uppercase tracking-widest text-sm transition-all shadow-lg shadow-blue-600/20"
-                                        >
-                                            {isRegistering ? '立即注册' : '安全登入'}
-                                        </button>
-                                        <button
-                                            onClick={() => setIsRegistering(!isRegistering)}
-                                            className="text-xs font-bold text-white/20 hover:text-white/60 transition-colors uppercase tracking-widest"
-                                        >
-                                            {isRegistering ? '已有账号？返回登录' : '没有账号？创建新身份'}
-                                        </button>
-                                    </div>
-                                </div>
-                            </motion.div>
-                        ) : (
-                            <>
-                                <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-                                    {filteredAssets.length > 0 ? (
-                                        filteredAssets.map(asset => (
-                                            <AssetCard
-                                                key={asset.code}
-                                                asset={asset}
-                                                onRemove={removeAsset}
-                                                mode={activeTab === 'watchlist' ? 'realtime' : 'volatility'}
-                                            />
-                                        ))
-                                    ) : (
-                                        <motion.div
-                                            key="empty"
-                                            initial={{ opacity: 0 }}
-                                            animate={{ opacity: 1 }}
-                                            className="col-span-full text-center py-24 glass-effect border-dashed border-white/5"
-                                        >
-                                            <p className="text-white/20 italic tracking-widest">
-                                                暂无相关数据，输入代码开启追踪
-                                            </p>
-                                        </motion.div>
-                                    )}
-                                </div>
-                            </>
-                        )}
-                    </AnimatePresence>
-                </div>
-            </div>
-
-            <footer className="mt-24 pt-12 border-t border-white/5 text-center text-white/20 text-sm">
-                <p>&copy; 2026 Antigravity 金融实验室。数据源由 腾讯 &amp; 天天基金 提供。</p>
-            </footer>
-        </main>
-    );
-}
 </file>
 
 <file path="components/WatchlistSidebar.js">
@@ -5593,6 +5400,249 @@ export async function syncCounterFromTable(key, table, where = '', env = null) {
         console.error(`[StatsRepo] Sync failed for ${key}:`, e.message);
         return 0;
     }
+}
+</file>
+
+<file path="components/DashboardClient.js">
+'use client';
+
+import { useState } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { TrendingUp, PieChart, RefreshCw, X, Activity, ShieldCheck } from 'lucide-react';
+import SearchBar from '@/components/SearchBar';
+import AssetCard from '@/components/AssetCard';
+import WatchlistSidebar from '@/components/WatchlistSidebar';
+import LogsModal from '@/components/LogsModal';
+import AdminDashboard from '@/components/AdminDashboard';
+import { useAsset } from '@/providers/AssetProvider';
+
+export default function DashboardClient() {
+    const [showLogs, setShowLogs] = useState(false);
+    const [showAdmin, setShowAdmin] = useState(false);
+
+    const {
+        userId,
+        isLogged,
+        loginInput,
+        setLoginInput,
+        passwordInput,
+        setPasswordInput,
+        isRegistering,
+        setIsRegistering,
+        isPending,
+        handleLogin,
+        handleRegister,
+        handleLogout,
+        assets,
+        isSyncing,
+        activeTab,
+        setActiveTab,
+        selectedCode,
+        setSelectedCode,
+        addAsset,
+        removeAsset,
+        refreshAssets,
+        toast,
+        setToast,
+    } = useAsset();
+
+    const filteredAssets = assets.filter(a => activeTab === 'watchlist' ? a.type === 'stock' : a.type === activeTab);
+
+    const handleSelectAsset = (code) => {
+        if (activeTab === 'watchlist') return;
+        setSelectedCode(code);
+    };
+
+    return (
+        <main className="container mx-auto px-4 py-12 max-w-[1400px] min-h-screen">
+            <AnimatePresence>
+                {toast && (
+                    <motion.div
+                        initial={{ opacity: 0, y: -20 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: -20 }}
+                        className={`fixed top-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 px-5 py-3 rounded-xl shadow-2xl text-sm font-bold
+                            ${toast.type === 'error' ? 'bg-red-500/90 text-white' : 'bg-green-500/90 text-white'}`}
+                    >
+                        {toast.msg}
+                        <button onClick={() => setToast(null)} className="opacity-60 hover:opacity-100"><X size={14} /></button>
+                    </motion.div>
+                )}
+            </AnimatePresence>
+
+            <div className="flex flex-col lg:flex-row items-center lg:items-start justify-between mb-8 lg:mb-12 gap-6 lg:gap-8">
+                <div className="flex w-full lg:w-auto glass-effect p-1 bg-white/5 border-white/5 flex-shrink-0">
+                    <button
+                        onClick={() => setActiveTab('stock')}
+                        className={`flex-1 lg:px-8 py-2.5 rounded-lg transition-all flex items-center justify-center lg:justify-start gap-2 font-bold text-sm ${activeTab === 'stock' ? 'bg-blue-600 shadow-lg text-white' : 'hover:bg-white/5 opacity-50'}`}
+                    >
+                        <PieChart size={18} /> 股票
+                    </button>
+                    <button
+                        onClick={() => setActiveTab('fund')}
+                        className={`flex-1 lg:px-8 py-2.5 rounded-lg transition-all flex items-center justify-center lg:justify-start gap-2 font-bold text-sm ${activeTab === 'fund' ? 'bg-cyan-600 shadow-lg text-white' : 'hover:bg-white/5 opacity-50'}`}
+                    >
+                        <TrendingUp size={18} /> 基金
+                    </button>
+                    <button
+                        onClick={() => setActiveTab('watchlist')}
+                        className={`flex-1 lg:px-8 py-2.5 rounded-lg transition-all flex items-center justify-center lg:justify-start gap-2 font-bold text-sm ${activeTab === 'watchlist' ? 'bg-indigo-600 shadow-lg text-white' : 'hover:bg-white/5 opacity-50'}`}
+                    >
+                        <Activity size={18} /> 实时
+                    </button>
+                </div>
+
+                <div className="flex-1 w-full lg:max-w-xl">
+                    <SearchBar onAdd={(code) => addAsset(code, activeTab === 'watchlist' ? 'stock' : activeTab)} />
+                </div>
+
+                <div className="flex items-center justify-between w-full lg:w-auto gap-4 flex-shrink-0 pt-1">
+                    <div className="flex items-center gap-4">
+                        <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-white/5 border border-white/5">
+                            <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
+                            <span className="text-[10px] font-mono opacity-40 uppercase tracking-widest">{userId}</span>
+                        </div>
+                        {isLogged && (
+                            <button
+                                onClick={handleLogout}
+                                className="text-[10px] font-bold opacity-20 hover:opacity-100 hover:text-red-400 uppercase tracking-widest transition-all"
+                            >
+                                退出
+                            </button>
+                        )}
+                    </div>
+                    {isLogged && (
+                        <div className="flex items-center gap-2">
+                            <button
+                                onClick={() => setShowAdmin(true)}
+                                className="p-2.5 rounded-full border border-white/10 opacity-20 hover:opacity-100 transition-all hover:bg-cyan-500/10 hover:border-cyan-500/30"
+                                title="Admin Dashboard"
+                            >
+                                <ShieldCheck size={14} className="text-cyan-400" />
+                            </button>
+
+                            <button
+                                onClick={() => setShowLogs(true)}
+                                className="flex items-center gap-2 px-4 py-2 rounded-full border border-white/10 opacity-40 hover:opacity-100 transition-all"
+                            >
+                                <Activity size={14} />
+                                <span className="text-xs font-bold uppercase tracking-widest hidden sm:inline">日志</span>
+                            </button>
+                            <button
+                                onClick={refreshAssets}
+                                disabled={isSyncing}
+                                className={`flex items-center gap-2 px-4 py-2 rounded-full border border-white/10 opacity-40 hover:opacity-100 transition-all disabled:cursor-not-allowed ${isSyncing ? 'animate-pulse' : ''}`}
+                            >
+                                <RefreshCw size={14} className={isSyncing ? 'animate-spin' : ''} />
+                                <span className="text-xs font-bold uppercase tracking-widest hidden sm:inline">同步数据</span>
+                            </button>
+                        </div>
+                    )}
+                </div>
+            </div>
+
+            {isLogged && (
+                <>
+                    <LogsModal isOpen={showLogs} onClose={() => setShowLogs(false)} />
+                    <AdminDashboard isOpen={showAdmin} onClose={() => setShowAdmin(false)} />
+                </>
+            )}
+
+            <div className="flex flex-col lg:flex-row gap-6 lg:gap-8 items-start">
+                {isLogged && assets.length > 0 && (
+                    <WatchlistSidebar
+                        key={userId}
+                        assets={filteredAssets}
+                        mode={activeTab === 'watchlist' ? 'realtime' : 'volatility'}
+                        selectedCode={selectedCode}
+                        onSelect={handleSelectAsset}
+                    />
+                )}
+
+                <div className="flex-1 min-w-0 min-h-[400px] w-full">
+                    <AnimatePresence mode="popLayout">
+                        {!isLogged ? (
+                            <motion.div
+                                key="login"
+                                initial={{ opacity: 0, y: 20 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                className="max-w-md mx-auto py-24 text-center"
+                            >
+                                <h2 className="text-2xl font-black italic mb-2 tracking-tighter">账户登录</h2>
+                                <p className="text-white/30 text-sm mb-8">
+                                    {isRegistering ? '创建一个新账户以开启同步' : '输入您的凭据以访问自选列表'}
+                                </p>
+                                <div className="space-y-4 max-w-sm mx-auto">
+                                    <input
+                                        type="text"
+                                        placeholder="用户名"
+                                        value={loginInput}
+                                        onChange={(e) => setLoginInput(e.target.value)}
+                                        className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 outline-none focus:border-blue-500/50 transition-all text-sm font-mono"
+                                    />
+                                    <input
+                                        type="password"
+                                        placeholder="密码 (不少于8位)"
+                                        value={passwordInput}
+                                        onChange={(e) => setPasswordInput(e.target.value)}
+                                        className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 outline-none focus:border-blue-500/50 transition-all text-sm font-mono"
+                                        onKeyDown={(e) => e.key === 'Enter' && !isPending && (isRegistering ? handleRegister() : handleLogin())}
+                                    />
+                                    <div className="flex flex-col gap-3 pt-2">
+                                        <button
+                                            onClick={isRegistering ? handleRegister : handleLogin}
+                                            disabled={isPending}
+                                            className={`w-full ${isPending ? 'bg-blue-600/50 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-500'} text-white py-3 rounded-xl font-black uppercase tracking-widest text-sm transition-all shadow-lg shadow-blue-600/20 flex items-center justify-center gap-2`}
+                                        >
+                                            {isPending && <RefreshCw size={14} className="animate-spin" />}
+                                            {isRegistering ? (isPending ? '注册中...' : '立即注册') : (isPending ? '验证中...' : '安全登入')}
+                                        </button>
+                                        <button
+                                            onClick={() => setIsRegistering(!isRegistering)}
+                                            disabled={isPending}
+                                            className="text-xs font-bold text-white/20 hover:text-white/60 transition-colors uppercase tracking-widest disabled:opacity-50"
+                                        >
+                                            {isRegistering ? '已有账号？返回登录' : '没有账号？创建新身份'}
+                                        </button>
+                                    </div>
+                                </div>
+                            </motion.div>
+                        ) : (
+                            <>
+                                <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+                                    {filteredAssets.length > 0 ? (
+                                        filteredAssets.map(asset => (
+                                            <AssetCard
+                                                key={asset.code}
+                                                asset={asset}
+                                                onRemove={removeAsset}
+                                                mode={activeTab === 'watchlist' ? 'realtime' : 'volatility'}
+                                            />
+                                        ))
+                                    ) : (
+                                        <motion.div
+                                            key="empty"
+                                            initial={{ opacity: 0 }}
+                                            animate={{ opacity: 1 }}
+                                            className="col-span-full text-center py-24 glass-effect border-dashed border-white/5"
+                                        >
+                                            <p className="text-white/20 italic tracking-widest">
+                                                暂无相关数据，输入代码开启追踪
+                                            </p>
+                                        </motion.div>
+                                    )}
+                                </div>
+                            </>
+                        )}
+                    </AnimatePresence>
+                </div>
+            </div>
+
+            <footer className="mt-24 pt-12 border-t border-white/5 text-center text-white/20 text-sm">
+                <p>&copy; 2026 Antigravity 金融实验室。数据源由 腾讯 &amp; 天天基金 提供。</p>
+            </footer>
+        </main>
+    );
 }
 </file>
 

@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import pLimit from 'p-limit'
+import { calculateStats } from '@/lib/utils'
 
 import {
     insertDailyPricesBatch,
@@ -32,25 +33,6 @@ function daysBetween(d1, d2) {
     return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
 }
 
-function calcStats(history) {
-    if (!history || history.length < 2)
-        return { perf5d: 0, perf22d: 0, perf250d: 0 }
-
-    const getPerf = days => {
-        const data = history.slice(-(days + 1))
-        if (data.length < 2 || !data[0].value) return 0
-        const first = data[0].value
-        const last = data[data.length - 1].value
-        const perf = ((last / first - 1) * 100).toFixed(2)
-        return Number(perf)
-    }
-
-    return {
-        perf5d: getPerf(5),
-        perf22d: getPerf(22),
-        perf250d: getPerf(250)
-    }
-}
 
 // ... (bjDate, todayStr, daysBetween, fetch 工具, fetch 数据源函数等保留，供后续 Cron 复用或内部调用)
 
@@ -97,7 +79,7 @@ export async function syncHistoryBulk(items, days = HISTORY_DAYS, allowExternal 
         result[key] = {
             status: gap > 0 ? 'updating' : 'ready',
             history: dbHistory,
-            summary: calcStats(dbHistory)
+            summary: calculateStats(dbHistory)
         }
     }
 
