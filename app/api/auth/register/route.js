@@ -54,7 +54,11 @@ export async function POST(request) {
 
         return res;
     } catch (e) {
-        console.error('[Auth:Register] Error:', e.message);
-        return NextResponse.json({ error: 'Server error during registration' }, { status: 500 });
+        console.error('[Auth:Register] Error:', e);
+        return NextResponse.json({
+            error: 'Server error during registration',
+            details: e.message,
+            stack: process.env.NODE_ENV === 'development' ? e.stack : undefined
+        }, { status: 500 });
     }
 }
