@@ -131,51 +131,15 @@ export function useAdminData(secretKey, showToast, onAuthFailure) {
                 try {
                     const headers = { 'x-admin-key': secretKey };
                     if (type === 'fund') {
-                        // ── 基金：调用专门的 Streaming 接口 ──────────────────────
+                        // ── 基金：调用异步队列接口 ──────────────────────
                         const res = await fetch(`/api/admin/refetch-fund-history?force=1`, { headers });
-                        if (!res.ok) throw new Error('接口响应异常');
-                        if (!res.body) throw new Error('流式响应体为空');
+                        const data = await res.json();
 
-                        const reader = res.body.getReader();
-                        const decoder = new TextDecoder();
-                        let done = false;
-
-                        while (!done) {
-                            const { value, done: d } = await reader.read();
-                            done = d;
-                            if (value) {
-                                const chunk = decoder.decode(value, { stream: !done });
-                                const lines = chunk.split('\n').filter(Boolean);
-                                for (const line of lines) {
-                                    try {
-                                        const data = JSON.parse(line);
-                                        if (data.status === 'started') {
-                                            showToast(`已开始任务: 准备处理 ${data.total} 只基金`, 'info', 5000);
-                                        } else if (data.status === 'fetched') {
-                                            // 阶段一：抓取进度 - 增加显示时长
-                                            if (data.index % 2 === 0 || data.index === 1 || data.index === data.total) {
-                                                showToast(`正在从节点抓取: ${data.index} / ${data.total} 已就绪`, 'info', 8000);
-                                            }
-                                        } else if (data.status === 'writing_prepare') {
-                                            showToast(`数据归集完成，正在批量写入 D1...`, 'info', 0);
-                                        } else if (data.status === 'ok') {
-                                            // 阶段二：写入进度
-                                            showToast(`正在落库: 第 ${data.batch_index} 批同步成功`, 'info', 0);
-                                        } else if (data.status === 'skipped') {
-                                            console.warn(`[Admin] Skipped ${data.code}: ${data.reason}`);
-                                            showToast(`跳过 ${data.code}: ${data.reason}`, 'info', 2000);
-                                        } else if (data.status === 'error') {
-                                            console.error(`[Admin] Error ${data.code}: ${data.error}`);
-                                            showToast(`解析失败 ${data.code}: ${data.error}`, 'error', 5000);
-                                        } else if (data.status === 'done') {
-                                            showToast(`[成功] 基金全量重刷完成，共处理 ${data.total} 只`, 'success', 5000);
-                                            await fetchAllData(secretKey, true);
-                                        }
-                                    } catch (e) {
-                                        console.warn('[Admin] Stream parse error:', e);
-                                    }
-                                }
-                            }
+                        if (res.ok && data.ok) {
+                            showToast(`[任务提交] ${data.message}。由于每分钟限流处理 5 只，请稍后刷新页面查看。`, 'success', 8000);
+                            await fetchAllData(secretKey, true);
+                        } else {
+                            throw new Error(data.error || '任务投递失败');
                         }
                     } else {
                         // ── 股票：改用 Header 传参，移除 URL 中的密钥 ──────────────
