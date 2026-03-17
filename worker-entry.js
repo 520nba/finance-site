@@ -99,15 +99,28 @@ async function processSyncJobs(env) {
 
                     // 传入 env 确保 service 内部获取正确的 DB 绑定，并透传 force 标志
                     await syncHistoryBulk([{ code: job.code, type: 'fund' }], 250, true, env, force);
-                }
 
-                await DB.prepare("UPDATE sync_jobs SET status = 'completed', updated_at = CURRENT_TIMESTAMP WHERE id = ?")
-                    .bind(job.id)
-                    .run();
+                    await DB.prepare("UPDATE sync_jobs SET status = 'completed', updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+                        .bind(job.id)
+                        .run();
+                } else {
+                    console.warn(`[Queue:D1] Unknown job type: ${job.type}, job ${job.id} skipped`);
+                    await DB.prepare("UPDATE sync_jobs SET status = 'failed', error_msg = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+                        .bind(`Unknown type: ${job.type}`, job.id)
+                        .run();
+                }
 
             } catch (jobErr) {
                 console.error(`[Queue:D1] Job ${job.id} failed:`, jobErr.message);
-                await DB.prepare("UPDATE sync_jobs SET status = 'failed', error_msg = ?, retry_count = retry_count + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+                // 重试逻辑：若 retry_count + 1 < 3 则回退到 pending，否则标记为 failed
+                await DB.prepare(`
+                    UPDATE sync_jobs 
+                    SET status = CASE WHEN retry_count + 1 < 3 THEN 'pending' ELSE 'failed' END,
+                        error_msg = ?, 
+                        retry_count = retry_count + 1, 
+                        updated_at = CURRENT_TIMESTAMP 
+                    WHERE id = ?
+                `)
                     .bind(jobErr.message, job.id)
                     .run();
             }

@@ -264,6 +264,22 @@ export default function RootLayout({ children }) {
 }
 </file>
 
+<file path="app/page.js">
+import DashboardClient from '@/components/DashboardClient';
+import { AssetProvider } from '@/providers/AssetProvider';
+import { Suspense } from 'react';
+
+export default function Home() {
+  return (
+    <AssetProvider>
+      <Suspense fallback={null}>
+        <DashboardClient />
+      </Suspense>
+    </AssetProvider>
+  );
+}
+</file>
+
 <file path="components/SearchBar.js">
 'use client';
 
@@ -1461,61 +1477,6 @@ export async function GET(request) {
 }
 </file>
 
-<file path="app/api/user/sync-asset/route.js">
-import { NextResponse } from 'next/server';
-import { requireUser } from '@/lib/auth/requireUser';
-import { syncNamesBulk, syncHistoryBulk } from '@/lib/services/assetSyncService';
-import { getCloudflareCtx } from '@/lib/storage/d1Client';
-
-/**
- * 前端分片同步接口：同步单只资产的名称与历史数据
- * 职责：被前端 useAssetSync Hook 循环调用，将原本后台的大任务拆分为轻量级的 HTTP 分片
- */
-export async function POST(request) {
-    const userId = await requireUser(request);
-    if (!userId) {
-        return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
-    }
-
-    try {
-        const { code, type } = await request.json();
-        if (!code || !type) {
-            return NextResponse.json({ success: false, error: 'Invalid parameters' }, { status: 400 });
-        }
-
-        const env = await getCloudflareCtx();
-        const items = [{ code, type }];
-
-        // 1. 同步名称 (不传 env，service 内部会自动获取)
-        await syncNamesBulk(items, true);
-
-        // 2. 同步 250 天历史数据
-        await syncHistoryBulk(items, 250, true);
-
-        return NextResponse.json({ success: true, code, type });
-    } catch (e) {
-        console.error(`[SyncAsset] Failed for ${userId}:`, e.message);
-        return NextResponse.json({ success: false, error: e.message }, { status: 500 });
-    }
-}
-</file>
-
-<file path="app/page.js">
-import DashboardClient from '@/components/DashboardClient';
-import { AssetProvider } from '@/providers/AssetProvider';
-import { Suspense } from 'react';
-
-export default function Home() {
-  return (
-    <AssetProvider>
-      <Suspense fallback={null}>
-        <DashboardClient />
-      </Suspense>
-    </AssetProvider>
-  );
-}
-</file>
-
 <file path="components/IntradayChart.js">
 'use client';
 
@@ -2371,6 +2332,46 @@ export async function GET(request) {
             error: isDev ? error.message : 'Internal Proxy Error',
             ...(isDev && { context: 'proxy_catch', url: rawUrl })
         }, { status: 500 });
+    }
+}
+</file>
+
+<file path="app/api/user/sync-asset/route.js">
+import { NextResponse } from 'next/server';
+import { requireUser } from '@/lib/auth/requireUser';
+import { syncNamesBulk, syncHistoryBulk } from '@/lib/services/assetSyncService';
+import { getCloudflareCtx } from '@/lib/storage/d1Client';
+
+/**
+ * 前端分片同步接口：同步单只资产的名称与历史数据
+ * 职责：被前端 useAssetSync Hook 循环调用，将原本后台的大任务拆分为轻量级的 HTTP 分片
+ */
+export async function POST(request) {
+    const userId = await requireUser(request);
+    if (!userId) {
+        return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+    }
+
+    try {
+        const { code, type } = await request.json();
+        if (!code || !type) {
+            return NextResponse.json({ success: false, error: 'Invalid parameters' }, { status: 400 });
+        }
+
+        const cfCtx = await getCloudflareCtx();
+        const env = cfCtx?.env || null;
+        const items = [{ code, type }];
+
+        // 1. 同步名称
+        await syncNamesBulk(items, true);
+
+        // 2. 同步 250 天历史数据 (透传 env 确保 D1 访问正常)
+        await syncHistoryBulk(items, 250, true, env);
+
+        return NextResponse.json({ success: true, code, type });
+    } catch (e) {
+        console.error(`[SyncAsset] Failed for ${userId}:`, e.message);
+        return NextResponse.json({ success: false, error: e.message }, { status: 500 });
     }
 }
 </file>
@@ -3360,6 +3361,144 @@ export function useAsset() {
 }
 </file>
 
+<file path="schema.sql">
+-- 用户索引表
+CREATE TABLE IF NOT EXISTS users (
+    id          TEXT PRIMARY KEY,
+    password_hash TEXT,
+    email       TEXT UNIQUE,
+    created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+    last_login  DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 会话表 (SaaS 认证)
+CREATE TABLE IF NOT EXISTS user_sessions (
+    token       TEXT PRIMARY KEY,
+    user_id     TEXT NOT NULL,
+    created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+    expires_at  DATETIME NOT NULL,
+    FOREIGN KEY(user_id) REFERENCES users(id)
+);
+CREATE INDEX IF NOT EXISTS idx_sessions_user ON user_sessions(user_id);
+
+-- 用户资产关联表
+CREATE TABLE IF NOT EXISTS user_assets (
+    user_id TEXT NOT NULL,
+    code TEXT NOT NULL,
+    type TEXT NOT NULL,
+    added_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY(user_id, code, type),
+    FOREIGN KEY(user_id) REFERENCES users(id)
+);
+
+-- 资产基本信息 (名称库)
+CREATE TABLE IF NOT EXISTS asset_names (
+    code TEXT NOT NULL,
+    type TEXT NOT NULL,
+    name TEXT NOT NULL,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY(code, type)
+);
+
+-- 历史价格
+CREATE TABLE IF NOT EXISTS asset_history (
+    code TEXT NOT NULL,
+    type TEXT NOT NULL,
+    price REAL NOT NULL,
+    record_date TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY(code, type, record_date)
+);
+
+-- 分时数据 (按天存储的聚合 JSON)
+CREATE TABLE IF NOT EXISTS asset_intraday (
+    code TEXT NOT NULL,
+    record_date TEXT NOT NULL,
+    data TEXT NOT NULL,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY(code, record_date)
+);
+
+-- 分时数据点 (颗粒度到分钟)
+CREATE TABLE IF NOT EXISTS asset_intraday_points (
+    code TEXT NOT NULL,
+    time DATETIME NOT NULL,
+    price REAL NOT NULL,
+    vol REAL NOT NULL,
+    PRIMARY KEY(code, time)
+);
+CREATE INDEX IF NOT EXISTS idx_intra_points_code_time ON asset_intraday_points(code, time DESC);
+
+-- 报价缓存 (D1 历史缓存表)
+CREATE TABLE IF NOT EXISTS asset_quotes (
+    code TEXT PRIMARY KEY,
+    name TEXT,
+    price REAL,
+    change REAL,
+    changePercent REAL,
+    prevClose REAL,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 系统日志 (按计划禁用或存入 D1)
+CREATE TABLE IF NOT EXISTS system_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    level TEXT NOT NULL,
+    module TEXT,
+    message TEXT NOT NULL,
+    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 管理员会话表
+CREATE TABLE IF NOT EXISTS admin_sessions (
+    token TEXT PRIMARY KEY,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    expires_at DATETIME NOT NULL
+);
+
+-- 外部 API 健康监控
+CREATE TABLE IF NOT EXISTS api_health (
+    api_name TEXT PRIMARY KEY,
+    status TEXT DEFAULT 'unknown',
+    success_rate TEXT DEFAULT '0/0',
+    avg_latency INTEGER DEFAULT 0,
+    success_count INTEGER DEFAULT 0,
+    fail_count INTEGER DEFAULT 0,
+    total_count INTEGER DEFAULT 0,
+    recent_results TEXT DEFAULT '',
+    last_check DATETIME DEFAULT CURRENT_TIMESTAMP,
+    heartbeat_ts DATETIME DEFAULT CURRENT_TIMESTAMP,
+    error_msg TEXT
+);
+
+-- 计数器表 (维度 3 优化: 将 O(N) 统计降为 O(1))
+CREATE TABLE IF NOT EXISTS system_stats (
+    key TEXT PRIMARY KEY,
+    value INTEGER DEFAULT 0,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_logs_timestamp ON system_logs(timestamp);
+
+-- [Optimization] 提升近期统计查询速度 (用于 recent_growth)
+CREATE INDEX IF NOT EXISTS idx_asset_history_created_at ON asset_history (created_at);
+
+-- 异步同步任务
+CREATE TABLE IF NOT EXISTS sync_jobs (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    type        TEXT NOT NULL,
+    code        TEXT NOT NULL,
+    payload     TEXT,
+    status      TEXT DEFAULT 'pending',
+    retry_count INTEGER DEFAULT 0,
+    error_msg   TEXT,
+    created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_sync_jobs_status ON sync_jobs(status, updated_at);
+CREATE INDEX IF NOT EXISTS idx_sync_jobs_code ON sync_jobs(code);
+</file>
+
 <file path="app/admin/_components/Sections.js">
 'use client';
 
@@ -4135,6 +4274,108 @@ export const SESSION_COOKIE_OPTIONS = {
 };
 </file>
 
+<file path="lib/storage/healthRepo.js">
+import { queryAll, runSql, queryOne, getRequiredDb } from './d1Client';
+import { addSystemLog } from './logRepo';
+
+/**
+ * 内部辅助：构造 API 状态更新的 SQL 和参数
+ */
+function prepareHealthUpsert(name, data) {
+    const isSuccess = data.isSuccess !== undefined ? data.isSuccess : data.status !== 'down';
+    const currentResult = isSuccess ? 'S' : 'F';
+
+    const sql = `
+        INSERT INTO api_health (
+            api_name, status, success_rate, avg_latency, 
+            success_count, fail_count, total_count,
+            recent_results,
+            last_check, heartbeat_ts, error_msg
+        ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, ?)
+        ON CONFLICT(api_name) DO UPDATE SET
+            status = excluded.status,
+            avg_latency = (avg_latency * total_count + excluded.avg_latency) / (total_count + 1),
+            success_count = success_count + excluded.success_count,
+            fail_count = fail_count + excluded.fail_count,
+            total_count = total_count + 1,
+            recent_results = substr(COALESCE(recent_results, '') || excluded.recent_results, -10),
+            success_rate = (
+                length(substr(COALESCE(recent_results, '') || excluded.recent_results, -10)) - 
+                length(replace(substr(COALESCE(recent_results, '') || excluded.recent_results, -10), 'S', ''))
+            ) || '/' || length(substr(COALESCE(recent_results, '') || excluded.recent_results, -10)),
+            last_check = excluded.last_check,
+            heartbeat_ts = excluded.heartbeat_ts,
+            error_msg = excluded.error_msg
+    `;
+
+    const params = [
+        name,
+        data.status,
+        isSuccess ? "1/1" : "0/1",
+        data.avgLatency,
+        isSuccess ? 1 : 0,
+        isSuccess ? 0 : 1,
+        currentResult,
+        data.errorMsg || ''
+    ];
+
+    return { sql, params, isSuccess };
+}
+
+export async function updateApiHealth(name, data, env = null) {
+    try {
+        const { sql, params, isSuccess } = prepareHealthUpsert(name, data);
+        await runSql(sql, params, env);
+
+        if (!isSuccess) {
+            await addSystemLog('WARN', 'HealthRepo', `API Down: ${name} [${data.status}] - ${data.errorMsg}`, env);
+        }
+    } catch (e) {
+        console.error(`[HealthRepo] updateApiHealth failed for ${name}:`, e.message);
+    }
+}
+
+/**
+ * 批量更新 API 健康现状 (原子事务)
+ * @param {Array} results
+ * @param {Object} env
+ */
+export async function batchUpdateApiHealth(results, env = null) {
+    try {
+        const db = await getRequiredDb(env);
+
+        const statements = results.map(r => {
+            const { sql, params } = prepareHealthUpsert(r.name, r);
+            return db.prepare(sql).bind(...params);
+        });
+
+        await db.batch(statements);
+
+        // 批量记录日志
+        const failures = results.filter(r => (r.isSuccess !== undefined ? !r.isSuccess : r.status === 'down'));
+        for (const f of failures) {
+            await addSystemLog('WARN', 'HealthRepo', `API Down: ${f.name} [${f.status}] - ${f.errorMsg}`, env);
+        }
+    } catch (e) {
+        console.error('[HealthRepo] batchUpdateApiHealth failed:', e.message);
+    }
+}
+
+/**
+ * 获取所有 API 状态
+ * @param {Object} env
+ */
+export async function getAllApiHealth(env = null) {
+    try {
+        const rows = await queryAll('SELECT * FROM api_health ORDER BY api_name ASC', [], env);
+        return rows || [];
+    } catch (e) {
+        console.error('[HealthRepo] getAllApiHealth failed:', e.message);
+        return [];
+    }
+}
+</file>
+
 <file path="lib/storage/kvClient.js">
 import { memoryCache } from './memoryCache';
 import { getKvStorage as getBaseKv } from './d1Client';
@@ -4744,144 +4985,6 @@ export async function pruneIntradayPoints(env = null) {
 }
 </file>
 
-<file path="schema.sql">
--- 用户索引表
-CREATE TABLE IF NOT EXISTS users (
-    id          TEXT PRIMARY KEY,
-    password_hash TEXT,
-    email       TEXT UNIQUE,
-    created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
-    last_login  DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-
--- 会话表 (SaaS 认证)
-CREATE TABLE IF NOT EXISTS user_sessions (
-    token       TEXT PRIMARY KEY,
-    user_id     TEXT NOT NULL,
-    created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
-    expires_at  DATETIME NOT NULL,
-    FOREIGN KEY(user_id) REFERENCES users(id)
-);
-CREATE INDEX IF NOT EXISTS idx_sessions_user ON user_sessions(user_id);
-
--- 用户资产关联表
-CREATE TABLE IF NOT EXISTS user_assets (
-    user_id TEXT NOT NULL,
-    code TEXT NOT NULL,
-    type TEXT NOT NULL,
-    added_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY(user_id, code, type),
-    FOREIGN KEY(user_id) REFERENCES users(id)
-);
-
--- 资产基本信息 (名称库)
-CREATE TABLE IF NOT EXISTS asset_names (
-    code TEXT NOT NULL,
-    type TEXT NOT NULL,
-    name TEXT NOT NULL,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY(code, type)
-);
-
--- 历史价格
-CREATE TABLE IF NOT EXISTS asset_history (
-    code TEXT NOT NULL,
-    type TEXT NOT NULL,
-    price REAL NOT NULL,
-    record_date TEXT NOT NULL,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY(code, type, record_date)
-);
-
--- 分时数据 (按天存储的聚合 JSON)
-CREATE TABLE IF NOT EXISTS asset_intraday (
-    code TEXT NOT NULL,
-    record_date TEXT NOT NULL,
-    data TEXT NOT NULL,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY(code, record_date)
-);
-
--- 分时数据点 (颗粒度到分钟)
-CREATE TABLE IF NOT EXISTS asset_intraday_points (
-    code TEXT NOT NULL,
-    time DATETIME NOT NULL,
-    price REAL NOT NULL,
-    vol REAL NOT NULL,
-    PRIMARY KEY(code, time)
-);
-CREATE INDEX IF NOT EXISTS idx_intra_points_code_time ON asset_intraday_points(code, time DESC);
-
--- 报价缓存 (D1 历史缓存表)
-CREATE TABLE IF NOT EXISTS asset_quotes (
-    code TEXT PRIMARY KEY,
-    name TEXT,
-    price REAL,
-    change REAL,
-    changePercent REAL,
-    prevClose REAL,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-
--- 系统日志 (按计划禁用或存入 D1)
-CREATE TABLE IF NOT EXISTS system_logs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    level TEXT NOT NULL,
-    module TEXT,
-    message TEXT NOT NULL,
-    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-
--- 管理员会话表
-CREATE TABLE IF NOT EXISTS admin_sessions (
-    token TEXT PRIMARY KEY,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    expires_at DATETIME NOT NULL
-);
-
--- 外部 API 健康监控
-CREATE TABLE IF NOT EXISTS api_health (
-    api_name TEXT PRIMARY KEY,
-    status TEXT DEFAULT 'unknown',
-    success_rate TEXT DEFAULT '0/0',
-    avg_latency INTEGER DEFAULT 0,
-    success_count INTEGER DEFAULT 0,
-    fail_count INTEGER DEFAULT 0,
-    total_count INTEGER DEFAULT 0,
-    recent_results TEXT DEFAULT '',
-    last_check DATETIME DEFAULT CURRENT_TIMESTAMP,
-    heartbeat_ts DATETIME DEFAULT CURRENT_TIMESTAMP,
-    error_msg TEXT
-);
-
--- 计数器表 (维度 3 优化: 将 O(N) 统计降为 O(1))
-CREATE TABLE IF NOT EXISTS system_stats (
-    key TEXT PRIMARY KEY,
-    value INTEGER DEFAULT 0,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX IF NOT EXISTS idx_logs_timestamp ON system_logs(timestamp);
-
--- [Optimization] 提升近期统计查询速度 (用于 recent_growth)
-CREATE INDEX IF NOT EXISTS idx_asset_history_created_at ON asset_history (created_at);
-
--- 异步同步任务
-CREATE TABLE IF NOT EXISTS sync_jobs (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    type        TEXT NOT NULL,
-    code        TEXT NOT NULL,
-    payload     TEXT,
-    status      TEXT DEFAULT 'pending',
-    retry_count INTEGER DEFAULT 0,
-    error_msg   TEXT,
-    created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-CREATE INDEX IF NOT EXISTS idx_sync_jobs_status ON sync_jobs(status, updated_at);
-CREATE INDEX IF NOT EXISTS idx_sync_jobs_code ON sync_jobs(code);
-</file>
-
 <file path="app/api/admin/stats/route.js">
 import { NextResponse } from 'next/server';
 export const dynamic = 'force-dynamic';
@@ -5457,108 +5560,6 @@ async function _log(env, level, module, message) {
 const _sleep = ms => new Promise(r => setTimeout(r, ms));
 </file>
 
-<file path="lib/storage/healthRepo.js">
-import { queryAll, runSql, queryOne, getRequiredDb } from './d1Client';
-import { addSystemLog } from './logRepo';
-
-/**
- * 内部辅助：构造 API 状态更新的 SQL 和参数
- */
-function prepareHealthUpsert(name, data) {
-    const isSuccess = data.isSuccess !== undefined ? data.isSuccess : data.status !== 'down';
-    const currentResult = isSuccess ? 'S' : 'F';
-
-    const sql = `
-        INSERT INTO api_health (
-            api_name, status, success_rate, avg_latency, 
-            success_count, fail_count, total_count,
-            recent_results,
-            last_check, heartbeat_ts, error_msg
-        ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, ?)
-        ON CONFLICT(api_name) DO UPDATE SET
-            status = excluded.status,
-            avg_latency = (avg_latency * total_count + excluded.avg_latency) / (total_count + 1),
-            success_count = success_count + excluded.success_count,
-            fail_count = fail_count + excluded.fail_count,
-            total_count = total_count + 1,
-            recent_results = substr(COALESCE(recent_results, '') || excluded.recent_results, -10),
-            success_rate = (
-                length(substr(COALESCE(recent_results, '') || excluded.recent_results, -10)) - 
-                length(replace(substr(COALESCE(recent_results, '') || excluded.recent_results, -10), 'S', ''))
-            ) || '/' || length(substr(COALESCE(recent_results, '') || excluded.recent_results, -10)),
-            last_check = excluded.last_check,
-            heartbeat_ts = excluded.heartbeat_ts,
-            error_msg = excluded.error_msg
-    `;
-
-    const params = [
-        name,
-        data.status,
-        isSuccess ? "1/1" : "0/1",
-        data.avgLatency,
-        isSuccess ? 1 : 0,
-        isSuccess ? 0 : 1,
-        currentResult,
-        data.errorMsg || ''
-    ];
-
-    return { sql, params, isSuccess };
-}
-
-export async function updateApiHealth(name, data, env = null) {
-    try {
-        const { sql, params, isSuccess } = prepareHealthUpsert(name, data);
-        await runSql(sql, params, env);
-
-        if (!isSuccess) {
-            await addSystemLog('WARN', 'HealthRepo', `API Down: ${name} [${data.status}] - ${data.errorMsg}`, env);
-        }
-    } catch (e) {
-        console.error(`[HealthRepo] updateApiHealth failed for ${name}:`, e.message);
-    }
-}
-
-/**
- * 批量更新 API 健康现状 (原子事务)
- * @param {Array} results
- * @param {Object} env
- */
-export async function batchUpdateApiHealth(results, env = null) {
-    try {
-        const db = await getRequiredDb(env);
-
-        const statements = results.map(r => {
-            const { sql, params } = prepareHealthUpsert(r.name, r);
-            return db.prepare(sql).bind(...params);
-        });
-
-        await db.batch(statements);
-
-        // 批量记录日志
-        const failures = results.filter(r => (r.isSuccess !== undefined ? !r.isSuccess : r.status === 'down'));
-        for (const f of failures) {
-            await addSystemLog('WARN', 'HealthRepo', `API Down: ${f.name} [${f.status}] - ${f.errorMsg}`, env);
-        }
-    } catch (e) {
-        console.error('[HealthRepo] batchUpdateApiHealth failed:', e.message);
-    }
-}
-
-/**
- * 获取所有 API 状态
- * @param {Object} env
- */
-export async function getAllApiHealth(env = null) {
-    try {
-        const rows = await queryAll('SELECT * FROM api_health ORDER BY api_name ASC', [], env);
-        return rows || [];
-    } catch (e) {
-        console.error('[HealthRepo] getAllApiHealth failed:', e.message);
-        return [];
-    }
-}
-</file>
-
 <file path="lib/storage/historyRepo.js">
 import { queryOne, queryAll, runSql, getD1Storage } from './d1Client';
 
@@ -5843,65 +5844,6 @@ export async function deleteUser(userId, env = null) {
         console.error(`[UserRepo] deleteUser failed for ${userId}:`, e.message);
         return false;
     }
-}
-</file>
-
-<file path="app/api/admin/queue/route.js">
-import { NextResponse } from 'next/server';
-import { isAdminAuthorized } from '@/lib/storage/authRepo';
-
-export const dynamic = 'force-dynamic';
-export const revalidate = 0;
-
-import { getKvStorage } from '@/lib/storage/d1Client';
-
-import { queryAll, getD1Storage } from '@/lib/storage/d1Client';
-
-export async function GET(request) {
-    if (!(await isAdminAuthorized(request))) {
-        return NextResponse.json({ error: 'Unauthorized' }, { status: 403 });
-    }
-
-    const db = await getD1Storage();
-    if (!db) return NextResponse.json({ error: 'DB unavailable' }, { status: 500 });
-
-    try {
-        // 读取最近 100 条任务状态用于前端显示
-        const items = await queryAll(`
-            SELECT id, code, status, type, updated_at 
-            FROM sync_jobs 
-            ORDER BY updated_at DESC LIMIT 100
-        `);
-
-        return NextResponse.json({
-            queue: items.map(i => ({
-                id: i.code,
-                status: i.status,
-                type: i.type,
-                updatedAt: i.updated_at
-            })),
-            count: items.length,
-            status: items.some(i => i.status === 'processing') ? 'running' : (items.some(i => i.status === 'pending') ? 'pending' : 'idle')
-        });
-    } catch (e) {
-        return NextResponse.json({ error: e.message, status: 'error' }, { status: 500 });
-    }
-}
-
-/**
- * 允许手动清理已完成或已失败的任务
- */
-export async function DELETE(request) {
-    if (!(await isAdminAuthorized(request))) {
-        return NextResponse.json({ error: 'Unauthorized' }, { status: 403 });
-    }
-
-    const db = await getD1Storage();
-    if (!db) return NextResponse.json({ error: 'DB unavailable' }, { status: 500 });
-
-    await db.prepare("DELETE FROM sync_jobs WHERE status IN ('completed', 'failed')").run();
-
-    return NextResponse.json({ ok: true });
 }
 </file>
 
@@ -6577,6 +6519,63 @@ async function processSyncJobs(env) {
 }
 </file>
 
+<file path="app/api/admin/queue/route.js">
+import { NextResponse } from 'next/server';
+import { isAdminAuthorized } from '@/lib/storage/authRepo';
+
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+
+import { queryAll, getD1Storage } from '@/lib/storage/d1Client';
+
+export async function GET(request) {
+    if (!(await isAdminAuthorized(request))) {
+        return NextResponse.json({ error: 'Unauthorized' }, { status: 403 });
+    }
+
+    const db = await getD1Storage();
+    if (!db) return NextResponse.json({ error: 'DB unavailable' }, { status: 500 });
+
+    try {
+        // 读取最近 100 条任务状态用于前端显示
+        const items = await queryAll(`
+            SELECT id, code, status, type, updated_at 
+            FROM sync_jobs 
+            ORDER BY updated_at DESC LIMIT 100
+        `);
+
+        return NextResponse.json({
+            queue: items.map(i => ({
+                id: i.code,
+                status: i.status,
+                type: i.type,
+                updatedAt: i.updated_at
+            })),
+            count: items.length,
+            status: items.some(i => i.status === 'processing') ? 'running' : (items.some(i => i.status === 'pending') ? 'pending' : 'idle')
+        });
+    } catch (e) {
+        return NextResponse.json({ error: e.message, status: 'error' }, { status: 500 });
+    }
+}
+
+/**
+ * 允许手动清理已完成或已失败的任务
+ */
+export async function DELETE(request) {
+    if (!(await isAdminAuthorized(request))) {
+        return NextResponse.json({ error: 'Unauthorized' }, { status: 403 });
+    }
+
+    const db = await getD1Storage();
+    if (!db) return NextResponse.json({ error: 'DB unavailable' }, { status: 500 });
+
+    await db.prepare("DELETE FROM sync_jobs WHERE status IN ('completed', 'failed')").run();
+
+    return NextResponse.json({ ok: true });
+}
+</file>
+
 <file path="components/DashboardClient.js">
 'use client';
 
@@ -6827,7 +6826,7 @@ import { NextResponse } from 'next/server';
 import { isAdminAuthorized } from '@/lib/storage/authRepo';
 import { fetchFundHistory } from '@/lib/services/historyFetcher';
 import { insertDailyPricesBatch, deleteAssetHistory } from '@/lib/storage/historyRepo';
-import { getKvStorage, getD1Storage } from '@/lib/storage/d1Client';
+import { getD1Storage } from '@/lib/storage/d1Client';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300; // 5分钟限时
@@ -7063,6 +7062,206 @@ async function _log(env, level, module, message) {
 }
 
 const _sleep = ms => new Promise(r => setTimeout(r, ms));
+</file>
+
+<file path="lib/services/historyFetcher.js">
+import { fetchWithRetry, getBeijingTodayStr, isMarketClosedBeijing, formatDateInTimezone } from '@/lib/utils';
+import { addSystemLog } from '@/lib/storage/logRepo';
+import { parseStockCode } from '@/lib/utils/stockCode';
+
+const BASE_HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    Accept: '*/*'
+}
+
+/**
+ * 统一 Schema 校验与归一化
+ */
+function normalizePoints(points) {
+    if (!Array.isArray(points)) return [];
+    return points
+        .map(p => ({
+            date: String(p.date),
+            value: parseFloat(p.value)
+        }))
+        .filter(p => p.date && !isNaN(p.value) && p.value > 0);
+}
+
+export async function fetchStockEastmoney(code, days, signal = null) {
+    const parsed = parseStockCode(code);
+    if (!parsed) return null;
+
+    const url = `https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=${parsed.market}.${parsed.clean}&fields1=f1,f2&fields2=f51,f53&klt=101&fqt=1&end=20500101&lmt=${days + 10}`
+
+    try {
+        const res = await fetchWithRetry(url, { headers: { ...BASE_HEADERS, 'Referer': 'https://quote.eastmoney.com/' } }, 0, signal)
+        if (!res) return null
+        const d = await res.json()
+        if (!d?.data?.klines) return null
+
+        const today = getBeijingTodayStr();
+        const closed = isMarketClosedBeijing();
+        const points = d.data.klines.map(line => {
+            const p = line.split(',')
+            return { date: p[0], value: parseFloat(p[1]) }
+        });
+
+        const data = normalizePoints(points)
+            .filter(i => (closed ? i.date <= today : i.date < today))
+
+        if (data.length > 0) {
+            return data.slice(-days);
+        }
+        return null
+    } catch (e) {
+        return null
+    }
+}
+
+export async function fetchStockTencent(code, days, signal = null) {
+    try {
+        const year = new Date().getFullYear() + 2
+        const url = `https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?_var=kline_dayqfq&param=${code.toLowerCase()},day,2020-01-01,${year}-12-31,500,qfq`
+        const res = await fetchWithRetry(url, { headers: BASE_HEADERS }, 0, signal)
+        if (!res) return null
+        const text = await res.text()
+        const jsonStr = text.replace(/^kline_dayqfq=/, '')
+        const d = JSON.parse(jsonStr)
+        const stockData = d.data?.[code.toLowerCase()]
+        const kline = stockData?.qfqday || stockData?.day
+
+        const today = getBeijingTodayStr();
+        const closed = isMarketClosedBeijing();
+        if (kline && Array.isArray(kline)) {
+            const points = kline.map(item => ({
+                date: item[0],
+                value: parseFloat(item[2])
+            }));
+
+            return normalizePoints(points)
+                .filter(i => (closed ? i.date <= today : i.date < today))
+                .slice(-days)
+        }
+        return null
+    } catch (e) {
+        return null
+    }
+}
+
+export async function fetchStockSina(code, days, signal = null) {
+    try {
+        const url = `https://money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData?symbol=${code}&scale=240&ma=no&datalen=${days}`
+        const res = await fetchWithRetry(url, {}, 0, signal)
+        if (!res) return null
+        const d = await res.json()
+        if (!Array.isArray(d)) return null
+
+        const today = getBeijingTodayStr();
+        const closed = isMarketClosedBeijing();
+        const points = d.map(i => ({
+            date: i.day.split(' ')[0],
+            value: parseFloat(i.close)
+        }));
+
+        const data = normalizePoints(points)
+            .filter(i => (closed ? i.date <= today : i.date < today))
+
+        if (data.length > 0) {
+            return data;
+        }
+        return null
+    } catch (e) {
+        return null
+    }
+}
+
+export async function fetchStockHistory(code, days, signal = null) {
+    const res = (await fetchStockEastmoney(code, days, signal)) ||
+        (await fetchStockTencent(code, days, signal)) ||
+        (await fetchStockSina(code, days, signal));
+    if (res) {
+        console.log(`[Fetcher] Fetched ${res.length} points for stock ${code}`);
+    }
+    return res;
+}
+
+export async function fetchFundHistory(code, days, signal = null) {
+    const match = code.match(/^([a-zA-Z]{2})?(\d+)$/i);
+    const clean = match ? match[2] : code;
+
+    try {
+        // 使用天天基金“一波流”接口：获取全量历史走势 JS
+        // 修正为 HTTPS 避免明文请求
+        const url = `https://fund.eastmoney.com/pingzhongdata/${clean}.js`;
+        const res = await fetchWithRetry(url, {
+            headers: { ...BASE_HEADERS, 'Referer': 'https://fund.eastmoney.com/' }
+        }, 0, signal);
+        if (!res) return null;
+
+        const text = await res.text();
+
+        // 尝试匹配不同的变量名：Data_ACWorthTrend (普通基金) 或 Data_netWorthTrend (FOF)
+        const regexAC = /var Data_ACWorthTrend = (\[.*?\]);/;
+        const regexNet = /var Data_netWorthTrend = (\[.*?\]);/;
+
+        const matchAC = text.match(regexAC);
+        const matchNet = text.match(regexNet);
+
+        const found = matchAC || matchNet;
+        if (!found || !found[1]) {
+            console.error(`[Fetcher] Fund ${code}: Required data variables not found in JS response.`);
+            return null;
+        }
+
+        const rawData = JSON.parse(found[1]);
+        if (!Array.isArray(rawData) || rawData.length === 0) return null;
+
+        const today = getBeijingTodayStr();
+        const closed = isMarketClosedBeijing();
+
+        // 转换数据：识别单点格式 [timestamp, value] 或 {x: timestamp, y: value}
+        const points = rawData.map(item => {
+            let ts, val;
+            if (Array.isArray(item)) {
+                [ts, val] = item;
+            } else if (item && typeof item === 'object') {
+                ts = item.x;
+                val = item.y;
+            }
+
+            if (ts === undefined || val === undefined) return null;
+
+            return {
+                date: formatDateInTimezone(ts, "Asia/Shanghai"),
+                value: parseFloat(val)
+            };
+        }).filter(p => p !== null);
+
+        const converted = normalizePoints(points).filter(i => {
+            return closed ? i.date <= today : i.date < today;
+        });
+
+        // 关键：数据完整性保护 (确保抓取质量)
+        // 逻辑：如果原始数据点很多，但经过解析/过滤后只剩下很少，说明解析逻辑或数据可能异常
+        const rawPointCount = rawData.length;
+        const result = converted.slice(-days);
+
+        // 期望得到的条数：或者是 days，或者是该基金从诞生至今的总天数
+        const expectation = Math.min(days, rawPointCount);
+
+        // 如果解析出来的条数明显少于原始条数（且属于需要审计的大样本），触发熔断
+        if (result.length < expectation * 0.9 && expectation > 30) {
+            console.error(`[Fetcher] Fund ${code} integrity check failed: Got ${result.length}, expected near ${expectation} (from ${rawPointCount} raw points).`);
+            return null;
+        }
+
+        console.log(`[Fetcher] Fund: Bulk-Fetched ${result.length} points for fund ${code} via pingzhongdata JS.`);
+        return result;
+    } catch (e) {
+        console.error(`[Fetcher] Fund ${code} failed:`, e.message);
+        return null;
+    }
+}
 </file>
 
 <file path="lib/services/assetSyncService.js">
@@ -7344,8 +7543,8 @@ export async function syncHistoryBulk(items, days = 250, allowExternal = false, 
                     : await fetchStockHistory(item.code, days)
 
                 if (externalData?.length > 0) {
-                    // force 模式先物理删除旧数据，确保脏数据不会干扰后续同步
-                    if (forceRefresh && dbHistory.length > 0) {
+                    // force 模式先物理删除旧数据，并不依赖 dbHistory 判断（因为 forceRefresh=true 时 dbHistory 为空）
+                    if (forceRefresh) {
                         const { deleteAssetHistory } = await import('../storage/historyRepo')
                         await deleteAssetHistory(item.code, item.type, env)
                     }
@@ -7460,192 +7659,6 @@ export async function syncNamesBulk(items, allowExternal = false) {
     }
 
     return result;
-}
-</file>
-
-<file path="lib/services/historyFetcher.js">
-import { fetchWithRetry, getBeijingTodayStr, isMarketClosedBeijing, formatDateInTimezone } from '@/lib/utils';
-import { addSystemLog } from '@/lib/storage/logRepo';
-import { parseStockCode } from '@/lib/utils/stockCode';
-
-const BASE_HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    Accept: '*/*'
-}
-
-/**
- * 统一 Schema 校验与归一化
- */
-function normalizePoints(points) {
-    if (!Array.isArray(points)) return [];
-    return points
-        .map(p => ({
-            date: String(p.date),
-            value: parseFloat(p.value)
-        }))
-        .filter(p => p.date && !isNaN(p.value) && p.value > 0);
-}
-
-export async function fetchStockEastmoney(code, days, signal = null) {
-    const parsed = parseStockCode(code);
-    if (!parsed) return null;
-
-    const url = `https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=${parsed.market}.${parsed.clean}&fields1=f1,f2&fields2=f51,f53&klt=101&fqt=1&end=20500101&lmt=${days + 10}`
-
-    try {
-        const res = await fetchWithRetry(url, { headers: { ...BASE_HEADERS, 'Referer': 'https://quote.eastmoney.com/' } }, 0, signal)
-        if (!res) return null
-        const d = await res.json()
-        if (!d?.data?.klines) return null
-
-        const today = getBeijingTodayStr();
-        const closed = isMarketClosedBeijing();
-        const points = d.data.klines.map(line => {
-            const p = line.split(',')
-            return { date: p[0], value: parseFloat(p[1]) }
-        });
-
-        const data = normalizePoints(points)
-            .filter(i => (closed ? i.date <= today : i.date < today))
-
-        if (data.length > 0) {
-            return data.slice(-days);
-        }
-        return null
-    } catch (e) {
-        return null
-    }
-}
-
-export async function fetchStockTencent(code, days, signal = null) {
-    try {
-        const year = new Date().getFullYear() + 2
-        const url = `https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?_var=kline_dayqfq&param=${code.toLowerCase()},day,2020-01-01,${year}-12-31,500,qfq`
-        const res = await fetchWithRetry(url, { headers: BASE_HEADERS }, 0, signal)
-        if (!res) return null
-        const text = await res.text()
-        const jsonStr = text.replace(/^kline_dayqfq=/, '')
-        const d = JSON.parse(jsonStr)
-        const stockData = d.data?.[code.toLowerCase()]
-        const kline = stockData?.qfqday || stockData?.day
-
-        const today = getBeijingTodayStr();
-        const closed = isMarketClosedBeijing();
-        if (kline && Array.isArray(kline)) {
-            const points = kline.map(item => ({
-                date: item[0],
-                value: parseFloat(item[2])
-            }));
-
-            return normalizePoints(points)
-                .filter(i => (closed ? i.date <= today : i.date < today))
-                .slice(-days)
-        }
-        return null
-    } catch (e) {
-        return null
-    }
-}
-
-export async function fetchStockSina(code, days, signal = null) {
-    try {
-        const url = `https://money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData?symbol=${code}&scale=240&ma=no&datalen=${days}`
-        const res = await fetchWithRetry(url, {}, 0, signal)
-        if (!res) return null
-        const d = await res.json()
-        if (!Array.isArray(d)) return null
-
-        const today = getBeijingTodayStr();
-        const closed = isMarketClosedBeijing();
-        const points = d.map(i => ({
-            date: i.day.split(' ')[0],
-            value: parseFloat(i.close)
-        }));
-
-        const data = normalizePoints(points)
-            .filter(i => (closed ? i.date <= today : i.date < today))
-
-        if (data.length > 0) {
-            return data;
-        }
-        return null
-    } catch (e) {
-        return null
-    }
-}
-
-export async function fetchStockHistory(code, days, signal = null) {
-    const res = (await fetchStockEastmoney(code, days, signal)) ||
-        (await fetchStockTencent(code, days, signal)) ||
-        (await fetchStockSina(code, days, signal));
-    if (res) {
-        console.log(`[Fetcher] Fetched ${res.length} points for stock ${code}`);
-    }
-    return res;
-}
-
-export async function fetchFundHistory(code, days, signal = null) {
-    const match = code.match(/^([a-zA-Z]{2})?(\d+)$/i);
-    const clean = match ? match[2] : code;
-
-    try {
-        // 使用天天基金“一波流”接口：获取全量历史走势 JS
-        // 修正为 HTTPS 避免明文请求
-        const url = `https://fund.eastmoney.com/pingzhongdata/${clean}.js`;
-        const res = await fetchWithRetry(url, {
-            headers: { ...BASE_HEADERS, 'Referer': 'https://fund.eastmoney.com/' }
-        }, 0, signal);
-        if (!res) return null;
-
-        const text = await res.text();
-
-        // 使用正则提取“累计净值走势”数据：Data_ACWorthTrend
-        // 数据格式通常为：[[时间戳, 净值], [时间戳, 净值], ...]
-        const regex = /var Data_ACWorthTrend = (\[.*?\]);/;
-        const found = text.match(regex);
-        if (!found || !found[1]) {
-            console.error(`[Fetcher] Fund ${code}: Data_ACWorthTrend not found in JS response.`);
-            return null;
-        }
-
-        const rawData = JSON.parse(found[1]);
-        if (!Array.isArray(rawData) || rawData.length === 0) return null;
-
-        const today = getBeijingTodayStr();
-        const closed = isMarketClosedBeijing();
-
-        // 转换数据：时间戳(ms) -> YYYY-MM-DD (强制北京时间)
-        const points = rawData.map(item => {
-            return {
-                date: formatDateInTimezone(item[0], "Asia/Shanghai"),
-                value: parseFloat(item[1])
-            };
-        });
-
-        const converted = normalizePoints(points).filter(i => {
-            return closed ? i.date <= today : i.date < today;
-        });
-
-        // 关键：数据完整性保护 (确保抓取质量)
-        // 逻辑：如果原始数据点很多，但经过解析/过滤后只剩下很少，说明解析逻辑或数据可能异常
-        const rawPointCount = rawData.length;
-        const result = converted.slice(-days);
-
-        // 期望得到的条数：或者是 days，或者是该基金从诞生至今的总天数
-        const expectation = Math.min(days, rawPointCount);
-
-        // 如果解析出来的条数明显少于原始条数（且属于需要审计的大样本），触发熔断
-        if (result.length < expectation * 0.9 && expectation > 30) {
-            console.error(`[Fetcher] Fund ${code} integrity check failed: Got ${result.length}, expected near ${expectation} (from ${rawPointCount} raw points).`);
-            return null;
-        }
-
-        console.log(`[Fetcher] Fund: Bulk-Fetched ${result.length} points for fund ${code} via pingzhongdata JS.`);
-        return result;
-    } catch (e) {
-        console.error(`[Fetcher] Fund ${code} failed:`, e.message);
-        return null;
-    }
 }
 </file>
 
@@ -7861,74 +7874,6 @@ export function useAdminData(secretKey, showToast, onAuthFailure) {
 }
 </file>
 
-<file path="app/api/cron/sync/route.js">
-/**
- * src/app/api/cron/sync/route.js
- *
- * 手动触发盘中实时行情同步的 HTTP 调试入口。
- * 正式生产由 wrangler.toml cron + scheduled handler 驱动，本文件仅供调试。
- *
- * 调用方式：
- *   GET /api/cron/sync?task=realtime&key=YOUR_SECRET
- *   GET /api/cron/sync?task=history&key=YOUR_SECRET
- *
- * 鉴权：
- *   统一通过 isAdminAuthorized 进行校验（支持 Session Token 或 ?key=xxx）
- */
-
-import { NextResponse } from 'next/server';
-import { runHistorySync } from '@/lib/cron/historySync';
-import { runRealtimeSync } from '@/lib/cron/realtimeSync';
-import { runSentinel } from '@/lib/cron/sentinel';
-import { isAdminAuthorized } from '@/lib/storage/authRepo';
-
-export const dynamic = 'force-dynamic';
-
-const TASK_MAP = {
-    history: runHistorySync,
-    realtime: runRealtimeSync,
-    sentinel: runSentinel,
-};
-
-export async function GET(request) {
-    const { searchParams } = new URL(request.url);
-
-    // ── 鉴权：统一使用管理员校验 ───────────────────────────────────────
-    if (!(await isAdminAuthorized(request))) {
-        return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
-    }
-
-    // ── 路由 ────────────────────────────────────────────────────────────────
-    const task = searchParams.get('task') ?? 'realtime';
-    const runner = TASK_MAP[task];
-
-    if (!runner) {
-        return NextResponse.json(
-            { success: false, error: `Unknown task "${task}". Valid: ${Object.keys(TASK_MAP).join(', ')}` },
-            { status: 400 }
-        );
-    }
-
-    // ── 执行 ────────────────────────────────────────────────────────────────
-    // 统合规范：直接使用 getD1Storage() 获取绑定，支持 context 与 global 注入
-    const { getD1Storage } = await import('@/lib/storage/d1Client');
-    const db = await getD1Storage();
-    const env = { DB: db };
-
-    try {
-        const t0 = Date.now();
-        const force = searchParams.get('force') === '1';
-        const type = searchParams.get('type');
-        await runner(env, { force, type });
-        const elapsed = Date.now() - t0;
-        return NextResponse.json({ success: true, task, force, type, elapsed_ms: elapsed });
-    } catch (e) {
-        console.error(`[CronRoute] task=${task} failed:`, e.message);
-        return NextResponse.json({ success: false, task, error: e.message }, { status: 500 });
-    }
-}
-</file>
-
 <file path="app/admin/page.js">
 'use client';
 
@@ -8052,6 +7997,74 @@ export default function AdminPage() {
             <AdminCommandCenter />
         </Suspense>
     );
+}
+</file>
+
+<file path="app/api/cron/sync/route.js">
+/**
+ * src/app/api/cron/sync/route.js
+ *
+ * 手动触发盘中实时行情同步的 HTTP 调试入口。
+ * 正式生产由 wrangler.toml cron + scheduled handler 驱动，本文件仅供调试。
+ *
+ * 调用方式：
+ *   GET /api/cron/sync?task=realtime&key=YOUR_SECRET
+ *   GET /api/cron/sync?task=history&key=YOUR_SECRET
+ *
+ * 鉴权：
+ *   统一通过 isAdminAuthorized 进行校验（支持 Session Token 或 ?key=xxx）
+ */
+
+import { NextResponse } from 'next/server';
+import { runHistorySync } from '@/lib/cron/historySync';
+import { runRealtimeSync } from '@/lib/cron/realtimeSync';
+import { runSentinel } from '@/lib/cron/sentinel';
+import { isAdminAuthorized } from '@/lib/storage/authRepo';
+
+export const dynamic = 'force-dynamic';
+
+const TASK_MAP = {
+    history: runHistorySync,
+    realtime: runRealtimeSync,
+    sentinel: runSentinel,
+};
+
+export async function GET(request) {
+    const { searchParams } = new URL(request.url);
+
+    // ── 鉴权：统一使用管理员校验 ───────────────────────────────────────
+    if (!(await isAdminAuthorized(request))) {
+        return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+    }
+
+    // ── 路由 ────────────────────────────────────────────────────────────────
+    const task = searchParams.get('task') ?? 'realtime';
+    const runner = TASK_MAP[task];
+
+    if (!runner) {
+        return NextResponse.json(
+            { success: false, error: `Unknown task "${task}". Valid: ${Object.keys(TASK_MAP).join(', ')}` },
+            { status: 400 }
+        );
+    }
+
+    // ── 执行 ────────────────────────────────────────────────────────────────
+    // 统合规范：直接使用 getD1Storage() 获取绑定，支持 context 与 global 注入
+    const { getD1Storage } = await import('@/lib/storage/d1Client');
+    const db = await getD1Storage();
+    const env = { DB: db };
+
+    try {
+        const t0 = Date.now();
+        const force = searchParams.get('force') === '1';
+        const type = searchParams.get('type');
+        await runner(env, { force, type });
+        const elapsed = Date.now() - t0;
+        return NextResponse.json({ success: true, task, force, type, elapsed_ms: elapsed });
+    } catch (e) {
+        console.error(`[CronRoute] task=${task} failed:`, e.message);
+        return NextResponse.json({ success: false, task, error: e.message }, { status: 500 });
+    }
 }
 </file>
 

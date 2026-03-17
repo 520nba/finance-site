@@ -24,7 +24,8 @@ export async function GET(request) {
 
         return NextResponse.json({
             queue: items.map(i => ({
-                id: i.code,
+                id: i.id,
+                code: i.code,
                 status: i.status,
                 type: i.type,
                 updatedAt: i.updated_at
