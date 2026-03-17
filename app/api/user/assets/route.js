@@ -18,7 +18,7 @@ export async function GET(request) {
         const userAssets = await getUserAssets(userId);
         return NextResponse.json({ success: true, data: userAssets });
     } catch (e) {
-        console.error(`[Assets] GET failed for ${userId}:`, e.message);
+        console.error(`[Assets] GET failed for ${userId}: `, e.message);
         return NextResponse.json({ success: false, error: e.message, code: 'D1_ERROR' }, { status: 503 });
     }
 }
@@ -57,8 +57,8 @@ export async function POST(request) {
         // 1. 优先写入资产基础关联
         await saveUserAssets(userId, cleanAssets);
 
-        // 1. 优先写入资产基础关联
-        await saveUserAssets(userId, cleanAssets);
+        // 2. 检查并补全资产名称 (D1 维护)
+        const nameResults = await syncNamesBulk(cleanAssets);
 
         // 2. 架构减负：移除原本笨重的 ctx.waitUntil 历史抓取逻辑。
         // 现在抓取压力由前端 useAssetSync 识别数据空洞并分片发起请求。
@@ -83,7 +83,7 @@ export async function POST(request) {
             }
         });
     } catch (e) {
-        console.error(`[Assets] POST critical failure for ${userId}:`, e.message);
+        console.error(`[Assets] POST critical failure for ${userId}: `, e.message);
         return NextResponse.json({
             success: false,
             error: e.message,

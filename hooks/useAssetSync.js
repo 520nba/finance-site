@@ -133,14 +133,16 @@ export function useAssetSync({ userId, isLogged }) {
     }, [userId, refreshAssets]);
 
 
+    const [isSyncingItems, setIsSyncingItems] = useState(new Set());
+
     // [Feature: Client-side Offloading] 
     // 前端主动拨调：发现数据空洞（缺失名称或历史）时，分片同步至 D1
     useEffect(() => {
         if (!isSessionReady || isSyncing) return;
 
         const pending = assets.filter(a =>
-            a.name === '加载中...' ||
-            !a.history || a.history.length === 0
+            (a.name === '加载中...' || !a.history || a.history.length === 0) &&
+            !isSyncingItems.has(`${a.type}:${a.code}`)
         );
 
         if (pending.length === 0) return;
@@ -150,26 +152,39 @@ export function useAssetSync({ userId, isLogged }) {
         const toSync = pending.slice(0, CONCURRENCY);
 
         const runSync = async () => {
+            // 锁定正在处理的项目，防止重入导致的无限循环
+            const newSyncing = new Set(isSyncingItems);
+            toSync.forEach(item => newSyncing.add(`${item.type}:${item.code}`));
+            setIsSyncingItems(newSyncing);
+
             await Promise.all(toSync.map(async (item) => {
+                const itemKey = `${item.type}:${item.code}`;
                 try {
                     const res = await fetch('/api/user/sync-asset', {
                         method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ code: item.code, type: item.type })
                     });
                     if (res.ok) {
                         // 同步成功后，重新局部刷新该资产的数据
-                        // 这样 D1 中已经有了数据，fetchBulkHistory 会直接命中数据库
                         await refreshAssets(assetsRef.current);
                     }
                 } catch (e) {
                     console.warn(`[ClientSync] Failed for ${item.code}:`, e.message);
+                } finally {
+                    // 解锁
+                    setIsSyncingItems(prev => {
+                        const next = new Set(prev);
+                        next.delete(itemKey);
+                        return next;
+                    });
                 }
             }));
         };
 
         const timer = setTimeout(runSync, 1000);
         return () => clearTimeout(timer);
-    }, [assets, isSessionReady, isSyncing, refreshAssets]);
+    }, [assets, isSessionReady, isSyncing, refreshAssets, isSyncingItems]);
 
 
     const assetsRef = useRef(assets);

@@ -71,6 +71,7 @@ app/api/quotes/bulk/route.js
 app/api/user/assets/route.js
 app/api/user/delete/route.js
 app/api/user/list/route.js
+app/api/user/sync-asset/route.js
 app/favicon.ico
 app/globals.css
 app/layout.js
@@ -1460,6 +1461,45 @@ export async function GET(request) {
 }
 </file>
 
+<file path="app/api/user/sync-asset/route.js">
+import { NextResponse } from 'next/server';
+import { requireUser } from '@/lib/auth/requireUser';
+import { syncNamesBulk, syncHistoryBulk } from '@/lib/services/assetSyncService';
+import { getCloudflareCtx } from '@/lib/storage/d1Client';
+
+/**
+ * 前端分片同步接口：同步单只资产的名称与历史数据
+ * 职责：被前端 useAssetSync Hook 循环调用，将原本后台的大任务拆分为轻量级的 HTTP 分片
+ */
+export async function POST(request) {
+    const userId = await requireUser(request);
+    if (!userId) {
+        return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+    }
+
+    try {
+        const { code, type } = await request.json();
+        if (!code || !type) {
+            return NextResponse.json({ success: false, error: 'Invalid parameters' }, { status: 400 });
+        }
+
+        const env = await getCloudflareCtx();
+        const items = [{ code, type }];
+
+        // 1. 同步名称 (不传 env，service 内部会自动获取)
+        await syncNamesBulk(items, true);
+
+        // 2. 同步 250 天历史数据
+        await syncHistoryBulk(items, 250, true);
+
+        return NextResponse.json({ success: true, code, type });
+    } catch (e) {
+        console.error(`[SyncAsset] Failed for ${userId}:`, e.message);
+        return NextResponse.json({ success: false, error: e.message }, { status: 500 });
+    }
+}
+</file>
+
 <file path="app/page.js">
 import DashboardClient from '@/components/DashboardClient';
 import { AssetProvider } from '@/providers/AssetProvider';
@@ -2277,112 +2317,6 @@ export async function GET(request) {
 }
 </file>
 
-<file path="app/api/user/assets/route.js">
-import { NextResponse } from 'next/server';
-import { getUserAssets, saveUserAssets } from '@/lib/storage/userRepo';
-import { cleanupSingleAssetIfNotUsed } from '@/lib/storage/maintenanceRepo';
-import { getD1Storage, getCloudflareCtx } from '@/lib/storage/d1Client';
-import { syncHistoryBulk, syncNamesBulk } from '@/lib/services/assetSyncService';
-import { requireUser } from '@/lib/auth/requireUser';
-
-const MAX_ASSETS_PER_USER = 100;
-
-export async function GET(request) {
-    const userId = await requireUser(request);
-
-    if (!userId) {
-        return NextResponse.json({ success: false, error: 'Unauthorized', code: 'UNAUTHORIZED' }, { status: 401 });
-    }
-
-    try {
-        const userAssets = await getUserAssets(userId);
-        return NextResponse.json({ success: true, data: userAssets });
-    } catch (e) {
-        console.error(`[Assets] GET failed for ${userId}:`, e.message);
-        return NextResponse.json({ success: false, error: e.message, code: 'D1_ERROR' }, { status: 503 });
-    }
-}
-
-export async function POST(request) {
-    const userId = await requireUser(request);
-    if (!userId) {
-        return NextResponse.json({ success: false, error: 'Unauthorized', code: 'UNAUTHORIZED' }, { status: 401 });
-    }
-
-    try {
-        const payload = await request.json();
-        const { assets } = payload || {};
-
-        const db = await getD1Storage();
-        if (!db) {
-            return NextResponse.json({ success: false, error: 'Database unavailable', code: 'D1_UNAVAILABLE' }, { status: 503 });
-        }
-
-        const oldAssets = await getUserAssets(userId);
-        const cleanAssets = (Array.isArray(assets) ? assets : [])
-            .filter(a => a && a.code && a.type)
-            .map(a => ({ code: String(a.code).toLowerCase(), type: a.type }));
-
-        if (cleanAssets.length > MAX_ASSETS_PER_USER) {
-            return NextResponse.json({
-                success: false,
-                error: `Tracking limit reached: max ${MAX_ASSETS_PER_USER} assets per account`,
-                code: 'QUOTA_EXCEEDED'
-            }, { status: 400 });
-        }
-
-        const addedAssets = cleanAssets.filter(c => !oldAssets.some(o => o.code === c.code && o.type === c.type));
-        const removedAssets = oldAssets.filter(old => !cleanAssets.some(a => a.code === old.code && a.type === old.type));
-
-        // 1. 优先写入资产基础关联
-        await saveUserAssets(userId, cleanAssets);
-
-        // 2. 利用 Serverless 异步机制后台静默抓取历史数据与名称
-        if (addedAssets.length > 0) {
-            const cloudflare = await getCloudflareCtx();
-            if (cloudflare?.ctx?.waitUntil) {
-                // 利用 ctx.waitUntil 在响应后继续执行抓取任务
-                cloudflare.ctx.waitUntil((async () => {
-                    try {
-                        console.log(`[Assets] Background Sync starting for ${addedAssets.length} new items of ${userId}`);
-                        // 同步名称
-                        await syncNamesBulk(addedAssets, true);
-                        // 同步 250 天历史数据
-                        await syncHistoryBulk(addedAssets, 250, true);
-                        console.log(`[Assets] Background Sync finished for ${userId}`);
-                    } catch (err) {
-                        console.error(`[Assets] Background Sync failed for ${userId}:`, err.message);
-                    }
-                })());
-            } else {
-                // 非 Edge 环境或不支持 waitUntil 时，还是得稍微挡一下或者忽略（本地开发环境通常不支持 waitUntil）
-                console.log(`[Assets] ctx.waitUntil not available, skipping background sync`);
-            }
-        }
-
-        if (removedAssets.length > 0) {
-            // 背景清理
-            const cloudflare = await getCloudflareCtx();
-            const cleanupTask = Promise.all(
-                removedAssets.map(r => cleanupSingleAssetIfNotUsed(r.type, r.code).catch(() => { }))
-            );
-            if (cloudflare?.ctx?.waitUntil) {
-                cloudflare.ctx.waitUntil(cleanupTask);
-            }
-        }
-
-        return NextResponse.json({ success: true, data: { added: addedAssets.length, removed: removedAssets.length } });
-    } catch (e) {
-        console.error(`[Assets] POST critical failure for ${userId}:`, e.message);
-        return NextResponse.json({
-            success: false,
-            error: e.message,
-            code: 'INTERNAL_ERROR'
-        }, { status: 500 });
-    }
-}
-</file>
-
 <file path="components/LogsModal.js">
 'use client';
 
@@ -2750,189 +2684,6 @@ export default function WatchlistSidebar({ assets, mode = 'volatility', selected
             </div>
         </aside>
     );
-}
-</file>
-
-<file path="hooks/useAssetSync.js">
-import { useState, useEffect, useRef, useCallback } from 'react';
-import { fetchBulkStockQuotes } from '@/services/api/quotesService';
-import { fetchBulkNames } from '@/services/api/namesService';
-import { fetchBulkHistory } from '@/services/api/historyService';
-
-const ASSET_NAMES_CACHE_KEY = 'tracker_asset_names_v1';
-
-export function useAssetSync({ userId, isLogged }) {
-    const [assets, setAssets] = useState([]);
-    const [isSyncing, setIsSyncing] = useState(false);
-    const [isSessionReady, setIsSessionReady] = useState(false);
-
-    const refreshAssets = useCallback(async (list) => {
-        if (!list || list.length === 0) return;
-        setIsSyncing(true);
-
-        // 1. 立刻渲染骨架，消除阻塞感。
-        // [Optimized] 优先从 localStorage 读取缓存名称，实现秒开显示
-        let localNames = {};
-        try {
-            localNames = JSON.parse(localStorage.getItem(ASSET_NAMES_CACHE_KEY) || '{}');
-        } catch (e) { /* ignore */ }
-
-        const skeletonAssets = list.map(({ code, type }) => {
-            const cacheKey = `${type}:${code}`;
-            const cachedName = localNames[cacheKey];
-            return {
-                name: cachedName || `加载中...`,
-                price: 0,
-                code,
-                type,
-                history: [],
-                summary: null,
-                changePercent: 0
-            };
-        });
-        setAssets(skeletonAssets);
-
-        // 2. 仅获取基础名称与股票实时报价
-        try {
-            const stockItems = list.filter(a => a.type === 'stock');
-            const [stockQuoteMap, nameMap] = await Promise.all([
-                fetchBulkStockQuotes(stockItems, true),
-                fetchBulkNames(list.map(a => ({ code: a.code, type: a.type })), true),
-            ]);
-
-            const initialAssets = list.map(({ code, type }) => {
-                const histKey = `${type}:${code}`;
-                const name = nameMap[histKey];
-                if (type === 'stock') {
-                    const q = stockQuoteMap[code.toLowerCase()] || stockQuoteMap[code];
-                    const resolvedName = q?.name || (name && name !== code ? name : `股票 ${code}`);
-                    return { ...q, name: resolvedName, code, type };
-                } else {
-                    return { name: (name && name !== code ? name : `基金 ${code}`), price: 0, code, type };
-                }
-            });
-
-            setAssets(initialAssets);
-
-            // [Optimized] 持久化名称到本地，供下次刷新秒显
-            try {
-                const newLocalNames = { ...localNames };
-                Object.entries(nameMap).forEach(([key, val]) => {
-                    if (val && val !== key.split(':')[1]) {
-                        newLocalNames[key] = val;
-                    }
-                });
-                localStorage.setItem(ASSET_NAMES_CACHE_KEY, JSON.stringify(newLocalNames));
-            } catch (e) { /* ignore */ }
-
-            // 3. 异步补充历史数据 (Orchestrator Layer 1.5 - Background Hydration)
-            // 这一步不需要阻塞，完成后会自动触发 UI 图表渲染
-            fetchBulkHistory(list, true, 250).then(histMap => {
-                setAssets(prev => prev.map(a => {
-                    const key = `${a.type}:${a.code}`;
-                    if (histMap[key]) {
-                        return { ...a, ...histMap[key] };
-                    }
-                    return a;
-                }));
-            }).catch(e => console.warn('[Frontend:History] Background fetch failed:', e));
-
-        } catch (e) {
-            console.error('[Frontend] Refresh failed:', e);
-        }
-
-        setIsSyncing(false);
-    }, []);
-
-    // 登录后加载服务端数据
-    useEffect(() => {
-        if (!userId) return;
-
-        // 防竞态：每次 userId 变化创建新的 AbortController
-        // 当 userId 再次变化（快速切换账号），旧的请求会被 abort，防止串户
-        const controller = new AbortController();
-
-        const load = async () => {
-            setIsSyncing(true);
-            setIsSessionReady(false);
-            // 切换账号时立即清空资产，避免短暂显示旧账号数据
-            setAssets([]);
-            try {
-                const res = await fetch('/api/user/assets', {
-                    signal: controller.signal
-                });
-                const json = await res.json();
-                // 后端统一返回 { success, data: [] } envelope 格式
-                const list = json?.data ?? json;
-                if (Array.isArray(list) && list.length > 0) {
-                    await refreshAssets(list);
-                } else {
-                    setAssets([]);
-                }
-            } catch (e) {
-                // AbortError 是主动取消，不是真正的错误，静默处理
-                if (e?.name !== 'AbortError') {
-                    console.error('Failed to load user assets:', e);
-                }
-            }
-            // 只在请求未被取消时更新 Session 状态
-            if (!controller.signal.aborted) {
-                setIsSessionReady(true);
-                setIsSyncing(false);
-            }
-        };
-
-        load();
-
-        // Cleanup：当 userId 变化或组件卸载时，取消正在进行的请求
-        return () => controller.abort();
-    }, [userId, refreshAssets]);
-
-
-    const assetsRef = useRef(assets);
-    useEffect(() => {
-        assetsRef.current = assets;
-    }, [assets]);
-
-    // 数据变化后同步到服务端（暴露给外部主动调用）
-    const syncAssetsToServer = useCallback(async (currentAssets) => {
-        if (!isLogged || !isSessionReady) return;
-        // 优先使用传入的列表，否则读取 Ref（避免把 assets 列入 useCallback 依赖，防止实时报价更新时重建函数引用）
-        const listToSync = Array.isArray(currentAssets) ? currentAssets : assetsRef.current;
-        const skeleton = listToSync.map(a => ({ code: a.code, type: a.type }));
-        try {
-            await fetch('/api/user/assets', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ assets: skeleton }),
-            });
-            localStorage.setItem('tracker_assets_updated', Date.now().toString());
-        } catch (e) {
-            console.error('Sync failed:', e);
-        }
-    }, [isLogged, userId, isSessionReady]);
-
-
-
-    // 监听多标签页同步防冲突 (跨 Tab 数据漂移保护)
-    useEffect(() => {
-        const handleStorage = (e) => {
-            if (e.key === 'tracker_assets_updated' && isLogged) {
-                fetch('/api/user/assets').then(r => r.json()).then(json => {
-                    const list = json?.data ?? json;
-                    if (Array.isArray(list)) {
-                        const newStr = list.map(a => `${a.type}:${a.code}`).sort().join(',');
-                        const oldStr = assetsRef.current.map(a => `${a.type}:${a.code}`).sort().join(',');
-                        if (newStr !== oldStr) refreshAssets(list);
-                    }
-                }).catch(e => console.warn('[Frontend:StorageSync] Cross-tab fetch failed:', e));
-            }
-        };
-        window.addEventListener('storage', handleStorage);
-        return () => window.removeEventListener('storage', handleStorage);
-    }, [isLogged, userId, refreshAssets]);
-
-    return { assets, setAssets, isSyncing, setIsSyncing, assetsRef, refreshAssets, syncAssetsToServer };
 }
 </file>
 
@@ -4035,6 +3786,324 @@ export async function GET(request) {
 }
 </file>
 
+<file path="app/api/user/assets/route.js">
+import { NextResponse } from 'next/server';
+import { getUserAssets, saveUserAssets } from '@/lib/storage/userRepo';
+import { cleanupSingleAssetIfNotUsed } from '@/lib/storage/maintenanceRepo';
+import { getD1Storage, getCloudflareCtx } from '@/lib/storage/d1Client';
+import { syncHistoryBulk, syncNamesBulk } from '@/lib/services/assetSyncService';
+import { requireUser } from '@/lib/auth/requireUser';
+
+const MAX_ASSETS_PER_USER = 100;
+
+export async function GET(request) {
+    const userId = await requireUser(request);
+
+    if (!userId) {
+        return NextResponse.json({ success: false, error: 'Unauthorized', code: 'UNAUTHORIZED' }, { status: 401 });
+    }
+
+    try {
+        const userAssets = await getUserAssets(userId);
+        return NextResponse.json({ success: true, data: userAssets });
+    } catch (e) {
+        console.error(`[Assets] GET failed for ${userId}:`, e.message);
+        return NextResponse.json({ success: false, error: e.message, code: 'D1_ERROR' }, { status: 503 });
+    }
+}
+
+export async function POST(request) {
+    const userId = await requireUser(request);
+    if (!userId) {
+        return NextResponse.json({ success: false, error: 'Unauthorized', code: 'UNAUTHORIZED' }, { status: 401 });
+    }
+
+    try {
+        const payload = await request.json();
+        const { assets } = payload || {};
+
+        const db = await getD1Storage();
+        if (!db) {
+            return NextResponse.json({ success: false, error: 'Database unavailable', code: 'D1_UNAVAILABLE' }, { status: 503 });
+        }
+
+        const oldAssets = await getUserAssets(userId);
+        const cleanAssets = (Array.isArray(assets) ? assets : [])
+            .filter(a => a && a.code && a.type)
+            .map(a => ({ code: String(a.code).toLowerCase(), type: a.type }));
+
+        if (cleanAssets.length > MAX_ASSETS_PER_USER) {
+            return NextResponse.json({
+                success: false,
+                error: `Tracking limit reached: max ${MAX_ASSETS_PER_USER} assets per account`,
+                code: 'QUOTA_EXCEEDED'
+            }, { status: 400 });
+        }
+
+        const addedAssets = cleanAssets.filter(c => !oldAssets.some(o => o.code === c.code && o.type === c.type));
+        const removedAssets = oldAssets.filter(old => !cleanAssets.some(a => a.code === old.code && a.type === old.type));
+
+        // 1. 优先写入资产基础关联
+        await saveUserAssets(userId, cleanAssets);
+
+        // 1. 优先写入资产基础关联
+        await saveUserAssets(userId, cleanAssets);
+
+        // 2. 架构减负：移除原本笨重的 ctx.waitUntil 历史抓取逻辑。
+        // 现在抓取压力由前端 useAssetSync 识别数据空洞并分片发起请求。
+        // 这里仅辅助触发轻量级的名称预热（可选）或直接返回告知前端哪些是新增的。
+
+        if (removedAssets.length > 0) {
+            // 背景清理 (保留轻量级清理任务)
+            const cloudflare = await getCloudflareCtx();
+            const cleanupTask = Promise.all(
+                removedAssets.map(r => cleanupSingleAssetIfNotUsed(r.type, r.code).catch(() => { }))
+            );
+            if (cloudflare?.ctx?.waitUntil) {
+                cloudflare.ctx.waitUntil(cleanupTask);
+            }
+        }
+
+        return NextResponse.json({
+            success: true,
+            data: {
+                added: addedAssets.map(a => ({ code: a.code, type: a.type })),
+                removedCount: removedAssets.length
+            }
+        });
+    } catch (e) {
+        console.error(`[Assets] POST critical failure for ${userId}:`, e.message);
+        return NextResponse.json({
+            success: false,
+            error: e.message,
+            code: 'INTERNAL_ERROR'
+        }, { status: 500 });
+    }
+}
+</file>
+
+<file path="hooks/useAssetSync.js">
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { fetchBulkStockQuotes } from '@/services/api/quotesService';
+import { fetchBulkNames } from '@/services/api/namesService';
+import { fetchBulkHistory } from '@/services/api/historyService';
+
+const ASSET_NAMES_CACHE_KEY = 'tracker_asset_names_v1';
+
+export function useAssetSync({ userId, isLogged }) {
+    const [assets, setAssets] = useState([]);
+    const [isSyncing, setIsSyncing] = useState(false);
+    const [isSessionReady, setIsSessionReady] = useState(false);
+
+    const refreshAssets = useCallback(async (list) => {
+        if (!list || list.length === 0) return;
+        setIsSyncing(true);
+
+        // 1. 立刻渲染骨架，消除阻塞感。
+        // [Optimized] 优先从 localStorage 读取缓存名称，实现秒开显示
+        let localNames = {};
+        try {
+            localNames = JSON.parse(localStorage.getItem(ASSET_NAMES_CACHE_KEY) || '{}');
+        } catch (e) { /* ignore */ }
+
+        const skeletonAssets = list.map(({ code, type }) => {
+            const cacheKey = `${type}:${code}`;
+            const cachedName = localNames[cacheKey];
+            return {
+                name: cachedName || `加载中...`,
+                price: 0,
+                code,
+                type,
+                history: [],
+                summary: null,
+                changePercent: 0
+            };
+        });
+        setAssets(skeletonAssets);
+
+        // 2. 仅获取基础名称与股票实时报价
+        try {
+            const stockItems = list.filter(a => a.type === 'stock');
+            const [stockQuoteMap, nameMap] = await Promise.all([
+                fetchBulkStockQuotes(stockItems, true),
+                fetchBulkNames(list.map(a => ({ code: a.code, type: a.type })), true),
+            ]);
+
+            const initialAssets = list.map(({ code, type }) => {
+                const histKey = `${type}:${code}`;
+                const name = nameMap[histKey];
+                if (type === 'stock') {
+                    const q = stockQuoteMap[code.toLowerCase()] || stockQuoteMap[code];
+                    const resolvedName = q?.name || (name && name !== code ? name : `股票 ${code}`);
+                    return { ...q, name: resolvedName, code, type };
+                } else {
+                    return { name: (name && name !== code ? name : `基金 ${code}`), price: 0, code, type };
+                }
+            });
+
+            setAssets(initialAssets);
+
+            // [Optimized] 持久化名称到本地，供下次刷新秒显
+            try {
+                const newLocalNames = { ...localNames };
+                Object.entries(nameMap).forEach(([key, val]) => {
+                    if (val && val !== key.split(':')[1]) {
+                        newLocalNames[key] = val;
+                    }
+                });
+                localStorage.setItem(ASSET_NAMES_CACHE_KEY, JSON.stringify(newLocalNames));
+            } catch (e) { /* ignore */ }
+
+            // 3. 异步补充历史数据 (Orchestrator Layer 1.5 - Background Hydration)
+            // 这一步不需要阻塞，完成后会自动触发 UI 图表渲染
+            fetchBulkHistory(list, true, 250).then(histMap => {
+                setAssets(prev => prev.map(a => {
+                    const key = `${a.type}:${a.code}`;
+                    if (histMap[key]) {
+                        return { ...a, ...histMap[key] };
+                    }
+                    return a;
+                }));
+            }).catch(e => console.warn('[Frontend:History] Background fetch failed:', e));
+
+        } catch (e) {
+            console.error('[Frontend] Refresh failed:', e);
+        }
+
+        setIsSyncing(false);
+    }, []);
+
+    // 登录后加载服务端数据
+    useEffect(() => {
+        if (!userId) return;
+
+        // 防竞态：每次 userId 变化创建新的 AbortController
+        // 当 userId 再次变化（快速切换账号），旧的请求会被 abort，防止串户
+        const controller = new AbortController();
+
+        const load = async () => {
+            setIsSyncing(true);
+            setIsSessionReady(false);
+            // 切换账号时立即清空资产，避免短暂显示旧账号数据
+            setAssets([]);
+            try {
+                const res = await fetch('/api/user/assets', {
+                    signal: controller.signal
+                });
+                const json = await res.json();
+                // 后端统一返回 { success, data: [] } envelope 格式
+                const list = json?.data ?? json;
+                if (Array.isArray(list) && list.length > 0) {
+                    await refreshAssets(list);
+                } else {
+                    setAssets([]);
+                }
+            } catch (e) {
+                // AbortError 是主动取消，不是真正的错误，静默处理
+                if (e?.name !== 'AbortError') {
+                    console.error('Failed to load user assets:', e);
+                }
+            }
+            // 只在请求未被取消时更新 Session 状态
+            if (!controller.signal.aborted) {
+                setIsSessionReady(true);
+                setIsSyncing(false);
+            }
+        };
+
+        load();
+
+        // Cleanup：当 userId 变化或组件卸载时，取消正在进行的请求
+        return () => controller.abort();
+    }, [userId, refreshAssets]);
+
+
+    // [Feature: Client-side Offloading] 
+    // 前端主动拨调：发现数据空洞（缺失名称或历史）时，分片同步至 D1
+    useEffect(() => {
+        if (!isSessionReady || isSyncing) return;
+
+        const pending = assets.filter(a =>
+            a.name === '加载中...' ||
+            !a.history || a.history.length === 0
+        );
+
+        if (pending.length === 0) return;
+
+        // 设置并发限制，避免瞬间冲垮 Worker 或触发频率限制
+        const CONCURRENCY = 2;
+        const toSync = pending.slice(0, CONCURRENCY);
+
+        const runSync = async () => {
+            await Promise.all(toSync.map(async (item) => {
+                try {
+                    const res = await fetch('/api/user/sync-asset', {
+                        method: 'POST',
+                        body: JSON.stringify({ code: item.code, type: item.type })
+                    });
+                    if (res.ok) {
+                        // 同步成功后，重新局部刷新该资产的数据
+                        // 这样 D1 中已经有了数据，fetchBulkHistory 会直接命中数据库
+                        await refreshAssets(assetsRef.current);
+                    }
+                } catch (e) {
+                    console.warn(`[ClientSync] Failed for ${item.code}:`, e.message);
+                }
+            }));
+        };
+
+        const timer = setTimeout(runSync, 1000);
+        return () => clearTimeout(timer);
+    }, [assets, isSessionReady, isSyncing, refreshAssets]);
+
+
+    const assetsRef = useRef(assets);
+    useEffect(() => {
+        assetsRef.current = assets;
+    }, [assets]);
+
+    // 数据变化后同步到服务端（暴露给外部主动调用）
+    const syncAssetsToServer = useCallback(async (currentAssets) => {
+        if (!isLogged || !isSessionReady) return;
+        // 优先使用传入的列表，否则读取 Ref（避免把 assets 列入 useCallback 依赖，防止实时报价更新时重建函数引用）
+        const listToSync = Array.isArray(currentAssets) ? currentAssets : assetsRef.current;
+        const skeleton = listToSync.map(a => ({ code: a.code, type: a.type }));
+        try {
+            await fetch('/api/user/assets', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ assets: skeleton }),
+            });
+            localStorage.setItem('tracker_assets_updated', Date.now().toString());
+        } catch (e) {
+            console.error('Sync failed:', e);
+        }
+    }, [isLogged, userId, isSessionReady]);
+
+
+
+    // 监听多标签页同步防冲突 (跨 Tab 数据漂移保护)
+    useEffect(() => {
+        const handleStorage = (e) => {
+            if (e.key === 'tracker_assets_updated' && isLogged) {
+                fetch('/api/user/assets').then(r => r.json()).then(json => {
+                    const list = json?.data ?? json;
+                    if (Array.isArray(list)) {
+                        const newStr = list.map(a => `${a.type}:${a.code}`).sort().join(',');
+                        const oldStr = assetsRef.current.map(a => `${a.type}:${a.code}`).sort().join(',');
+                        if (newStr !== oldStr) refreshAssets(list);
+                    }
+                }).catch(e => console.warn('[Frontend:StorageSync] Cross-tab fetch failed:', e));
+            }
+        };
+        window.addEventListener('storage', handleStorage);
+        return () => window.removeEventListener('storage', handleStorage);
+    }, [isLogged, userId, refreshAssets]);
+
+    return { assets, setAssets, isSyncing, setIsSyncing, assetsRef, refreshAssets, syncAssetsToServer };
+}
+</file>
+
 <file path="lib/services/quoteFetcher.js">
 /**
  * src/lib/services/quoteFetcher.js
@@ -4857,160 +4926,6 @@ CREATE INDEX IF NOT EXISTS idx_logs_timestamp ON system_logs(timestamp);
 CREATE INDEX IF NOT EXISTS idx_asset_history_created_at ON asset_history (created_at);
 </file>
 
-<file path="worker-entry.js">
-/**
- * worker-entry.js
- *
- * Cloudflare Workers 统一入口。
- *
- * fetch handler     → 透传给 open-next，处理所有 Next.js HTTP 请求
- * scheduled handler → 按 event.cron 字符串精确分流到对应任务
- *
- * 重要：open-next 生成的 worker.js 只导出 fetch handler，
- * scheduled event 无法被其捕获，必须在本文件单独声明。
- * wrangler.toml 的 main 字段须指向本文件。
- */
-
-import openNextWorker from './.open-next/worker.js';
-import { runHistorySync } from './lib/cron/historySync.js';
-import { runRealtimeSync } from './lib/cron/realtimeSync.js';
-import { runSentinel } from './lib/cron/sentinel.js';
-import { fetchFundHistory } from './lib/services/historyFetcher.js';
-import { insertDailyPricesBatch } from './lib/storage/historyRepo.js';
-
-export default {
-    // ── HTTP：全部交给 open-next ──────────────────────────────────────────────
-    fetch(request, env, ctx) {
-        return openNextWorker.fetch(request, env, ctx);
-    },
-
-    // ── Cron：按表达式字符串精确路由 ─────────────────────────────────────────
-    //
-    // event.cron 值与 wrangler.toml [triggers].crons 里的字符串完全一致，
-    // 可直接用 switch/case 匹配，无需正则解析。
-    async scheduled(event, env, ctx) {
-        switch (event.cron) {
-
-            // 历史数据增量同步：每个交易日收盘后 21:00，次日凌晨 03:00 补跑
-            case '0 13 * * 1-5':
-            case '0 19 * * 1-6':
-                ctx.waitUntil(runHistorySync(env));
-                break;
-
-            // 盘中实时行情抓取：周一到周五 09:00-15:55（北京时间），每 5 分钟
-            case '*/5 1-7 * * 1-5':
-                ctx.waitUntil(runRealtimeSync(env));
-                break;
-
-            // 外部接口健康巡检：每 15 分钟全天候运行
-            case '*/15 * * * *':
-                ctx.waitUntil(runSentinel(env));
-                break;
-
-            // 基金异步重刷队列处理器：每分钟运行
-            case '*/1 * * * *':
-                ctx.waitUntil(processFundQueue(env));
-                break;
-
-            default:
-                console.warn(`[Scheduled] Unknown cron: "${event.cron}"`);
-        }
-    },
-};
-
-/**
- * 基金异步重刷队列处理器
- * 职责：分批从 KV 抓取 Pending 任务，执行抓取并写入 D1
- */
-async function processFundQueue(env) {
-    const BATCH_SIZE = 5; // 每次处理 5 个，防止超时和配额溢出
-    const QUEUE = env.STOCK_DATA;
-    const DB = env.DB;
-
-    if (!QUEUE) {
-        console.error('[Queue] STOCK_DATA KV not bound');
-        return;
-    }
-
-    // 1. 获取所有基金任务
-    const list = await QUEUE.list({ prefix: 'fund:' });
-    if (!list.keys.length) return;
-
-    // 2. 取前 N 个任务
-    const tasks = list.keys.slice(0, BATCH_SIZE);
-
-    for (const keyObj of tasks) {
-        const keyName = keyObj.name;
-        const raw = await QUEUE.get(keyName);
-        if (!raw) continue;
-
-        const job = JSON.parse(raw);
-        const code = keyName.split(':')[1];
-
-        // 防死锁：如果处于 processing 状态且更新时间在 5 分钟内，跳过
-        if (job.status === 'processing' && (Date.now() - job.updatedAt < 300000)) {
-            continue;
-        }
-
-        try {
-            // 标记为正在处理
-            await QUEUE.put(keyName, JSON.stringify({
-                ...job,
-                status: 'processing',
-                updatedAt: Date.now()
-            }));
-
-            console.log(`[Queue] Processing ${code} (force=${job.force})`);
-
-            // 抓取历史 (250天)
-            const history = await fetchFundHistory(code, 250);
-            if (!history?.length) {
-                // 如果抓取失败且重试次数未超限，标记为 pending 等待下次
-                if ((job.retry || 0) < 3) {
-                    await QUEUE.put(keyName, JSON.stringify({
-                        ...job,
-                        status: 'pending',
-                        retry: (job.retry || 0) + 1,
-                        updatedAt: Date.now()
-                    }));
-                } else {
-                    // 超限则放弃
-                    await QUEUE.delete(keyName);
-                    console.error(`[Queue] Max retries reached for ${code}, dropped.`);
-                }
-                continue;
-            }
-
-            // 写入 D1
-            if (job.force) {
-                // 强制模式：先删后写
-                await DB.prepare('DELETE FROM asset_history WHERE code = ? AND type = ?').bind(code.toLowerCase(), 'fund').run();
-            }
-
-            // 执行分片写入 (historyRepo.js 的 insertDailyPricesBatch 逻辑)
-            await insertDailyPricesBatch(
-                history.map(r => ({ code, type: 'fund', price: r.value, date: r.date })),
-                env
-            );
-
-            // 成功后从队列移除
-            await QUEUE.delete(keyName);
-            console.log(`[Queue] Successfully completed ${code}`);
-
-        } catch (e) {
-            console.error(`[Queue] Error processing ${code}:`, e.message);
-            // 发生异常，回退到 pending
-            await QUEUE.put(keyName, JSON.stringify({
-                ...job,
-                status: 'pending',
-                retry: (job.retry || 0) + 1,
-                updatedAt: Date.now()
-            }));
-        }
-    }
-}
-</file>
-
 <file path="app/api/history/bulk/route.js">
 import { NextResponse } from 'next/server'
 import { syncHistoryBulk } from '@/lib/services/assetSyncService'
@@ -5362,60 +5277,94 @@ export async function deleteUser(userId, env = null) {
 }
 </file>
 
-<file path="app/api/admin/queue/route.js">
-import { NextResponse } from 'next/server';
-import { isAdminAuthorized } from '@/lib/storage/authRepo';
+<file path="worker-entry.js">
+/**
+ * worker-entry.js
+ * 
+ * Cloudflare Workers 统一入口 (Refactored for D1 Task Queue)
+ */
 
-export const dynamic = 'force-dynamic';
-export const revalidate = 0;
+import openNextWorker from './.open-next/worker.js';
+import { runHistorySync } from './lib/cron/historySync.js';
+import { runRealtimeSync } from './lib/cron/realtimeSync.js';
+import { runSentinel } from './lib/cron/sentinel.js';
 
-import { getKvStorage } from '@/lib/storage/d1Client';
+export default {
+    fetch(request, env, ctx) {
+        return openNextWorker.fetch(request, env, ctx);
+    },
 
-export async function GET(request) {
-    if (!(await isAdminAuthorized(request))) {
-        return NextResponse.json({ error: 'Unauthorized' }, { status: 403 });
-    }
-
-    const QUEUE = await getKvStorage('STOCK_DATA');
-    if (!QUEUE) {
-        return NextResponse.json({ queue: [], count: 0, status: 'error', message: 'STOCK_DATA KV not bound' });
-    }
-
-    try {
-        const list = await QUEUE.list({ prefix: 'fund:' });
-        const items = await Promise.all(list.keys.map(async (key) => {
-            const val = await QUEUE.get(key.name);
-            return {
-                id: key.name.split(':')[1],
-                ...(val ? JSON.parse(val) : { status: 'unknown' })
-            };
-        }));
-
-        return NextResponse.json({
-            queue: items,
-            count: items.length,
-            status: items.some(i => i.status === 'processing') ? 'running' : (items.length > 0 ? 'pending' : 'idle')
-        });
-    } catch (e) {
-        return NextResponse.json({ error: e.message, status: 'error' }, { status: 500 });
-    }
-}
+    async scheduled(event, env, ctx) {
+        switch (event.cron) {
+            case '0 13 * * 1-5':
+            case '0 19 * * 1-6':
+                ctx.waitUntil(runHistorySync(env));
+                break;
+            case '*/5 1-7 * * 1-5':
+                ctx.waitUntil(runRealtimeSync(env));
+                break;
+            case '*/15 * * * *':
+                ctx.waitUntil(runSentinel(env));
+                break;
+            case '*/1 * * * *':
+                // 切换至 D1 任务中心处理器
+                ctx.waitUntil(processSyncJobs(env));
+                break;
+            default:
+                console.warn(`[Scheduled] Unknown cron: "${event.cron}"`);
+        }
+    },
+};
 
 /**
- * 允许手动重置/清理队列（危险操作，仅限管理员）
+ * D1 任务中心处理器
+ * 采用原子锁定模式：通过 CTE 锁定任务并立即标记为 processing，防止多实例重复执行
  */
-export async function DELETE(request) {
-    if (!(await isAdminAuthorized(request))) {
-        return NextResponse.json({ error: 'Unauthorized' }, { status: 403 });
+async function processSyncJobs(env) {
+    const DB = env.DB;
+    if (!DB) return;
+
+    const BATCH_SIZE = 5;
+    try {
+        const { results: jobs } = await DB.prepare(`
+            WITH targets AS (
+                SELECT id FROM sync_jobs 
+                WHERE status = 'pending' 
+                ORDER BY created_at ASC 
+                LIMIT ?
+            )
+            UPDATE sync_jobs 
+            SET status = 'processing', updated_at = CURRENT_TIMESTAMP 
+            WHERE id IN (SELECT id FROM targets)
+            RETURNING *
+        `).bind(BATCH_SIZE).all();
+
+        if (!jobs || jobs.length === 0) return;
+
+        console.log(`[Queue:D1] Processing ${jobs.length} jobs`);
+
+        for (const job of jobs) {
+            try {
+                if (job.type === 'fund_history') {
+                    const { syncHistoryBulk } = await import('./lib/services/assetSyncService');
+                    // 传入 env 确保 service 内部获取正确的 DB 绑定
+                    await syncHistoryBulk([{ code: job.code, type: 'fund' }], 250, true, env);
+                }
+
+                await DB.prepare("UPDATE sync_jobs SET status = 'completed', updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+                    .bind(job.id)
+                    .run();
+
+            } catch (jobErr) {
+                console.error(`[Queue:D1] Job ${job.id} failed:`, jobErr.message);
+                await DB.prepare("UPDATE sync_jobs SET status = 'failed', error_msg = ?, retry_count = retry_count + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+                    .bind(jobErr.message, job.id)
+                    .run();
+            }
+        }
+    } catch (e) {
+        console.error('[Queue:D1] Batch process failed:', e.message);
     }
-
-    const QUEUE = await getKvStorage('STOCK_DATA');
-    if (!QUEUE) return NextResponse.json({ error: 'KV not found' }, { status: 500 });
-
-    const list = await QUEUE.list({ prefix: 'fund:' });
-    await Promise.all(list.keys.map(k => QUEUE.delete(k.name)));
-
-    return NextResponse.json({ ok: true, cleared: list.keys.length });
 }
 </file>
 
@@ -6478,6 +6427,65 @@ export async function getHistory(code, type, days = 250, env = null) {
 }
 </file>
 
+<file path="app/api/admin/queue/route.js">
+import { NextResponse } from 'next/server';
+import { isAdminAuthorized } from '@/lib/storage/authRepo';
+
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+
+import { getKvStorage } from '@/lib/storage/d1Client';
+
+import { queryAll, getD1Storage } from '@/lib/storage/d1Client';
+
+export async function GET(request) {
+    if (!(await isAdminAuthorized(request))) {
+        return NextResponse.json({ error: 'Unauthorized' }, { status: 403 });
+    }
+
+    const db = await getD1Storage();
+    if (!db) return NextResponse.json({ error: 'DB unavailable' }, { status: 500 });
+
+    try {
+        // 读取最近 100 条任务状态用于前端显示
+        const items = await queryAll(`
+            SELECT id, code, status, type, updated_at 
+            FROM sync_jobs 
+            ORDER BY updated_at DESC LIMIT 100
+        `);
+
+        return NextResponse.json({
+            queue: items.map(i => ({
+                id: i.code,
+                status: i.status,
+                type: i.type,
+                updatedAt: i.updated_at
+            })),
+            count: items.length,
+            status: items.some(i => i.status === 'processing') ? 'running' : (items.some(i => i.status === 'pending') ? 'pending' : 'idle')
+        });
+    } catch (e) {
+        return NextResponse.json({ error: e.message, status: 'error' }, { status: 500 });
+    }
+}
+
+/**
+ * 允许手动清理已完成或已失败的任务
+ */
+export async function DELETE(request) {
+    if (!(await isAdminAuthorized(request))) {
+        return NextResponse.json({ error: 'Unauthorized' }, { status: 403 });
+    }
+
+    const db = await getD1Storage();
+    if (!db) return NextResponse.json({ error: 'DB unavailable' }, { status: 500 });
+
+    await db.prepare("DELETE FROM sync_jobs WHERE status IN ('completed', 'failed')").run();
+
+    return NextResponse.json({ ok: true });
+}
+</file>
+
 <file path="components/AssetCard.js">
 'use client';
 
@@ -6868,104 +6876,6 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 </file>
 
-<file path="app/api/admin/refetch-fund-history/route.js">
-/**
- * src/app/api/admin/refetch-fund-history/route.js
- * 
- * 专用基金重刷接口，采用 Streaming (NDJSON) 响应以防止超时及提供实时进度。
- */
-
-import { NextResponse } from 'next/server';
-import { isAdminAuthorized } from '@/lib/storage/authRepo';
-import { fetchFundHistory } from '@/lib/services/historyFetcher';
-import { insertDailyPricesBatch, deleteAssetHistory } from '@/lib/storage/historyRepo';
-import { getKvStorage, getD1Storage } from '@/lib/storage/d1Client';
-
-export const dynamic = 'force-dynamic';
-export const maxDuration = 300; // 5分钟限时
-
-const HISTORY_DAYS = 250;
-
-export async function GET(request) {
-    // 1. 鉴权
-    if (!(await isAdminAuthorized(request))) {
-        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
-    const { searchParams } = new URL(request.url);
-    const force = searchParams.get('force') === '1';
-
-    // 2. 准备数据库
-    const db = await getD1Storage();
-    if (!db) return NextResponse.json({ error: 'DB unavailable' }, { status: 500 });
-
-    // 3. 获取 KV 绑定 (由 Cloudflare 提供)
-    let FUND_QUEUE = await getKvStorage('STOCK_DATA');
-
-    // ── [DEBUG] 生产环境环境变量探测 ──────────────────────────────────────────
-    if (!FUND_QUEUE) {
-        try {
-            const ctx = await getCloudflareCtx();
-            const debugInfo = {
-                envKeys: Object.keys(process.env || {}),
-                ctxEnvKeys: Object.keys(ctx?.env || {}),
-                globalKeys: Object.keys(globalThis || {}).filter(k => k.match(/^[A-Z_]+$/)),
-                runtime: 'EdgeRuntime'
-            };
-            await db.prepare("INSERT INTO system_logs (level, module, message) VALUES (?, ?, ?)")
-                .bind('ERROR', 'KV_DEBUG', `Missing STOCK_DATA. Available keys: ${JSON.stringify(debugInfo)}`)
-                .run();
-        } catch (e) {
-            console.error('Debug log failed', e);
-        }
-        return NextResponse.json({
-            error: 'STOCK_DATA KV 未绑定，请检查 Cloudflare 配置。调试日志已记录至 system_logs 表',
-            tips: '请确认是否已在 Cloudflare 控制台将 KV Namespace 绑定到名为 STOCK_DATA 的变量上'
-        }, { status: 500 });
-    }
-
-    // 4. 获取所有待重刷基金列表
-    const { results: funds } = await db
-        .prepare("SELECT DISTINCT code FROM user_assets WHERE type = 'fund'")
-        .all();
-
-    if (!funds?.length) return NextResponse.json({ ok: true, message: 'No funds found' });
-
-    // 5. 任务投递：将重刷需求写入 KV 队列
-    const t0 = Date.now();
-    let submittedCount = 0;
-    const errors = [];
-
-    // 分批次投递以防 API 超时
-    const writes = funds.map(async (f) => {
-        try {
-            const key = `fund:${f.code.toLowerCase()}`;
-            await FUND_QUEUE.put(key, JSON.stringify({
-                status: 'pending',
-                retry: 0,
-                force: force,
-                updatedAt: Date.now()
-            }));
-            submittedCount++;
-        } catch (e) {
-            errors.push(`${f.code}: ${e.message}`);
-        }
-    });
-
-    await Promise.all(writes);
-
-    const elapsed = Date.now() - t0;
-    return NextResponse.json({
-        ok: true,
-        message: `已将 ${submittedCount} 只基金投递至后端异步队列`,
-        total: funds.length,
-        submitted: submittedCount,
-        errors: errors.length ? errors : undefined,
-        elapsed_ms: elapsed
-    });
-}
-</file>
-
 <file path="components/DashboardClient.js">
 'use client';
 
@@ -7202,6 +7112,70 @@ export default function DashboardClient() {
             </footer>
         </main>
     );
+}
+</file>
+
+<file path="app/api/admin/refetch-fund-history/route.js">
+/**
+ * src/app/api/admin/refetch-fund-history/route.js
+ * 
+ * 专用基金重刷接口，采用 Streaming (NDJSON) 响应以防止超时及提供实时进度。
+ */
+
+import { NextResponse } from 'next/server';
+import { isAdminAuthorized } from '@/lib/storage/authRepo';
+import { fetchFundHistory } from '@/lib/services/historyFetcher';
+import { insertDailyPricesBatch, deleteAssetHistory } from '@/lib/storage/historyRepo';
+import { getKvStorage, getD1Storage } from '@/lib/storage/d1Client';
+
+export const dynamic = 'force-dynamic';
+export const maxDuration = 300; // 5分钟限时
+
+const HISTORY_DAYS = 250;
+
+export async function GET(request) {
+    // 1. 鉴权
+    if (!(await isAdminAuthorized(request))) {
+        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const { searchParams } = new URL(request.url);
+    const force = searchParams.get('force') === '1';
+
+    // 2. 准备数据库
+    const db = await getD1Storage();
+    if (!db) return NextResponse.json({ error: 'DB unavailable' }, { status: 500 });
+
+    // 4. 获取所有待重刷基金列表
+    const { results: funds } = await db
+        .prepare("SELECT DISTINCT code FROM user_assets WHERE type = 'fund'")
+        .all();
+
+    if (!funds?.length) return NextResponse.json({ ok: true, message: 'No funds found' });
+
+    // 5. 任务投递：写入 D1 sync_jobs 任务表
+    const t0 = Date.now();
+    try {
+        const stmts = funds.map(f =>
+            db.prepare(`
+                INSERT INTO sync_jobs (type, code, payload, status) 
+                VALUES (?, ?, ?, 'pending')
+            `).bind('fund_history', f.code.toLowerCase(), JSON.stringify({ force }))
+        );
+
+        await db.batch(stmts);
+
+        const elapsed = Date.now() - t0;
+        return NextResponse.json({
+            ok: true,
+            message: `已向任务中心投递 ${funds.length} 只基金的重刷请求`,
+            total: funds.length,
+            elapsed_ms: elapsed
+        });
+    } catch (e) {
+        console.error('[Admin:Refetch] Task injection failed:', e.message);
+        return NextResponse.json({ ok: false, error: '任务投递失败: ' + e.message }, { status: 500 });
+    }
 }
 </file>
 

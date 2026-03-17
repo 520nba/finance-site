@@ -98,3 +98,17 @@ CREATE TABLE IF NOT EXISTS system_logs (
     message TEXT NOT NULL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+
+-- 11. 异步同步任务
+CREATE TABLE IF NOT EXISTS sync_jobs (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    type        TEXT NOT NULL,
+    code        TEXT NOT NULL,
+    payload     TEXT,
+    status      TEXT DEFAULT 'pending',
+    retry_count INTEGER DEFAULT 0,
+    error_msg   TEXT,
+    created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_sync_jobs_status ON sync_jobs(status, created_at);
