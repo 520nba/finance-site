@@ -118,3 +118,18 @@ CREATE INDEX IF NOT EXISTS idx_logs_timestamp ON system_logs(timestamp);
 
 -- [Optimization] 提升近期统计查询速度 (用于 recent_growth)
 CREATE INDEX IF NOT EXISTS idx_asset_history_created_at ON asset_history (created_at);
+
+-- 异步同步任务
+CREATE TABLE IF NOT EXISTS sync_jobs (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    type        TEXT NOT NULL,
+    code        TEXT NOT NULL,
+    payload     TEXT,
+    status      TEXT DEFAULT 'pending',
+    retry_count INTEGER DEFAULT 0,
+    error_msg   TEXT,
+    created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_sync_jobs_status ON sync_jobs(status, updated_at);
+CREATE INDEX IF NOT EXISTS idx_sync_jobs_code ON sync_jobs(code);
