@@ -5,12 +5,11 @@
  * 正式生产由 wrangler.toml cron + scheduled handler 驱动，本文件仅供调试。
  *
  * 调用方式：
- *   GET /api/cron/sync?task=realtime&secret=YOUR_SECRET
- *   GET /api/cron/sync?task=history&secret=YOUR_SECRET
- *   GET /api/cron/sync?task=sentinel&secret=YOUR_SECRET
+ *   GET /api/cron/sync?task=realtime&key=YOUR_SECRET
+ *   GET /api/cron/sync?task=history&key=YOUR_SECRET
  *
- * 环境变量：
- *   CRON_SECRET  调用密钥，必须配置，否则非生产环境也拒绝访问
+ * 鉴权：
+ *   统一通过 isAdminAuthorized 进行校验（支持 Session Token 或 ?key=xxx）
  */
 
 import { NextResponse } from 'next/server';
@@ -55,9 +54,10 @@ export async function GET(request) {
     try {
         const t0 = Date.now();
         const force = searchParams.get('force') === '1';
-        await runner(env, { force });
+        const type = searchParams.get('type');
+        await runner(env, { force, type });
         const elapsed = Date.now() - t0;
-        return NextResponse.json({ success: true, task, force, elapsed_ms: elapsed });
+        return NextResponse.json({ success: true, task, force, type, elapsed_ms: elapsed });
     } catch (e) {
         console.error(`[CronRoute] task=${task} failed:`, e.message);
         return NextResponse.json({ success: false, task, error: e.message }, { status: 500 });

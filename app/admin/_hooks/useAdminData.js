@@ -124,15 +124,14 @@ export function useAdminData(secretKey, showToast, onAuthFailure) {
     const triggerForceSync = useCallback((type) => {
         const typeZh = type === 'fund' ? '基金' : '股票';
         setConfirmAction({
-            message: `!! 协议强制覆盖 !!\n\n系统将针对 ${typeZh} 执行特定刷新逻辑：\n${type === 'fund' ? '• 基金：先清空历史，再抓取最新 250 天数据 (流式进度)' : '• 股票：沿用旧版强制重写逻辑'}\n\n执行指令？`,
+            message: `!! 协议强制覆盖 !!\n\n系统将针对 ${typeZh} 执行特定刷新逻辑：\n${type === 'fund' ? '• 基金：先拉取 250 天数据，确认成功后清空旧记录并重写 (流式进度)' : '• 股票：沿用旧版强制重写逻辑'}\n\n执行指令？`,
             onConfirm: async () => {
                 setLoading(true);
                 try {
+                    const headers = { 'x-admin-key': secretKey };
                     if (type === 'fund') {
                         // ── 基金：调用专门的 Streaming 接口 ──────────────────────
-                        const res = await fetch(`/api/admin/refetch-fund-history?force=1`, {
-                            headers: { 'x-admin-key': secretKey }
-                        });
+                        const res = await fetch(`/api/admin/refetch-fund-history?force=1`, { headers });
 
                         if (!res.ok) throw new Error('接口响应异常');
 
@@ -150,7 +149,6 @@ export function useAdminData(secretKey, showToast, onAuthFailure) {
                                     try {
                                         const data = JSON.parse(line);
                                         if (data.status === 'ok') {
-                                            // 可以在此处收集 ok 数量做更精细的显示，此处先简单提示进度
                                             if (data.index % 5 === 0) showToast(`重刷中: ${data.index} 只完成`, 'info');
                                         } else if (data.status === 'done') {
                                             showToast(`[成功] 基金全量重刷完成，共处理 ${data.total} 只`, 'success');
