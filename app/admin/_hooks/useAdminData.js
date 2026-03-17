@@ -148,12 +148,18 @@ export function useAdminData(secretKey, showToast, onAuthFailure) {
                                 for (const line of lines) {
                                     try {
                                         const data = JSON.parse(line);
-                                        if (data.status === 'ok') {
-                                            if (data.index % 5 === 0) showToast(`重刷中: ${data.index} 只完成`, 'info');
+                                        if (data.status === 'fetched') {
+                                            // 阶段一：抓取进度
+                                            if (data.index % 5 === 0 || data.index === 1) {
+                                                showToast(`正在从节点抓取: ${data.index} 只已就绪`, 'info');
+                                            }
+                                        } else if (data.status === 'writing_prepare') {
+                                            showToast(`抓取完成，正在构造批量写入请求...`, 'info');
+                                        } else if (data.status === 'ok') {
+                                            // 阶段二：写入进度 (batch_index)
+                                            showToast(`正在落库: 第 ${data.batch_index} 批同步成功`, 'info');
                                         } else if (data.status === 'skipped') {
                                             console.warn(`[Admin] Skipped ${data.code}: ${data.reason}`);
-                                            // 如果大量跳过，也给个提示
-                                            if (data.index % 10 === 0) showToast(`同步中: ${data.index} 只已跳过`, 'info');
                                         } else if (data.status === 'error') {
                                             console.error(`[Admin] Error ${data.code}: ${data.error}`);
                                         } else if (data.status === 'done') {
