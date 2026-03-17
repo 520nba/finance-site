@@ -23,10 +23,18 @@ function AdminCommandCenter() {
     const searchParams = useSearchParams();
     const urlKey = searchParams.get('key') || searchParams.get('token');
 
-    const showToast = useCallback((msg, type = 'error') => {
+    const [toastTimer, setToastTimer] = useState(null);
+
+    const showToast = useCallback((msg, type = 'error', duration = 3000) => {
+        if (toastTimer) clearTimeout(toastTimer);
         setToast({ msg, type });
-        setTimeout(() => setToast(null), 3000);
-    }, []);
+        if (duration > 0) {
+            const timer = setTimeout(() => setToast(null), duration);
+            setToastTimer(timer);
+        } else {
+            setToastTimer(null);
+        }
+    }, [toastTimer]);
 
     const auth = useAdminAuth();
     const data = useAdminData(auth.secretKey, showToast, auth.handleAuthFailure);

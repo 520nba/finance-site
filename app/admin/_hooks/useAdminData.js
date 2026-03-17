@@ -150,23 +150,25 @@ export function useAdminData(secretKey, showToast, onAuthFailure) {
                                     try {
                                         const data = JSON.parse(line);
                                         if (data.status === 'started') {
-                                            showToast(`已开始任务: 准备处理 ${data.total} 只基金`, 'info');
+                                            showToast(`已开始任务: 准备处理 ${data.total} 只基金`, 'info', 5000);
                                         } else if (data.status === 'fetched') {
-                                            // 阶段一：抓取进度
-                                            if (data.index % 5 === 0 || data.index === 1) {
-                                                showToast(`正在从节点抓取: ${data.index} 只已就绪`, 'info');
+                                            // 阶段一：抓取进度 - 增加显示时长
+                                            if (data.index % 2 === 0 || data.index === 1 || data.index === data.total) {
+                                                showToast(`正在从节点抓取: ${data.index} / ${data.total} 已就绪`, 'info', 8000);
                                             }
                                         } else if (data.status === 'writing_prepare') {
-                                            showToast(`数据归集完成，正在批量写入 D1...`, 'info');
+                                            showToast(`数据归集完成，正在批量写入 D1...`, 'info', 0);
                                         } else if (data.status === 'ok') {
-                                            // 阶段二：写入进度 (batch_index)
-                                            showToast(`正在落库: 第 ${data.batch_index} 批同步成功`, 'info');
+                                            // 阶段二：写入进度
+                                            showToast(`正在落库: 第 ${data.batch_index} 批同步成功`, 'info', 0);
                                         } else if (data.status === 'skipped') {
                                             console.warn(`[Admin] Skipped ${data.code}: ${data.reason}`);
+                                            showToast(`跳过 ${data.code}: ${data.reason}`, 'info', 2000);
                                         } else if (data.status === 'error') {
                                             console.error(`[Admin] Error ${data.code}: ${data.error}`);
+                                            showToast(`解析失败 ${data.code}: ${data.error}`, 'error', 5000);
                                         } else if (data.status === 'done') {
-                                            showToast(`[成功] 基金全量重刷完成，共处理 ${data.total} 只`, 'success');
+                                            showToast(`[成功] 基金全量重刷完成，共处理 ${data.total} 只`, 'success', 5000);
                                             await fetchAllData(secretKey, true);
                                         }
                                     } catch (e) {
