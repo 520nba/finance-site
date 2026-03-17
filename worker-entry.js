@@ -64,11 +64,11 @@ export default {
  */
 async function processFundQueue(env) {
     const BATCH_SIZE = 5; // 每次处理 5 个，防止超时和配额溢出
-    const QUEUE = env.FUND_QUEUE;
+    const QUEUE = env.STOCK_DATA;
     const DB = env.DB;
 
     if (!QUEUE) {
-        console.error('[Queue] FUND_QUEUE KV not bound');
+        console.error('[Queue] STOCK_DATA KV not bound');
         return;
     }
 

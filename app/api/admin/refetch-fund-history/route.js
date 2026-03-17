@@ -29,9 +29,9 @@ export async function GET(request) {
     if (!db) return NextResponse.json({ error: 'DB unavailable' }, { status: 500 });
 
     // 3. 获取 KV 绑定 (由 Cloudflare 提供)
-    const FUND_QUEUE = await getKvStorage('FUND_QUEUE');
+    const FUND_QUEUE = await getKvStorage('STOCK_DATA');
     if (!FUND_QUEUE) {
-        return NextResponse.json({ error: 'FUND_QUEUE KV 未绑定，请检查 Cloudflare 配置' }, { status: 500 });
+        return NextResponse.json({ error: 'STOCK_DATA KV 未绑定，请检查 Cloudflare 配置' }, { status: 500 });
     }
 
     // 4. 获取所有待重刷基金列表
