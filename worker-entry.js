@@ -56,32 +56,32 @@ async function processSyncJobs(env) {
         console.error('[Queue:Cleanup] Reset stuck jobs failed:', cleanupErr.message);
     }
 
-    // 2. 超过最大重试次数的直接标记 failed，不再阻塞队列
-    try {
-        await DB.prepare(`
-            UPDATE sync_jobs
-            SET status = 'failed', error_msg = 'max retries exceeded', updated_at = CURRENT_TIMESTAMP
-            WHERE status = 'pending'
-            AND retry_count >= 3
-        `).run();
-    } catch (retryLimitErr) {
-        console.error('[Queue:RetryLimit] Mark max retries failed:', retryLimitErr.message);
-    }
 
     const BATCH_SIZE = 5;
     try {
-        const { results: jobs } = await DB.prepare(`
-            WITH targets AS (
-                SELECT id FROM sync_jobs 
-                WHERE status = 'pending' 
-                ORDER BY created_at ASC 
-                LIMIT ?
-            )
+        // 1. 获取待处理任务 ID (拆分锁定逻辑以提高 D1/SQLite 兼容性)
+        const { results: targets } = await DB.prepare(`
+            SELECT id FROM sync_jobs 
+            WHERE status = 'pending' 
+            ORDER BY created_at ASC 
+            LIMIT ?
+        `).bind(BATCH_SIZE).all();
+
+        if (!targets || targets.length === 0) return;
+        const ids = targets.map(t => t.id);
+
+        // 2. 批量更新状态为 processing
+        const placeholders = ids.map(() => '?').join(',');
+        await DB.prepare(`
             UPDATE sync_jobs 
             SET status = 'processing', updated_at = CURRENT_TIMESTAMP 
-            WHERE id IN (SELECT id FROM targets)
-            RETURNING *
-        `).bind(BATCH_SIZE).all();
+            WHERE id IN (${placeholders})
+        `).bind(...ids).run();
+
+        // 3. 重新获取完整的任务对象
+        const { results: jobs } = await DB.prepare(`
+            SELECT * FROM sync_jobs WHERE id IN (${placeholders})
+        `).bind(...ids).all();
 
         if (!jobs || jobs.length === 0) return;
 
