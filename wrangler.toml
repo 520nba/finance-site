@@ -12,6 +12,10 @@ binding = "DB"
 database_name = "stock-tracker-db"
 database_id = "8451af7d-ba5b-47b3-915f-8aee5fa82723"
 migrations_dir = "migrations"
+
+[[kv_namespaces]]
+binding = "STOCK_DATA"
+id = "f7845bb8f6c048f0b658ac01797ced0b"
  
 [observability]
 enabled = true
@@ -22,5 +26,6 @@ crons = [
   "0 19 * * 1-6",     # 周一到周六  UTC 19:00 = 北京时间 03:00，历史数据增量同步
   "*/15 * * * *",     # 全天候      每 15 分钟，外部接口健康巡检
   "*/5 1-7 * * 1-5",  # 周一到周五  UTC 01:00-07:55 = 北京时间 09:00-15:55，盘中实时行情
+  "*/1 * * * *",      # 每分钟      基金异步重刷队列处理器
 ]
  
