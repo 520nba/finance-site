@@ -30,7 +30,7 @@ export function OverviewSection({ stats, onNavigate, onForceSync, onCleanup, loa
                     >
                         <div className={`p-3 w-fit rounded-2xl bg-white/5 mb-6 ${kpi.color}`}>{kpi.icon}</div>
                         <div className="text-4xl font-black italic tracking-tighter mb-1 font-mono">{kpi.value}</div>
-                        <div className="text-[10px] text-white/30 font-bold uppercase tracking-[0.2em]">{kpi.label}</div>
+                        <div className="text-xs text-white/30 font-bold uppercase tracking-[0.2em]">{kpi.label}</div>
                     </div>
                 ))}
             </div>
@@ -87,12 +87,12 @@ export function HealthSection({ apiHealth }) {
                     <div className="p-3 bg-cyan-500/10 rounded-2xl text-cyan-400"><Wifi size={24} /></div>
                     <div>
                         <h2 className="text-2xl font-black italic uppercase tracking-tighter">全栈巡检实时监测中心</h2>
-                        <p className="text-[10px] text-white/20 font-bold uppercase tracking-[0.2em]">
+                        <p className="text-xs text-white/20 font-bold uppercase tracking-[0.2em]">
                             外部金融协议心跳数据监测 ({apiHealth?.length || 0} 已连接节点)
                         </p>
                     </div>
                 </div>
-                <div className="flex items-center gap-2 px-4 py-2 bg-white/5 border border-white/5 rounded-2xl text-[10px] font-black uppercase tracking-widest text-cyan-500/60">
+                <div className="flex items-center gap-2 px-4 py-2 bg-white/5 border border-white/5 rounded-2xl text-[11px] font-black uppercase tracking-widest text-cyan-500/60">
                     <Clock size={12} /> 实时遥测中
                 </div>
             </div>
@@ -102,7 +102,7 @@ export function HealthSection({ apiHealth }) {
                     <thead>
                         <tr className="border-b border-white/5 bg-white/[0.01]">
                             {['协议与通道', '状态', '成功率', '延迟'].map((h, i) => (
-                                <th key={h} className={`px-10 py-6 text-[10px] font-black uppercase tracking-[0.3em] text-white/30 ${i > 1 ? 'text-right' : i === 1 ? 'text-center' : ''}`}>{h}</th>
+                                <th key={h} className={`px-10 py-6 text-xs font-black uppercase tracking-[0.3em] text-white/30 ${i > 1 ? 'text-right' : i === 1 ? 'text-center' : ''}`}>{h}</th>
                             ))}
                         </tr>
                     </thead>
@@ -115,25 +115,25 @@ export function HealthSection({ apiHealth }) {
                                 <tr key={api.api_name} className="group hover:bg-white/[0.02] transition-colors">
                                     <td className="px-10 py-6">
                                         <div className="flex items-center gap-4">
-                                            <div className={`px-2 py-0.5 rounded bg-gradient-to-r ${typeColor} text-[8px] font-black uppercase tracking-widest border border-white/5`}>{type}</div>
+                                            <div className={`px-2 py-0.5 rounded bg-gradient-to-r ${typeColor} text-[10px] font-black uppercase tracking-widest border border-white/5`}>{type}</div>
                                             <div className="flex flex-col">
                                                 <span className="font-bold text-base text-white/80 group-hover:text-cyan-400 transition-colors tracking-tight truncate max-w-[240px]">{mainName}</span>
-                                                <span className="text-[9px] text-white/20 mt-0.5 uppercase font-mono tracking-widest italic">{api.error_msg || 'Heartbeat Optimal'}</span>
+                                                <span className="text-[11px] text-white/20 mt-0.5 uppercase font-mono tracking-widest italic">{api.error_msg || 'Heartbeat Optimal'}</span>
                                             </div>
                                         </div>
                                     </td>
                                     <td className="px-10 py-6">
                                         <div className="flex justify-center">
                                             {api.status === 'healthy' ? (
-                                                <div className="flex items-center gap-2 px-3 py-1 bg-emerald-500/10 text-emerald-400 rounded-full text-[9px] font-black uppercase tracking-tighter border border-emerald-500/20">
+                                                <div className="flex items-center gap-2 px-3 py-1 bg-emerald-500/10 text-emerald-400 rounded-full text-[11px] font-black uppercase tracking-tighter border border-emerald-500/20">
                                                     <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />健康
                                                 </div>
                                             ) : api.status === 'critical' ? (
-                                                <div className="flex items-center gap-2 px-3 py-1 bg-red-600/10 text-red-500 rounded-full text-[9px] font-black uppercase tracking-tighter border border-red-600/20">
+                                                <div className="flex items-center gap-2 px-3 py-1 bg-red-600/10 text-red-500 rounded-full text-[11px] font-black uppercase tracking-tighter border border-red-600/20">
                                                     <div className="w-1.5 h-1.5 rounded-full bg-red-600 animate-bounce" />故障
                                                 </div>
                                             ) : (
-                                                <div className="flex items-center gap-2 px-3 py-1 bg-yellow-500/10 text-yellow-500 rounded-full text-[9px] font-black uppercase tracking-tighter border border-yellow-500/20">延迟</div>
+                                                <div className="flex items-center gap-2 px-3 py-1 bg-yellow-500/10 text-yellow-500 rounded-full text-[11px] font-black uppercase tracking-tighter border border-yellow-500/20">延迟</div>
                                             )}
                                         </div>
                                     </td>
@@ -144,7 +144,7 @@ export function HealthSection({ apiHealth }) {
                                         <span className={`font-black text-base ${(api.avg_latency ?? 0) > 3000 ? 'text-red-400' : (api.avg_latency ?? 0) > 1500 ? 'text-yellow-400' : 'text-white/40 group-hover:text-white/80'}`}>
                                             {api.avg_latency ?? '--'}
                                         </span>
-                                        <span className="text-[9px] opacity-20 ml-1 font-black">ms</span>
+                                        <span className="text-[11px] opacity-20 ml-1 font-black">ms</span>
                                     </td>
                                 </tr>
                             );
@@ -209,7 +209,7 @@ export function LogsSection({ logs }) {
                 <div className="p-3 bg-blue-500/10 rounded-2xl text-blue-400"><FileText size={24} /></div>
                 <div>
                     <h2 className="text-2xl font-black italic uppercase tracking-tighter text-white">系统脉搏记录</h2>
-                    <p className="text-[10px] text-white/20 font-bold uppercase tracking-[0.15em]">时序活动追踪 (最近 72 小时窗口)</p>
+                    <p className="text-xs text-white/20 font-bold uppercase tracking-[0.15em]">时序活动追踪 (最近 72 小时窗口)</p>
                 </div>
             </div>
             <div className="bg-white/[0.01] border border-white/5 rounded-[3rem] overflow-hidden backdrop-blur-3xl lg:p-4">
@@ -221,18 +221,23 @@ export function LogsSection({ logs }) {
                                     key={log.id || `${log.timestamp}-${log.module}`}
                                     className="group flex flex-col md:flex-row gap-4 py-2 px-5 rounded-xl hover:bg-white/[0.02] border border-transparent hover:border-white/5 transition-all"
                                 >
-                                    <div className="flex items-center gap-4 min-w-[150px]">
+                                    <div className="flex items-center gap-4 min-w-[200px]">
                                         <div className={`w-1 h-1 rounded-full ${log.level === 'INFO' ? 'bg-blue-500' : log.level === 'WARN' ? 'bg-orange-500' : 'bg-red-500'}`} />
-                                        <span className="text-[10px] font-mono font-bold text-white/20">
+                                        <span className="text-xs font-mono font-bold text-white/30">
                                             {new Date(log.timestamp + 'Z').toLocaleString('zh-CN', {
-                                                timeZone: 'Asia/Shanghai', month: '2-digit', day: '2-digit',
-                                                hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+                                                timeZone: 'Asia/Shanghai',
+                                                month: '2-digit',
+                                                day: '2-digit',
+                                                hour: '2-digit',
+                                                minute: '2-digit',
+                                                second: '2-digit',
+                                                hour12: false,
                                             })}
                                         </span>
                                     </div>
                                     <div className="flex-1 flex gap-4">
-                                        <span className="text-[9px] font-black px-2 py-0.5 bg-white/5 rounded-md text-white/40 uppercase tracking-widest h-fit">[{log.module}]</span>
-                                        <p className="text-[11px] font-medium text-white/60 leading-tight group-hover:text-white/90 transition-colors uppercase tracking-tight">{log.message}</p>
+                                        <span className="text-[11px] font-black px-2 py-0.5 bg-white/5 rounded-md text-white/40 uppercase tracking-widest h-fit">[{log.module}]</span>
+                                        <p className="text-xs font-medium text-white/60 leading-tight group-hover:text-white/90 transition-colors uppercase tracking-tight">{log.message}</p>
                                     </div>
                                 </div>
                             ))}
@@ -294,7 +299,7 @@ export function QueueSection({ queueData, onRefresh, loading }) {
                     <div className="p-3 bg-orange-500/10 rounded-2xl text-orange-400"><RefreshCcw size={24} className={loading ? 'animate-spin' : ''} /></div>
                     <div>
                         <h2 className="text-2xl font-black italic uppercase tracking-tighter text-white">同步子系统队列</h2>
-                        <p className="text-[10px] text-white/20 font-bold uppercase tracking-[0.2em]">当前 D1 节点正在等待调度或同步中的任务清单 (仅存 300 条)</p>
+                        <p className="text-xs text-white/20 font-bold uppercase tracking-[0.2em]">当前 D1 节点正在等待调度或同步中的任务清单 (仅存 300 条)</p>
                     </div>
                     <button
                         onClick={onRefresh}
@@ -327,12 +332,12 @@ export function QueueSection({ queueData, onRefresh, loading }) {
                     <table className="w-full text-left border-collapse">
                         <thead>
                             <tr className="border-b border-white/5 bg-white/[0.01]">
-                                <th className="px-8 py-6 text-[10px] font-black uppercase tracking-[0.3em] text-white/30">资产名称</th>
-                                <th className="px-8 py-6 text-[10px] font-black uppercase tracking-[0.3em] text-white/30">代码</th>
-                                <th className="px-8 py-6 text-[10px] font-black uppercase tracking-[0.3em] text-white/30 text-center">状态</th>
+                                <th className="px-8 py-6 text-xs font-black uppercase tracking-[0.3em] text-white/30">资产名称</th>
+                                <th className="px-8 py-6 text-xs font-black uppercase tracking-[0.3em] text-white/30">代码</th>
+                                <th className="px-8 py-6 text-xs font-black uppercase tracking-[0.3em] text-white/30 text-center">状态</th>
                                 <th
                                     onClick={() => requestSort('created_at')}
-                                    className="px-8 py-6 text-[10px] font-black uppercase tracking-[0.3em] text-white/30 text-right cursor-pointer hover:text-white/60 transition-colors"
+                                    className="px-8 py-6 text-xs font-black uppercase tracking-[0.3em] text-white/30 text-right cursor-pointer hover:text-white/60 transition-colors"
                                 >
                                     <div className="flex items-center justify-end gap-1">
                                         加入时间
@@ -341,7 +346,7 @@ export function QueueSection({ queueData, onRefresh, loading }) {
                                 </th>
                                 <th
                                     onClick={() => requestSort('updated_at')}
-                                    className="px-8 py-6 text-[10px] font-black uppercase tracking-[0.3em] text-white/30 text-right cursor-pointer hover:text-white/60 transition-colors"
+                                    className="px-8 py-6 text-xs font-black uppercase tracking-[0.3em] text-white/30 text-right cursor-pointer hover:text-white/60 transition-colors"
                                 >
                                     <div className="flex items-center justify-end gap-1">
                                         完成时间
@@ -362,12 +367,12 @@ export function QueueSection({ queueData, onRefresh, loading }) {
                                                 {st.label}
                                             </span>
                                         </td>
-                                        <td className="px-8 py-6 text-right font-mono text-[10px] text-white/20 whitespace-nowrap">
-                                            {item.created_at ? new Date(item.created_at).toLocaleString() : '--:--'}
+                                        <td className="px-8 py-6 text-right font-mono text-xs text-white/30 whitespace-nowrap">
+                                            {item.created_at ? new Date(item.created_at).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) : '--:--'}
                                         </td>
-                                        <td className="px-8 py-6 text-right font-mono text-[10px] text-white/40 whitespace-nowrap">
+                                        <td className="px-8 py-6 text-right font-mono text-xs text-white/50 whitespace-nowrap">
                                             {item.status === 'completed' || item.status === 'failed'
-                                                ? new Date(item.updated_at).toLocaleString()
+                                                ? new Date(item.updated_at).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })
                                                 : <span className="text-white/5 italic">挂起中...</span>
                                             }
                                         </td>
@@ -454,7 +459,7 @@ export function AssetStatusSection({ assets, onRefresh, loading }) {
                                 <th
                                     key={col.key}
                                     onClick={() => requestSort(col.key)}
-                                    className={`px-8 py-6 text-[10px] font-black uppercase tracking-[0.3em] text-white/30 cursor-pointer hover:text-white/60 transition-colors ${col.align}`}
+                                    className={`px-8 py-6 text-xs font-black uppercase tracking-[0.3em] text-white/30 cursor-pointer hover:text-white/60 transition-colors ${col.align}`}
                                 >
                                     <div className={`flex items-center ${col.align === 'text-center' ? 'justify-center pl-4' : col.align === 'text-right' ? 'justify-end' : ''}`}>
                                         {col.label}
@@ -471,11 +476,11 @@ export function AssetStatusSection({ assets, onRefresh, loading }) {
                                     <span className="font-bold text-white/80 group-hover:text-cyan-400 transition-colors uppercase tracking-tight truncate max-w-[120px]">{asset.code}</span>
                                 </td>
                                 <td className="px-8 py-6">
-                                    <span className="text-[10px] text-white/40 uppercase font-black tracking-widest truncate max-w-[150px] group-hover:text-white/70 transition-colors">{asset.name || 'Unknown'}</span>
+                                    <span className="text-xs text-white/40 uppercase font-black tracking-widest truncate max-w-[150px] group-hover:text-white/70 transition-colors">{asset.name || 'Unknown'}</span>
                                 </td>
                                 <td className="px-8 py-6 text-center">
-                                    <span className="px-3 py-1 bg-white/5 rounded-full text-[11px] font-black text-white/40 group-hover:text-white/80 transition-colors italic">
-                                        {asset.history_count} <span className="text-[8px] tracking-tighter">PTS</span>
+                                    <span className="px-3 py-1 bg-white/5 rounded-full text-xs font-black text-white/40 group-hover:text-white/80 transition-colors italic">
+                                        {asset.history_count} <span className="text-[10px] tracking-tighter">PTS</span>
                                     </span>
                                 </td>
                                 <td className="px-8 py-6 text-right">
@@ -487,9 +492,14 @@ export function AssetStatusSection({ assets, onRefresh, loading }) {
                                         {asset.sync_status || 'idle'}
                                     </span>
                                 </td>
-                                <td className="px-8 py-6 text-right text-[10px] text-white/20 italic uppercase tracking-tighter whitespace-nowrap">
+                                <td className="px-8 py-6 text-right text-xs text-white/30 italic uppercase tracking-tighter whitespace-nowrap font-mono">
                                     {asset.last_sync ? new Date(asset.last_sync + 'Z').toLocaleString('zh-CN', {
-                                        timeZone: 'Asia/Shanghai', hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit'
+                                        timeZone: 'Asia/Shanghai',
+                                        hour12: false,
+                                        month: '2-digit',
+                                        day: '2-digit',
+                                        hour: '2-digit',
+                                        minute: '2-digit'
                                     }) : '--:--'}
                                 </td>
                             </tr>

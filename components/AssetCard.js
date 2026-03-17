@@ -125,24 +125,25 @@ function AssetCardComponent({ asset, onRemove, mode = 'volatility' }) {
             exit={{ opacity: 0 }} // 移除 scale 以防止 layout 动画抖动 (Low Prio Fix)
             className="glass-effect p-4 lg:p-5 group"
         >
-            <div className="flex justify-between items-center mb-4">
+            <div className="flex justify-between items-start mb-4">
                 <div className="flex-1 min-w-0 mr-4">
-                    <h3 className="text-lg font-black italic truncate whitespace-nowrap leading-tight">
+                    <h3 className="text-xl font-black italic truncate whitespace-nowrap leading-tight text-white/90">
                         {asset.name}
                     </h3>
-                    {mode === 'realtime' && (
-                        <p className={`text-sm font-mono font-bold mt-0.5 ${isPositiveChange ? 'text-red-400' : 'text-green-400'}`}>
-                            {isPositiveChange ? '+' : ''}{asset.changePercent?.toFixed(2)}%
-                        </p>
-                    )}
+                    <p className="text-[10px] font-bold opacity-20 uppercase tracking-[0.2em] mt-1 font-mono">{asset.code}</p>
                 </div>
-                <div className="flex items-center gap-4">
+                <div className="flex flex-col items-end gap-1">
+                    {mode === 'realtime' && (
+                        <div className={`text-2xl font-black italic leading-none font-mono ${isPositiveChange ? 'text-red-400' : 'text-green-400'}`}>
+                            {isPositiveChange ? '+' : ''}{asset.changePercent?.toFixed(2)}%
+                        </div>
+                    )}
                     <button
                         onClick={() => onRemove(asset.code)}
                         aria-label="删除资产"
-                        className="p-1.5 bg-white/5 hover:bg-red-500/20 hover:text-red-400 rounded-lg transition-all opacity-0 group-hover:opacity-100"
+                        className="p-1.5 bg-white/5 hover:bg-red-500/20 hover:text-red-400 rounded-lg transition-all opacity-0 group-hover:opacity-100 mt-1"
                     >
-                        <Trash2 size={16} />
+                        <Trash2 size={14} />
                     </button>
                 </div>
             </div>

@@ -40,8 +40,8 @@ export function AppShell({ activeSection, onNavigate, onLogout, loading, onRefre
                             <Code size={20} className="text-white" />
                         </div>
                         <div className="hidden md:block">
-                            <h1 className="text-lg font-black italic tracking-tighter uppercase leading-none">Command</h1>
-                            <p className="text-[9px] font-bold opacity-30 uppercase tracking-[0.2em] mt-1">控制中心 v2.0</p>
+                            <h1 className="text-xl font-black italic tracking-tighter uppercase leading-none">Command</h1>
+                            <p className="text-[11px] font-bold opacity-30 uppercase tracking-[0.2em] mt-1">控制中心 v2.0</p>
                         </div>
                     </div>
                     <nav className="flex-1 px-4 space-y-2">
@@ -83,28 +83,37 @@ export function AppShell({ activeSection, onNavigate, onLogout, loading, onRefre
                         </div>
                         <div className="flex items-center gap-4">
                             <div className="hidden lg:flex items-center gap-1 border border-white/5 px-4 py-2 rounded-xl bg-white/[0.02]">
-                                <span className="text-[10px] font-black uppercase tracking-widest text-white/20 mr-2">快速操作:</span>
+                                <span className="text-[11px] font-black uppercase tracking-widest text-white/20 mr-2">快速操作:</span>
                                 <button onClick={onRefresh} title="刷新并校准计数器" className={`p-1.5 hover:text-cyan-400 transition-colors ${loading ? 'animate-spin opacity-50' : ''}`}>
                                     <RefreshCcw size={16} />
                                 </button>
                                 <div className="w-px h-3 bg-white/10 mx-1" />
                                 <button onClick={() => onForceSync('stock')} disabled={loading} title="重刷所有股票历史数据" className="p-1.5 hover:text-emerald-400 disabled:opacity-30 transition-colors flex items-center gap-1.5 group/btn">
                                     <TrendingUp size={16} className="group-hover/btn:scale-110 transition-transform" />
-                                    <span className="text-[9px] font-black uppercase tracking-tighter hidden xl:inline">股票重刷</span>
+                                    <span className="text-[11px] font-black uppercase tracking-tighter hidden xl:inline">股票重刷</span>
                                 </button>
                                 <div className="w-px h-3 bg-white/10 mx-1" />
                                 <button onClick={() => onForceSync('fund')} disabled={loading} title="重刷所有基金历史数据" className="p-1.5 hover:text-blue-400 disabled:opacity-30 transition-colors flex items-center gap-1.5 group/btn">
                                     <PieChart size={16} className="group-hover/btn:scale-110 transition-transform" />
-                                    <span className="text-[9px] font-black uppercase tracking-tighter hidden xl:inline">基金重刷</span>
+                                    <span className="text-[11px] font-black uppercase tracking-tighter hidden xl:inline">基金重刷</span>
                                 </button>
                                 <div className="w-px h-3 bg-white/10 mx-1" />
                                 <button onClick={onCleanup} title="全量环境洗消" className="p-1.5 hover:text-orange-400 transition-colors">
                                     <Zap size={16} />
                                 </button>
                             </div>
-                            <div className="text-[10px] font-mono font-bold text-white/20 bg-white/5 px-4 py-2 rounded-xl border border-white/5 min-w-[160px] text-center">
+                            <div className="text-xs font-mono font-bold text-white/40 bg-white/5 px-4 py-2 rounded-xl border border-white/5 min-w-[200px] text-center">
                                 {currentTime
-                                    ? currentTime.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })
+                                    ? currentTime.toLocaleString('zh-CN', {
+                                        timeZone: 'Asia/Shanghai',
+                                        hour12: false,
+                                        year: 'numeric',
+                                        month: '2-digit',
+                                        day: '2-digit',
+                                        hour: '2-digit',
+                                        minute: '2-digit',
+                                        second: '2-digit'
+                                    })
                                     : '--:--:--'}
                             </div>
                         </div>
