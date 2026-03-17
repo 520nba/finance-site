@@ -2085,6 +2085,64 @@ export function validateProxyTarget(rawUrl) {
 }
 </file>
 
+<file path="lib/storage/logRepo.js">
+import { runSql, queryAll } from './d1Client';
+
+/**
+ * 系统日志存储仓库
+ * 用于记录关键业务逻辑，如外部接口抓取记录。
+ */
+
+/**
+ * 添加系统日志
+ * 将日志保存到 D1 数据库 system_logs 表。
+ * @param {string} level
+ * @param {string} module
+ * @param {string} message
+ * @param {Object} env
+ */
+export async function addSystemLog(level, module, message, env = null) {
+    // 智能写策略：WARN/ERROR 必写；核心调度模块(Cron/Sentinel)的 INFO 也写，方便追踪执行记录
+    const levelUp = level?.toUpperCase();
+    const isCoreModule = ['SyncCron', 'DailyCron', 'Sentinel', 'HealthCron'].includes(module);
+    const shouldPersist = ['WARN', 'ERROR'].includes(levelUp) || (levelUp === 'INFO' && isCoreModule);
+
+    try {
+        if (shouldPersist) {
+            await runSql(
+                'INSERT INTO system_logs (level, module, message) VALUES (?, ?, ?)',
+                [levelUp, module, message],
+                env
+            );
+        }
+        console.log(`[LOG][${level}][${module}] ${message}${shouldPersist ? ' (PERSISTED)' : ''}`);
+    } catch (e) {
+        console.warn('[LogRepo] Failed to save log to D1:', e.message);
+        // Fallback to console only
+        console.log(`[LOG-FALLBACK][${level}][${module}] ${message}`);
+    }
+}
+
+/**
+ * 获取系统日志
+ * 从 D1 读取最近 N 小时的日志。
+ * @param {number} hours
+ * @param {Object} env
+ */
+export async function getSystemLogs(hours = 72, env = null) {
+    try {
+        return await queryAll(
+            'SELECT * FROM system_logs WHERE timestamp >= datetime("now", "-" || ? || " hours") ORDER BY timestamp DESC',
+            [hours],
+            env
+        );
+    } catch (e) {
+        console.error('[LogRepo] getSystemLogs failed:', e.message);
+        return [];
+    }
+}
+</file>
+
 <file path="lib/storage/memoryCache.js">
 /**
  * 请求级内存缓存（L1）
@@ -2844,64 +2902,6 @@ export async function verifyPassword(password, stored) {
 export function generateToken() {
     return Array.from(crypto.getRandomValues(new Uint8Array(32)))
         .map(b => b.toString(16).padStart(2, '0')).join('');
-}
-</file>
-
-<file path="lib/storage/logRepo.js">
-import { runSql, queryAll } from './d1Client';
-
-/**
- * 系统日志存储仓库
- * 用于记录关键业务逻辑，如外部接口抓取记录。
- */
-
-/**
- * 添加系统日志
- * 将日志保存到 D1 数据库 system_logs 表。
- * @param {string} level
- * @param {string} module
- * @param {string} message
- * @param {Object} env
- */
-export async function addSystemLog(level, module, message, env = null) {
-    // 智能写策略：WARN/ERROR 必写；核心调度模块(Cron/Sentinel)的 INFO 也写，方便追踪执行记录
-    const levelUp = level?.toUpperCase();
-    const isCoreModule = ['SyncCron', 'DailyCron', 'Sentinel', 'HealthCron'].includes(module);
-    const shouldPersist = ['WARN', 'ERROR'].includes(levelUp) || (levelUp === 'INFO' && isCoreModule);
-
-    try {
-        if (shouldPersist) {
-            await runSql(
-                'INSERT INTO system_logs (level, module, message) VALUES (?, ?, ?)',
-                [levelUp, module, message],
-                env
-            );
-        }
-        console.log(`[LOG][${level}][${module}] ${message}${shouldPersist ? ' (PERSISTED)' : ''}`);
-    } catch (e) {
-        console.warn('[LogRepo] Failed to save log to D1:', e.message);
-        // Fallback to console only
-        console.log(`[LOG-FALLBACK][${level}][${module}] ${message}`);
-    }
-}
-
-/**
- * 获取系统日志
- * 从 D1 读取最近 N 小时的日志。
- * @param {number} hours
- * @param {Object} env
- */
-export async function getSystemLogs(hours = 72, env = null) {
-    try {
-        return await queryAll(
-            'SELECT * FROM system_logs WHERE timestamp >= datetime("now", "-" || ? || " hours") ORDER BY timestamp DESC',
-            [hours],
-            env
-        );
-    } catch (e) {
-        console.error('[LogRepo] getSystemLogs failed:', e.message);
-        return [];
-    }
 }
 </file>
 
@@ -4485,127 +4485,53 @@ export function isMarketClosedBeijing() {
 }
 </file>
 
-<file path="schema.sql">
--- 用户索引表
-CREATE TABLE IF NOT EXISTS users (
-    id          TEXT PRIMARY KEY,
-    password_hash TEXT,
-    email       TEXT UNIQUE,
-    created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
-    last_login  DATETIME DEFAULT CURRENT_TIMESTAMP
-);
+<file path=".github/workflows/deploy.yml">
+name: Deploy to Cloudflare Workers
 
--- 会话表 (SaaS 认证)
-CREATE TABLE IF NOT EXISTS user_sessions (
-    token       TEXT PRIMARY KEY,
-    user_id     TEXT NOT NULL,
-    created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
-    expires_at  DATETIME NOT NULL,
-    FOREIGN KEY(user_id) REFERENCES users(id)
-);
-CREATE INDEX IF NOT EXISTS idx_sessions_user ON user_sessions(user_id);
+on:
+  push:
+    branches:
+      - main
 
--- 用户资产关联表
-CREATE TABLE IF NOT EXISTS user_assets (
-    user_id TEXT NOT NULL,
-    code TEXT NOT NULL,
-    type TEXT NOT NULL,
-    added_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY(user_id, code, type),
-    FOREIGN KEY(user_id) REFERENCES users(id)
-);
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  # Diagnostic: Triggering re-fetch due to transient checkout failure in previous run.
 
--- 资产基本信息 (名称库)
-CREATE TABLE IF NOT EXISTS asset_names (
-    code TEXT NOT NULL,
-    type TEXT NOT NULL,
-    name TEXT NOT NULL,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY(code, type)
-);
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
--- 历史价格
-CREATE TABLE IF NOT EXISTS asset_history (
-    code TEXT NOT NULL,
-    type TEXT NOT NULL,
-    price REAL NOT NULL,
-    record_date TEXT NOT NULL,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY(code, type, record_date)
-);
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: 'npm'
 
--- 分时数据 (按天存储的聚合 JSON)
-CREATE TABLE IF NOT EXISTS asset_intraday (
-    code TEXT NOT NULL,
-    record_date TEXT NOT NULL,
-    data TEXT NOT NULL,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY(code, record_date)
-);
+      - name: Install dependencies
+        run: npm ci
 
--- 分时数据点 (颗粒度到分钟)
-CREATE TABLE IF NOT EXISTS asset_intraday_points (
-    code TEXT NOT NULL,
-    time DATETIME NOT NULL,
-    price REAL NOT NULL,
-    vol REAL NOT NULL,
-    PRIMARY KEY(code, time)
-);
-CREATE INDEX IF NOT EXISTS idx_intra_points_code_time ON asset_intraday_points(code, time DESC);
+      - name: Setup Next.js Cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.npm
+            ${{ github.workspace }}/.next/cache
+          key: ${{ runner.os }}-nextjs-${{ hashFiles('**/package-lock.json') }}-${{ hashFiles('**/*.[jt]s', '**/*.[jt]sx') }}
+          restore-keys: |
+            ${{ runner.os }}-nextjs-${{ hashFiles('**/package-lock.json') }}-
 
--- 报价缓存 (D1 历史缓存表)
-CREATE TABLE IF NOT EXISTS asset_quotes (
-    code TEXT PRIMARY KEY,
-    name TEXT,
-    price REAL,
-    change REAL,
-    changePercent REAL,
-    prevClose REAL,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-
--- 系统日志 (按计划禁用或存入 D1)
-CREATE TABLE IF NOT EXISTS system_logs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    level TEXT NOT NULL,
-    module TEXT,
-    message TEXT NOT NULL,
-    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-
--- 管理员会话表
-CREATE TABLE IF NOT EXISTS admin_sessions (
-    token TEXT PRIMARY KEY,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    expires_at DATETIME NOT NULL
-);
-
--- 外部 API 健康监控
-CREATE TABLE IF NOT EXISTS api_health (
-    api_name TEXT PRIMARY KEY,
-    status TEXT DEFAULT 'unknown',
-    success_rate TEXT DEFAULT '0/0',
-    avg_latency INTEGER DEFAULT 0,
-    success_count INTEGER DEFAULT 0,
-    fail_count INTEGER DEFAULT 0,
-    total_count INTEGER DEFAULT 0,
-    recent_results TEXT DEFAULT '',
-    last_check DATETIME DEFAULT CURRENT_TIMESTAMP,
-    heartbeat_ts DATETIME DEFAULT CURRENT_TIMESTAMP,
-    error_msg TEXT
-);
-
--- 计数器表 (维度 3 优化: 将 O(N) 统计降为 O(1))
-CREATE TABLE IF NOT EXISTS system_stats (
-    key TEXT PRIMARY KEY,
-    value INTEGER DEFAULT 0,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX IF NOT EXISTS idx_logs_timestamp ON system_logs(timestamp);
-
--- [Optimization] 提升近期统计查询速度 (用于 recent_growth)
-CREATE INDEX IF NOT EXISTS idx_asset_history_created_at ON asset_history (created_at);
+      # 由于 OpenNext 构建需要特定的 Windows 二进制包，但在 Linux 环境下 npm 会根据平台自动处理。
+      # 我们直接运行 package.json 中定义的 deploy 脚本。
+      - name: Build and Deploy
+        run: npm run deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 </file>
 
 <file path="app/api/history/bulk/route.js">
@@ -4635,339 +4561,6 @@ export async function POST(request) {
             { status: 500 }
         )
     }
-}
-</file>
-
-<file path="app/api/user/assets/route.js">
-import { NextResponse } from 'next/server';
-import { getUserAssets, saveUserAssets } from '@/lib/storage/userRepo';
-import { cleanupSingleAssetIfNotUsed } from '@/lib/storage/maintenanceRepo';
-import { getD1Storage, getCloudflareCtx } from '@/lib/storage/d1Client';
-import { syncHistoryBulk, syncNamesBulk } from '@/lib/services/assetSyncService';
-import { requireUser } from '@/lib/auth/requireUser';
-
-const MAX_ASSETS_PER_USER = 100;
-
-export async function GET(request) {
-    const userId = await requireUser(request);
-
-    if (!userId) {
-        return NextResponse.json({ success: false, error: 'Unauthorized', code: 'UNAUTHORIZED' }, { status: 401 });
-    }
-
-    try {
-        const userAssets = await getUserAssets(userId);
-        return NextResponse.json({ success: true, data: userAssets });
-    } catch (e) {
-        console.error(`[Assets] GET failed for ${userId}: `, e.message);
-        return NextResponse.json({ success: false, error: e.message, code: 'D1_ERROR' }, { status: 503 });
-    }
-}
-
-export async function POST(request) {
-    const userId = await requireUser(request);
-    if (!userId) {
-        return NextResponse.json({ success: false, error: 'Unauthorized', code: 'UNAUTHORIZED' }, { status: 401 });
-    }
-
-    try {
-        const payload = await request.json();
-        const { assets } = payload || {};
-
-        const db = await getD1Storage();
-        if (!db) {
-            return NextResponse.json({ success: false, error: 'Database unavailable', code: 'D1_UNAVAILABLE' }, { status: 503 });
-        }
-
-        const oldAssets = await getUserAssets(userId);
-        const cleanAssets = (Array.isArray(assets) ? assets : [])
-            .filter(a => a && a.code && a.type)
-            .map(a => ({ code: String(a.code).toLowerCase(), type: a.type }));
-
-        if (cleanAssets.length > MAX_ASSETS_PER_USER) {
-            return NextResponse.json({
-                success: false,
-                error: `Tracking limit reached: max ${MAX_ASSETS_PER_USER} assets per account`,
-                code: 'QUOTA_EXCEEDED'
-            }, { status: 400 });
-        }
-
-        const addedAssets = cleanAssets.filter(c => !oldAssets.some(o => o.code === c.code && o.type === c.type));
-        const removedAssets = oldAssets.filter(old => !cleanAssets.some(a => a.code === old.code && a.type === old.type));
-
-        // 1. 优先写入资产基础关联
-        await saveUserAssets(userId, cleanAssets);
-
-        // 2. 检查并补全资产名称 (D1 维护)
-        const nameResults = await syncNamesBulk(cleanAssets);
-
-        // 2. 架构减负：移除原本笨重的 ctx.waitUntil 历史抓取逻辑。
-        // 现在抓取压力由前端 useAssetSync 识别数据空洞并分片发起请求。
-        // 这里仅辅助触发轻量级的名称预热（可选）或直接返回告知前端哪些是新增的。
-
-        if (removedAssets.length > 0) {
-            // 背景清理 (保留轻量级清理任务)
-            const cloudflare = await getCloudflareCtx();
-            const cleanupTask = Promise.all(
-                removedAssets.map(r => cleanupSingleAssetIfNotUsed(r.type, r.code).catch(() => { }))
-            );
-            if (cloudflare?.ctx?.waitUntil) {
-                cloudflare.ctx.waitUntil(cleanupTask);
-            }
-        }
-
-        return NextResponse.json({
-            success: true,
-            data: {
-                added: addedAssets.map(a => ({ code: a.code, type: a.type })),
-                removedCount: removedAssets.length
-            }
-        });
-    } catch (e) {
-        console.error(`[Assets] POST critical failure for ${userId}: `, e.message);
-        return NextResponse.json({
-            success: false,
-            error: e.message,
-            code: 'INTERNAL_ERROR'
-        }, { status: 500 });
-    }
-}
-</file>
-
-<file path="hooks/useAssetSync.js">
-import { useState, useEffect, useRef, useCallback } from 'react';
-import { fetchBulkStockQuotes } from '@/services/api/quotesService';
-import { fetchBulkNames } from '@/services/api/namesService';
-import { fetchBulkHistory } from '@/services/api/historyService';
-
-const ASSET_NAMES_CACHE_KEY = 'tracker_asset_names_v1';
-
-export function useAssetSync({ userId, isLogged }) {
-    const [assets, setAssets] = useState([]);
-    const [isSyncing, setIsSyncing] = useState(false);
-    const [isSessionReady, setIsSessionReady] = useState(false);
-
-    const refreshAssets = useCallback(async (list) => {
-        if (!list || list.length === 0) return;
-        setIsSyncing(true);
-
-        // 1. 立刻渲染骨架，消除阻塞感。
-        // [Optimized] 优先从 localStorage 读取缓存名称，实现秒开显示
-        let localNames = {};
-        try {
-            localNames = JSON.parse(localStorage.getItem(ASSET_NAMES_CACHE_KEY) || '{}');
-        } catch (e) { /* ignore */ }
-
-        const skeletonAssets = list.map(({ code, type }) => {
-            const cacheKey = `${type}:${code}`;
-            const cachedName = localNames[cacheKey];
-            return {
-                name: cachedName || `加载中...`,
-                price: 0,
-                code,
-                type,
-                history: [],
-                summary: null,
-                changePercent: 0
-            };
-        });
-        setAssets(skeletonAssets);
-
-        // 2. 仅获取基础名称与股票实时报价
-        try {
-            const stockItems = list.filter(a => a.type === 'stock');
-            const [stockQuoteMap, nameMap] = await Promise.all([
-                fetchBulkStockQuotes(stockItems, true),
-                fetchBulkNames(list.map(a => ({ code: a.code, type: a.type })), true),
-            ]);
-
-            const initialAssets = list.map(({ code, type }) => {
-                const histKey = `${type}:${code}`;
-                const name = nameMap[histKey];
-                if (type === 'stock') {
-                    const q = stockQuoteMap[code.toLowerCase()] || stockQuoteMap[code];
-                    const resolvedName = q?.name || (name && name !== code ? name : `股票 ${code}`);
-                    return { ...q, name: resolvedName, code, type };
-                } else {
-                    return { name: (name && name !== code ? name : `基金 ${code}`), price: 0, code, type };
-                }
-            });
-
-            setAssets(initialAssets);
-
-            // [Optimized] 持久化名称到本地，供下次刷新秒显
-            try {
-                const newLocalNames = { ...localNames };
-                Object.entries(nameMap).forEach(([key, val]) => {
-                    if (val && val !== key.split(':')[1]) {
-                        newLocalNames[key] = val;
-                    }
-                });
-                localStorage.setItem(ASSET_NAMES_CACHE_KEY, JSON.stringify(newLocalNames));
-            } catch (e) { /* ignore */ }
-
-            // 3. 异步补充历史数据 (Orchestrator Layer 1.5 - Background Hydration)
-            // 这一步不需要阻塞，完成后会自动触发 UI 图表渲染
-            fetchBulkHistory(list, true, 250).then(histMap => {
-                setAssets(prev => prev.map(a => {
-                    const key = `${a.type}:${a.code}`;
-                    if (histMap[key]) {
-                        return { ...a, ...histMap[key] };
-                    }
-                    return a;
-                }));
-            }).catch(e => console.warn('[Frontend:History] Background fetch failed:', e));
-
-        } catch (e) {
-            console.error('[Frontend] Refresh failed:', e);
-        }
-
-        setIsSyncing(false);
-    }, []);
-
-    // 登录后加载服务端数据
-    useEffect(() => {
-        if (!userId) return;
-
-        // 防竞态：每次 userId 变化创建新的 AbortController
-        // 当 userId 再次变化（快速切换账号），旧的请求会被 abort，防止串户
-        const controller = new AbortController();
-
-        const load = async () => {
-            setIsSyncing(true);
-            setIsSessionReady(false);
-            // 切换账号时立即清空资产，避免短暂显示旧账号数据
-            setAssets([]);
-            try {
-                const res = await fetch('/api/user/assets', {
-                    signal: controller.signal
-                });
-                const json = await res.json();
-                // 后端统一返回 { success, data: [] } envelope 格式
-                const list = json?.data ?? json;
-                if (Array.isArray(list) && list.length > 0) {
-                    await refreshAssets(list);
-                } else {
-                    setAssets([]);
-                }
-            } catch (e) {
-                // AbortError 是主动取消，不是真正的错误，静默处理
-                if (e?.name !== 'AbortError') {
-                    console.error('Failed to load user assets:', e);
-                }
-            }
-            // 只在请求未被取消时更新 Session 状态
-            if (!controller.signal.aborted) {
-                setIsSessionReady(true);
-                setIsSyncing(false);
-            }
-        };
-
-        load();
-
-        // Cleanup：当 userId 变化或组件卸载时，取消正在进行的请求
-        return () => controller.abort();
-    }, [userId, refreshAssets]);
-
-
-    const [isSyncingItems, setIsSyncingItems] = useState(new Set());
-
-    // [Feature: Client-side Offloading] 
-    // 前端主动拨调：发现数据空洞（缺失名称或历史）时，分片同步至 D1
-    useEffect(() => {
-        if (!isSessionReady || isSyncing) return;
-
-        const pending = assets.filter(a =>
-            (a.name === '加载中...' || !a.history || a.history.length === 0) &&
-            !isSyncingItems.has(`${a.type}:${a.code}`)
-        );
-
-        if (pending.length === 0) return;
-
-        // 设置并发限制，避免瞬间冲垮 Worker 或触发频率限制
-        const CONCURRENCY = 2;
-        const toSync = pending.slice(0, CONCURRENCY);
-
-        const runSync = async () => {
-            // 锁定正在处理的项目，防止重入导致的无限循环
-            const newSyncing = new Set(isSyncingItems);
-            toSync.forEach(item => newSyncing.add(`${item.type}:${item.code}`));
-            setIsSyncingItems(newSyncing);
-
-            await Promise.all(toSync.map(async (item) => {
-                const itemKey = `${item.type}:${item.code}`;
-                try {
-                    const res = await fetch('/api/user/sync-asset', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ code: item.code, type: item.type })
-                    });
-                    if (res.ok) {
-                        // 同步成功后，重新局部刷新该资产的数据
-                        await refreshAssets(assetsRef.current);
-                    }
-                } catch (e) {
-                    console.warn(`[ClientSync] Failed for ${item.code}:`, e.message);
-                } finally {
-                    // 解锁
-                    setIsSyncingItems(prev => {
-                        const next = new Set(prev);
-                        next.delete(itemKey);
-                        return next;
-                    });
-                }
-            }));
-        };
-
-        const timer = setTimeout(runSync, 1000);
-        return () => clearTimeout(timer);
-    }, [assets, isSessionReady, isSyncing, refreshAssets, isSyncingItems]);
-
-
-    const assetsRef = useRef(assets);
-    useEffect(() => {
-        assetsRef.current = assets;
-    }, [assets]);
-
-    // 数据变化后同步到服务端（暴露给外部主动调用）
-    const syncAssetsToServer = useCallback(async (currentAssets) => {
-        if (!isLogged || !isSessionReady) return;
-        // 优先使用传入的列表，否则读取 Ref（避免把 assets 列入 useCallback 依赖，防止实时报价更新时重建函数引用）
-        const listToSync = Array.isArray(currentAssets) ? currentAssets : assetsRef.current;
-        const skeleton = listToSync.map(a => ({ code: a.code, type: a.type }));
-        try {
-            await fetch('/api/user/assets', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ assets: skeleton }),
-            });
-            localStorage.setItem('tracker_assets_updated', Date.now().toString());
-        } catch (e) {
-            console.error('Sync failed:', e);
-        }
-    }, [isLogged, userId, isSessionReady]);
-
-
-
-    // 监听多标签页同步防冲突 (跨 Tab 数据漂移保护)
-    useEffect(() => {
-        const handleStorage = (e) => {
-            if (e.key === 'tracker_assets_updated' && isLogged) {
-                fetch('/api/user/assets').then(r => r.json()).then(json => {
-                    const list = json?.data ?? json;
-                    if (Array.isArray(list)) {
-                        const newStr = list.map(a => `${a.type}:${a.code}`).sort().join(',');
-                        const oldStr = assetsRef.current.map(a => `${a.type}:${a.code}`).sort().join(',');
-                        if (newStr !== oldStr) refreshAssets(list);
-                    }
-                }).catch(e => console.warn('[Frontend:StorageSync] Cross-tab fetch failed:', e));
-            }
-        };
-        window.addEventListener('storage', handleStorage);
-        return () => window.removeEventListener('storage', handleStorage);
-    }, [isLogged, userId, refreshAssets]);
-
-    return { assets, setAssets, isSyncing, setIsSyncing, assetsRef, refreshAssets, syncAssetsToServer };
 }
 </file>
 
@@ -5151,95 +4744,142 @@ export async function pruneIntradayPoints(env = null) {
 }
 </file>
 
-<file path="worker-entry.js">
-/**
- * worker-entry.js
- * 
- * Cloudflare Workers 统一入口 (Refactored for D1 Task Queue)
- */
+<file path="schema.sql">
+-- 用户索引表
+CREATE TABLE IF NOT EXISTS users (
+    id          TEXT PRIMARY KEY,
+    password_hash TEXT,
+    email       TEXT UNIQUE,
+    created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+    last_login  DATETIME DEFAULT CURRENT_TIMESTAMP
+);
 
-import openNextWorker from './.open-next/worker.js';
-import { runHistorySync } from './lib/cron/historySync.js';
-import { runRealtimeSync } from './lib/cron/realtimeSync.js';
-import { runSentinel } from './lib/cron/sentinel.js';
+-- 会话表 (SaaS 认证)
+CREATE TABLE IF NOT EXISTS user_sessions (
+    token       TEXT PRIMARY KEY,
+    user_id     TEXT NOT NULL,
+    created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+    expires_at  DATETIME NOT NULL,
+    FOREIGN KEY(user_id) REFERENCES users(id)
+);
+CREATE INDEX IF NOT EXISTS idx_sessions_user ON user_sessions(user_id);
 
-export default {
-    fetch(request, env, ctx) {
-        return openNextWorker.fetch(request, env, ctx);
-    },
+-- 用户资产关联表
+CREATE TABLE IF NOT EXISTS user_assets (
+    user_id TEXT NOT NULL,
+    code TEXT NOT NULL,
+    type TEXT NOT NULL,
+    added_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY(user_id, code, type),
+    FOREIGN KEY(user_id) REFERENCES users(id)
+);
 
-    async scheduled(event, env, ctx) {
-        switch (event.cron) {
-            case '0 13 * * 1-5':
-            case '0 19 * * 1-6':
-                ctx.waitUntil(runHistorySync(env));
-                break;
-            case '*/5 1-7 * * 1-5':
-                ctx.waitUntil(runRealtimeSync(env));
-                break;
-            case '*/15 * * * *':
-                ctx.waitUntil(runSentinel(env));
-                break;
-            case '*/1 * * * *':
-                // 切换至 D1 任务中心处理器
-                ctx.waitUntil(processSyncJobs(env));
-                break;
-            default:
-                console.warn(`[Scheduled] Unknown cron: "${event.cron}"`);
-        }
-    },
-};
+-- 资产基本信息 (名称库)
+CREATE TABLE IF NOT EXISTS asset_names (
+    code TEXT NOT NULL,
+    type TEXT NOT NULL,
+    name TEXT NOT NULL,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY(code, type)
+);
 
-/**
- * D1 任务中心处理器
- * 采用原子锁定模式：通过 CTE 锁定任务并立即标记为 processing，防止多实例重复执行
- */
-async function processSyncJobs(env) {
-    const DB = env.DB;
-    if (!DB) return;
+-- 历史价格
+CREATE TABLE IF NOT EXISTS asset_history (
+    code TEXT NOT NULL,
+    type TEXT NOT NULL,
+    price REAL NOT NULL,
+    record_date TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY(code, type, record_date)
+);
 
-    const BATCH_SIZE = 5;
-    try {
-        const { results: jobs } = await DB.prepare(`
-            WITH targets AS (
-                SELECT id FROM sync_jobs 
-                WHERE status = 'pending' 
-                ORDER BY created_at ASC 
-                LIMIT ?
-            )
-            UPDATE sync_jobs 
-            SET status = 'processing', updated_at = CURRENT_TIMESTAMP 
-            WHERE id IN (SELECT id FROM targets)
-            RETURNING *
-        `).bind(BATCH_SIZE).all();
+-- 分时数据 (按天存储的聚合 JSON)
+CREATE TABLE IF NOT EXISTS asset_intraday (
+    code TEXT NOT NULL,
+    record_date TEXT NOT NULL,
+    data TEXT NOT NULL,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY(code, record_date)
+);
 
-        if (!jobs || jobs.length === 0) return;
+-- 分时数据点 (颗粒度到分钟)
+CREATE TABLE IF NOT EXISTS asset_intraday_points (
+    code TEXT NOT NULL,
+    time DATETIME NOT NULL,
+    price REAL NOT NULL,
+    vol REAL NOT NULL,
+    PRIMARY KEY(code, time)
+);
+CREATE INDEX IF NOT EXISTS idx_intra_points_code_time ON asset_intraday_points(code, time DESC);
 
-        console.log(`[Queue:D1] Processing ${jobs.length} jobs`);
+-- 报价缓存 (D1 历史缓存表)
+CREATE TABLE IF NOT EXISTS asset_quotes (
+    code TEXT PRIMARY KEY,
+    name TEXT,
+    price REAL,
+    change REAL,
+    changePercent REAL,
+    prevClose REAL,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
 
-        for (const job of jobs) {
-            try {
-                if (job.type === 'fund_history') {
-                    const { syncHistoryBulk } = await import('./lib/services/assetSyncService');
-                    // 传入 env 确保 service 内部获取正确的 DB 绑定
-                    await syncHistoryBulk([{ code: job.code, type: 'fund' }], 250, true, env);
-                }
+-- 系统日志 (按计划禁用或存入 D1)
+CREATE TABLE IF NOT EXISTS system_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    level TEXT NOT NULL,
+    module TEXT,
+    message TEXT NOT NULL,
+    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+);
 
-                await DB.prepare("UPDATE sync_jobs SET status = 'completed', updated_at = CURRENT_TIMESTAMP WHERE id = ?")
-                    .bind(job.id)
-                    .run();
+-- 管理员会话表
+CREATE TABLE IF NOT EXISTS admin_sessions (
+    token TEXT PRIMARY KEY,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    expires_at DATETIME NOT NULL
+);
 
-            } catch (jobErr) {
-                console.error(`[Queue:D1] Job ${job.id} failed:`, jobErr.message);
-                await DB.prepare("UPDATE sync_jobs SET status = 'failed', error_msg = ?, retry_count = retry_count + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
-                    .bind(jobErr.message, job.id)
-                    .run();
-            }
-        }
-    } catch (e) {
-        console.error('[Queue:D1] Batch process failed:', e.message);
-    }
-}
+-- 外部 API 健康监控
+CREATE TABLE IF NOT EXISTS api_health (
+    api_name TEXT PRIMARY KEY,
+    status TEXT DEFAULT 'unknown',
+    success_rate TEXT DEFAULT '0/0',
+    avg_latency INTEGER DEFAULT 0,
+    success_count INTEGER DEFAULT 0,
+    fail_count INTEGER DEFAULT 0,
+    total_count INTEGER DEFAULT 0,
+    recent_results TEXT DEFAULT '',
+    last_check DATETIME DEFAULT CURRENT_TIMESTAMP,
+    heartbeat_ts DATETIME DEFAULT CURRENT_TIMESTAMP,
+    error_msg TEXT
+);
+
+-- 计数器表 (维度 3 优化: 将 O(N) 统计降为 O(1))
+CREATE TABLE IF NOT EXISTS system_stats (
+    key TEXT PRIMARY KEY,
+    value INTEGER DEFAULT 0,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_logs_timestamp ON system_logs(timestamp);
+
+-- [Optimization] 提升近期统计查询速度 (用于 recent_growth)
+CREATE INDEX IF NOT EXISTS idx_asset_history_created_at ON asset_history (created_at);
+
+-- 异步同步任务
+CREATE TABLE IF NOT EXISTS sync_jobs (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    type        TEXT NOT NULL,
+    code        TEXT NOT NULL,
+    payload     TEXT,
+    status      TEXT DEFAULT 'pending',
+    retry_count INTEGER DEFAULT 0,
+    error_msg   TEXT,
+    created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_sync_jobs_status ON sync_jobs(status, updated_at);
+CREATE INDEX IF NOT EXISTS idx_sync_jobs_code ON sync_jobs(code);
 </file>
 
 <file path="app/api/admin/stats/route.js">
@@ -5308,6 +4948,333 @@ export async function GET(request) {
         console.error('[AdminStats] Global Critical Failure:', e.message);
         return NextResponse.json({ error: 'INTERNAL_SERVER_ERROR' }, { status: 500 });
     }
+}
+</file>
+
+<file path="app/api/user/assets/route.js">
+import { NextResponse } from 'next/server';
+import { getUserAssets, saveUserAssets } from '@/lib/storage/userRepo';
+import { cleanupSingleAssetIfNotUsed } from '@/lib/storage/maintenanceRepo';
+import { getD1Storage, getCloudflareCtx } from '@/lib/storage/d1Client';
+import { syncHistoryBulk, syncNamesBulk } from '@/lib/services/assetSyncService';
+import { requireUser } from '@/lib/auth/requireUser';
+
+const MAX_ASSETS_PER_USER = 100;
+
+export async function GET(request) {
+    const userId = await requireUser(request);
+
+    if (!userId) {
+        return NextResponse.json({ success: false, error: 'Unauthorized', code: 'UNAUTHORIZED' }, { status: 401 });
+    }
+
+    try {
+        const userAssets = await getUserAssets(userId);
+        return NextResponse.json({ success: true, data: userAssets });
+    } catch (e) {
+        console.error(`[Assets] GET failed for ${userId}: `, e.message);
+        return NextResponse.json({ success: false, error: e.message, code: 'D1_ERROR' }, { status: 503 });
+    }
+}
+
+export async function POST(request) {
+    const userId = await requireUser(request);
+    if (!userId) {
+        return NextResponse.json({ success: false, error: 'Unauthorized', code: 'UNAUTHORIZED' }, { status: 401 });
+    }
+
+    try {
+        const payload = await request.json();
+        const { assets } = payload || {};
+
+        const db = await getD1Storage();
+        if (!db) {
+            return NextResponse.json({ success: false, error: 'Database unavailable', code: 'D1_UNAVAILABLE' }, { status: 503 });
+        }
+
+        const oldAssets = await getUserAssets(userId);
+        const cleanAssets = (Array.isArray(assets) ? assets : [])
+            .filter(a => a && a.code && a.type)
+            .map(a => ({ code: String(a.code).toLowerCase(), type: a.type }));
+
+        if (cleanAssets.length > MAX_ASSETS_PER_USER) {
+            return NextResponse.json({
+                success: false,
+                error: `Tracking limit reached: max ${MAX_ASSETS_PER_USER} assets per account`,
+                code: 'QUOTA_EXCEEDED'
+            }, { status: 400 });
+        }
+
+        const addedAssets = cleanAssets.filter(c => !oldAssets.some(o => o.code === c.code && o.type === c.type));
+        const removedAssets = oldAssets.filter(old => !cleanAssets.some(a => a.code === old.code && a.type === old.type));
+
+        // 1. 优先写入资产基础关联
+        await saveUserAssets(userId, cleanAssets);
+
+        // 2. 预热资产名称到缓存 (D1 维护)
+        await syncNamesBulk(cleanAssets);
+
+        // 3. 架构减负：移除原本笨重的 ctx.waitUntil 历史抓取逻辑。
+        // 现在抓取压力由前端 useAssetSync 识别数据空洞并分片发起请求。
+        // 这里仅辅助触发轻量级的名称预热（可选）或直接返回告知前端哪些是新增的。
+
+        if (removedAssets.length > 0) {
+            // 4. 背景清理 (保留轻量级清理任务)
+            const cloudflare = await getCloudflareCtx();
+            const cleanupTask = Promise.all(
+                removedAssets.map(r => cleanupSingleAssetIfNotUsed(r.type, r.code).catch(() => { }))
+            );
+            if (cloudflare?.ctx?.waitUntil) {
+                cloudflare.ctx.waitUntil(cleanupTask);
+            }
+        }
+
+        return NextResponse.json({
+            success: true,
+            data: {
+                added: addedAssets.map(a => ({ code: a.code, type: a.type })),
+                removedCount: removedAssets.length
+            }
+        });
+    } catch (e) {
+        console.error(`[Assets] POST critical failure for ${userId}: `, e.message);
+        return NextResponse.json({
+            success: false,
+            error: e.message,
+            code: 'INTERNAL_ERROR'
+        }, { status: 500 });
+    }
+}
+</file>
+
+<file path="hooks/useAssetSync.js">
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { fetchBulkStockQuotes } from '@/services/api/quotesService';
+import { fetchBulkNames } from '@/services/api/namesService';
+import { fetchBulkHistory } from '@/services/api/historyService';
+
+const ASSET_NAMES_CACHE_KEY = 'tracker_asset_names_v1';
+
+export function useAssetSync({ userId, isLogged }) {
+    const [assets, setAssets] = useState([]);
+    const [isSyncing, setIsSyncing] = useState(false);
+    const [isSessionReady, setIsSessionReady] = useState(false);
+
+    const refreshAssets = useCallback(async (list) => {
+        if (!list || list.length === 0) return;
+        setIsSyncing(true);
+
+        // 1. 立刻渲染骨架，消除阻塞感。
+        // [Optimized] 优先从 localStorage 读取缓存名称，实现秒开显示
+        let localNames = {};
+        try {
+            localNames = JSON.parse(localStorage.getItem(ASSET_NAMES_CACHE_KEY) || '{}');
+        } catch (e) { /* ignore */ }
+
+        const skeletonAssets = list.map(({ code, type }) => {
+            const cacheKey = `${type}:${code}`;
+            const cachedName = localNames[cacheKey];
+            return {
+                name: cachedName || `加载中...`,
+                price: 0,
+                code,
+                type,
+                history: [],
+                summary: null,
+                changePercent: 0
+            };
+        });
+        setAssets(skeletonAssets);
+
+        // 2. 仅获取基础名称与股票实时报价
+        try {
+            const stockItems = list.filter(a => a.type === 'stock');
+            const [stockQuoteMap, nameMap] = await Promise.all([
+                fetchBulkStockQuotes(stockItems, true),
+                fetchBulkNames(list.map(a => ({ code: a.code, type: a.type })), true),
+            ]);
+
+            const initialAssets = list.map(({ code, type }) => {
+                const histKey = `${type}:${code}`;
+                const name = nameMap[histKey];
+                if (type === 'stock') {
+                    const q = stockQuoteMap[code.toLowerCase()] || stockQuoteMap[code];
+                    const resolvedName = q?.name || (name && name !== code ? name : `股票 ${code}`);
+                    return { ...q, name: resolvedName, code, type };
+                } else {
+                    return { name: (name && name !== code ? name : `基金 ${code}`), price: 0, code, type };
+                }
+            });
+
+            setAssets(initialAssets);
+
+            // [Optimized] 持久化名称到本地，供下次刷新秒显
+            try {
+                const newLocalNames = { ...localNames };
+                Object.entries(nameMap).forEach(([key, val]) => {
+                    if (val && val !== key.split(':')[1]) {
+                        newLocalNames[key] = val;
+                    }
+                });
+                localStorage.setItem(ASSET_NAMES_CACHE_KEY, JSON.stringify(newLocalNames));
+            } catch (e) { /* ignore */ }
+
+            // 3. 异步补充历史数据 (Orchestrator Layer 1.5 - Background Hydration)
+            // 这一步不需要阻塞，完成后会自动触发 UI 图表渲染
+            fetchBulkHistory(list, true, 250).then(histMap => {
+                setAssets(prev => prev.map(a => {
+                    const key = `${a.type}:${a.code}`;
+                    if (histMap[key]) {
+                        return { ...a, ...histMap[key] };
+                    }
+                    return a;
+                }));
+            }).catch(e => console.warn('[Frontend:History] Background fetch failed:', e));
+
+        } catch (e) {
+            console.error('[Frontend] Refresh failed:', e);
+        }
+
+        setIsSyncing(false);
+    }, []);
+
+    // 登录后加载服务端数据
+    useEffect(() => {
+        if (!userId) return;
+
+        // 防竞态：每次 userId 变化创建新的 AbortController
+        // 当 userId 再次变化（快速切换账号），旧的请求会被 abort，防止串户
+        const controller = new AbortController();
+
+        const load = async () => {
+            setIsSyncing(true);
+            setIsSessionReady(false);
+            // 切换账号时立即清空资产，避免短暂显示旧账号数据
+            setAssets([]);
+            try {
+                const res = await fetch('/api/user/assets', {
+                    signal: controller.signal
+                });
+                const json = await res.json();
+                // 后端统一返回 { success, data: [] } envelope 格式
+                const list = json?.data ?? json;
+                if (Array.isArray(list) && list.length > 0) {
+                    await refreshAssets(list);
+                } else {
+                    setAssets([]);
+                }
+            } catch (e) {
+                // AbortError 是主动取消，不是真正的错误，静默处理
+                if (e?.name !== 'AbortError') {
+                    console.error('Failed to load user assets:', e);
+                }
+            }
+            // 只在请求未被取消时更新 Session 状态
+            if (!controller.signal.aborted) {
+                setIsSessionReady(true);
+                setIsSyncing(false);
+            }
+        };
+
+        load();
+
+        // Cleanup：当 userId 变化或组件卸载时，取消正在进行的请求
+        return () => controller.abort();
+    }, [userId, refreshAssets]);
+
+
+    const syncingItemsRef = useRef(new Set());
+
+    // [Feature: Client-side Offloading] 
+    // 前端主动拨调：发现数据空洞（缺失名称或历史）时，分片同步至 D1
+    useEffect(() => {
+        if (!isSessionReady || isSyncing) return;
+
+        const pending = assets.filter(a =>
+            (a.name === '加载中...' || !a.history || a.history.length === 0) &&
+            !syncingItemsRef.current.has(`${a.type}:${a.code}`)
+        );
+
+        if (pending.length === 0) return;
+
+        // 设置并发限制，避免瞬间冲垮 Worker 或触发频率限制
+        const CONCURRENCY = 2;
+        const toSync = pending.slice(0, CONCURRENCY);
+
+        const runSync = async () => {
+            // 锁定正在处理的项目，防止重入导致的无限循环
+            toSync.forEach(item => syncingItemsRef.current.add(`${item.type}:${item.code}`));
+
+            await Promise.all(toSync.map(async (item) => {
+                const itemKey = `${item.type}:${item.code}`;
+                try {
+                    const res = await fetch('/api/user/sync-asset', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ code: item.code, type: item.type })
+                    });
+                    if (res.ok) {
+                        // 同步成功后，重新局部刷新该资产的数据
+                        await refreshAssets(assetsRef.current);
+                    }
+                } catch (e) {
+                    console.warn(`[ClientSync] Failed for ${item.code}:`, e.message);
+                } finally {
+                    // 解锁
+                    syncingItemsRef.current.delete(itemKey);
+                }
+            }));
+        };
+
+        const timer = setTimeout(runSync, 1000);
+        return () => clearTimeout(timer);
+    }, [assets, isSessionReady, isSyncing, refreshAssets]);
+
+
+    const assetsRef = useRef(assets);
+    useEffect(() => {
+        assetsRef.current = assets;
+    }, [assets]);
+
+    // 数据变化后同步到服务端（暴露给外部主动调用）
+    const syncAssetsToServer = useCallback(async (currentAssets) => {
+        if (!isLogged || !isSessionReady) return;
+        // 优先使用传入的列表，否则读取 Ref（避免把 assets 列入 useCallback 依赖，防止实时报价更新时重建函数引用）
+        const listToSync = Array.isArray(currentAssets) ? currentAssets : assetsRef.current;
+        const skeleton = listToSync.map(a => ({ code: a.code, type: a.type }));
+        try {
+            await fetch('/api/user/assets', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ assets: skeleton }),
+            });
+            localStorage.setItem('tracker_assets_updated', Date.now().toString());
+        } catch (e) {
+            console.error('Sync failed:', e);
+        }
+    }, [isLogged, userId, isSessionReady]);
+
+
+
+    // 监听多标签页同步防冲突 (跨 Tab 数据漂移保护)
+    useEffect(() => {
+        const handleStorage = (e) => {
+            if (e.key === 'tracker_assets_updated' && isLogged) {
+                fetch('/api/user/assets').then(r => r.json()).then(json => {
+                    const list = json?.data ?? json;
+                    if (Array.isArray(list)) {
+                        const newStr = list.map(a => `${a.type}:${a.code}`).sort().join(',');
+                        const oldStr = assetsRef.current.map(a => `${a.type}:${a.code}`).sort().join(',');
+                        if (newStr !== oldStr) refreshAssets(list);
+                    }
+                }).catch(e => console.warn('[Frontend:StorageSync] Cross-tab fetch failed:', e));
+            }
+        };
+        window.addEventListener('storage', handleStorage);
+        return () => window.removeEventListener('storage', handleStorage);
+    }, [isLogged, userId, refreshAssets]);
+
+    return { assets, setAssets, isSyncing, setIsSyncing, assetsRef, refreshAssets, syncAssetsToServer };
 }
 </file>
 
@@ -5488,216 +5455,6 @@ async function _log(env, level, module, message) {
 }
 
 const _sleep = ms => new Promise(r => setTimeout(r, ms));
-</file>
-
-<file path="lib/cron/sentinel.js">
-/**
- * src/lib/cron/sentinel.js
- *
- * 外部财经接口健康巡检
- */
-
-import {
-    fetchStockEastmoney,
-    fetchStockTencent,
-    fetchStockSina,
-    fetchFundHistory,
-} from '@/lib/services/historyFetcher';
-import { queryAll, runSql, getD1Storage } from '@/lib/storage/d1Client';
-
-// ── 常量 ────────────────────────────────────────────────────────────────────
-
-// ── 探针定义 (修改为接收采样资产的动态函数) ─────────────────────────────────
-
-const CREATE_HEALTH_TASKS = (stockCode, fundCode) => [
-    {
-        name: 'Hist: EastMoney (Stock)',
-        fn: async (signal) => {
-            const d = await fetchStockEastmoney(stockCode, 1, signal);
-            return !!(d?.length > 0 && typeof d[0].value === 'number');
-        },
-    },
-    {
-        name: 'Hist: Tencent (Stock)',
-        fn: async (signal) => {
-            const d = await fetchStockTencent(stockCode, 1, signal);
-            return !!(d?.length > 0 && typeof d[0].value === 'number');
-        },
-    },
-    {
-        name: 'Hist: Sina (Stock)',
-        fn: async (signal) => {
-            const d = await fetchStockSina(stockCode, 1, signal);
-            return !!(d?.length > 0 && typeof d[0].value === 'number');
-        },
-    },
-    {
-        name: 'Hist: EastMoney (Fund)',
-        fn: async (signal) => {
-            const d = await fetchFundHistory(fundCode, 1, signal);
-            return !!(d?.length > 0 && typeof d[0].value === 'number');
-        },
-    },
-    {
-        name: 'Quote: Tencent (Realtime)',
-        fn: async (signal) => {
-            const res = await fetch(`https://qt.gtimg.cn/q=${stockCode}`, {
-                headers: { Referer: 'https://gu.qq.com/' }, signal,
-            });
-            const text = await res.text();
-            return res.ok && text.includes(stockCode.replace(/[a-z]/g, '')) && text.split('~').length > 10;
-        },
-    },
-    {
-        name: 'Intra: EastMoney (Trends)',
-        fn: async (signal) => {
-            const secid = stockCode.startsWith('sh') ? `1.${stockCode.slice(2)}` : `0.${stockCode.slice(2)}`;
-            const res = await fetch(
-                `https://push2.eastmoney.com/api/qt/stock/trends2/get?secid=${secid}&fields1=f1&fields2=f51`,
-                { headers: { Referer: 'https://quote.eastmoney.com/' }, signal }
-            );
-            const d = await res.json();
-            return !!(res.ok && d?.data?.trends?.length > 0);
-        },
-    },
-    {
-        name: 'Name: EastMoney (Query)',
-        fn: async (signal) => {
-            const secid = stockCode.startsWith('sh') ? `1.${stockCode.slice(2)}` : `0.${stockCode.slice(2)}`;
-            const res = await fetch(
-                `https://push2.eastmoney.com/api/qt/stock/get?secid=${secid}&fields=f58`,
-                { headers: { Referer: 'https://quote.eastmoney.com/' }, signal }
-            );
-            const d = await res.json();
-            return !!(res.ok && d?.data?.f58);
-        },
-    },
-    {
-        name: 'Name: Tencent (Fund Spec)',
-        fn: async (signal) => {
-            const res = await fetch(`https://qt.gtimg.cn/q=s_jj${fundCode}`, {
-                headers: { Referer: 'https://gu.qq.com/' }, signal,
-            });
-            const text = await res.text();
-            return res.ok && text.includes(fundCode);
-        },
-    },
-    {
-        name: 'Name: EastMoney (Fund HTML)',
-        fn: async (signal) => {
-            const res = await fetch(`https://fund.eastmoney.com/${fundCode}.html`, {
-                headers: { Referer: 'https://fund.eastmoney.com/', Accept: 'text/html' }, signal,
-            });
-            const text = await res.text();
-            return res.ok && text.includes(fundCode);
-        },
-    },
-];
-
-// ── 主入口 ──────────────────────────────────────────────────────────────────
-
-export async function runSentinel(env) {
-    const db = await getD1Storage(env);
-    if (!db) {
-        console.error('[Sentinel] DB unreachable, skipping');
-        return;
-    }
-
-    // 动态采样逻辑：从用户资产库随机选取一个股票和一个基金作为拨测标的
-    const sampleStock = await db.prepare("SELECT code FROM user_assets WHERE type = 'stock' ORDER BY RANDOM() LIMIT 1").first();
-    const sampleFund = await db.prepare("SELECT code FROM user_assets WHERE type = 'fund' ORDER BY RANDOM() LIMIT 1").first();
-
-    const stockCode = sampleStock?.code || 'sh600036'; // 兜底招行
-    const fundCode = sampleFund?.code || '110020';   // 兜底易方达沪深300
-
-    const tasks = CREATE_HEALTH_TASKS(stockCode, fundCode);
-    const results = await Promise.all(tasks.map(_probeOne));
-
-    await _batchWriteHealth(db, results);
-
-    const available = results.filter(r => r.status !== 'down').length;
-    const slaOk = results.filter(r => ['healthy', 'wary'].includes(r.status)).length;
-    const failures = results.filter(r => r.status === 'down');
-
-    let msg = `Sentinel done — Availability: ${available}/${results.length}, SLA OK: ${slaOk}/${results.length}`;
-    if (failures.length > 0) {
-        msg += `. Down: ${failures.map(f => f.name).join(', ')}`;
-    }
-
-    console.log(`[Sentinel] ${msg}`);
-    await _log(db, slaOk < results.length ? 'WARN' : 'INFO', 'Sentinel', msg);
-}
-
-// ── 单探针执行 ───────────────────────────────────────────────────────────────
-
-async function _probeOne(task) {
-    const ctrl = new AbortController();
-    const tid = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
-
-    const t0 = Date.now();
-    let success = false;
-    let errorMsg = '';
-
-    try {
-        success = await task.fn(ctrl.signal);
-        if (!success) errorMsg = 'Empty or invalid response';
-    } catch (e) {
-        errorMsg = e.name === 'AbortError'
-            ? `Timeout (>${TIMEOUT_MS}ms)`
-            : e.message;
-    } finally {
-        clearTimeout(tid);
-    }
-
-    const latency = Date.now() - t0;
-    return {
-        name: task.name,
-        status: _computeStatus(success, latency),
-        latency,
-        errorMsg: success ? '' : errorMsg,
-    };
-}
-
-// ── D1 写入 ──────────────────────────────────────────────────────────────────
-
-async function _batchWriteHealth(db, results) {
-    const now = new Date().toISOString();
-    const stmts = results.map(r =>
-        db.prepare(`
-            INSERT INTO api_health (api_name, status, latency, error_msg, last_check)
-            VALUES (?, ?, ?, ?, ?)
-            ON CONFLICT(api_name) DO UPDATE SET
-                status     = excluded.status,
-                latency    = excluded.latency,
-                error_msg  = excluded.error_msg,
-                last_check = excluded.last_check
-        `).bind(r.name, r.status, r.latency, r.errorMsg, now)
-    );
-    await db.batch(stmts);
-}
-
-// ── 状态判别 ─────────────────────────────────────────────────────────────────
-
-function _computeStatus(success, latency) {
-    if (!success) return 'down';
-    if (latency < 1200) return 'healthy';
-    if (latency < 2200) return 'wary';
-    if (latency < 3500) return 'slow';
-    return 'critical';
-}
-
-// ── 工具 ─────────────────────────────────────────────────────────────────────
-
-async function _log(db, level, source, message) {
-    try {
-        await db
-            .prepare('INSERT INTO system_logs (level, module, message) VALUES (?, ?, ?)')
-            .bind(level, source, message)
-            .run();
-    } catch (e) {
-        console.error('[Sentinel] log write failed:', e.message);
-    }
-}
 </file>
 
 <file path="lib/storage/healthRepo.js">
@@ -6365,385 +6122,213 @@ export default memo(AssetCardComponent, (prev, next) => {
 });
 </file>
 
-<file path="lib/services/assetSyncService.js">
+<file path="lib/cron/sentinel.js">
 /**
- * lib/services/assetSyncService.js
- * 
- * 资产同步 Service 层 (L3 Logic)
- * 
- * 职责：
- * 1. 统筹资产名称 (syncNamesBulk) 与历史数据 (syncHistoryBulk) 的多级同步逻辑。
- * 2. 封装外部 API 交互 (fetch) 与 D1 存储操作。
- * 3. 作为唯一的事实来源供 API 路由、Cron 任务及后台机制调用。
+ * src/lib/cron/sentinel.js
+ *
+ * 外部财经接口健康巡检
  */
 
-import { getBulkHistory, insertDailyPricesBatch } from '@/lib/storage/historyRepo'
-import { getAssetNames, saveAssetNames } from '@/lib/storage/nameRepo'
-import { memoryCache } from '@/lib/storage/memoryCache'
-import { calculateStats, fetchWithRetry, getBeijingDate, getBeijingTodayStr } from '@/lib/utils'
 import {
-    EASTMONEY_HEADERS,
-    EASTMONEY_FUND_HEADERS,
-    EASTMONEY_FUND_HTML_HEADERS,
-    TENCENT_HEADERS
-} from '@/lib/constants/headers'
-import { parseStockCode, toSecid } from '@/lib/utils/stockCode'
+    fetchStockEastmoney,
+    fetchStockTencent,
+    fetchStockSina,
+    fetchFundHistory,
+} from '@/lib/services/historyFetcher';
+import { queryAll, runSql, getD1Storage } from '@/lib/storage/d1Client';
 
-/**
- * =============================
- * 辅助工具函数 (Internal)
- * =============================
- */
+// ── 常量 ────────────────────────────────────────────────────────────────────
 
-function daysBetween(d1, d2) {
-    if (!d1 || !d2) return 0;
-    const date1 = new Date(d1);
-    const date2 = new Date(d2);
-    const diffTime = date2 - date1;
-    return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-}
+// ── 探针定义 (修改为接收采样资产的动态函数) ─────────────────────────────────
 
-function parseTrends2Response(json) {
-    const d = json?.data
-    if (!d?.trends?.length) return null
-
-    const prevClose = parseFloat(d.preClose) || parseFloat(d.prePrice) || 0
-    const points = d.trends
-        .map(line => {
-            const parts = line.split(',')
-            const timePart = parts[0].includes(' ') ? parts[0].split(' ')[1] : parts[0]
-            const val = parseFloat(parts[2])
-            return { time: timePart, value: isNaN(val) ? 0 : val }
-        })
-        .filter(p => p.value > 0)
-
-    return points.length ? { points, prevClose } : null
-}
-
-function isDbDataFresh(dbData, nowMs, maxAgeMs = 60000) {
-    if (!dbData?.points?.length) return false
-    const isToday = dbData.points[0]?.time?.includes(':') && !dbData.points[0]?.time?.includes('-')
-    if (!isToday) return true
-    const updatedAt = dbData.updated_at ? new Date(dbData.updated_at).getTime() : 0
-    return nowMs - updatedAt < maxAgeMs
-}
-
-function isInvalidName(name) {
-    if (!name || typeof name !== 'string') return true;
-    const clean = name.trim();
-    if (clean.length === 0) return true;
-    const ERROR_PATTERNS = ['页面未找到', '404', 'Bad Gateway', 'Service Unavailable', 'Cloudflare', 'Internal Server Error', '东方财富网'];
-    if (ERROR_PATTERNS.some(p => clean.includes(p)) && clean.length < 20) return true;
-    if (/^\d{6}$/.test(clean)) return true;
-    let badChars = 0;
-    for (let i = 0; i < clean.length; i++) {
-        const code = clean.charCodeAt(i);
-        if (code === 0xFFFD) return true;
-        if (code < 0x20 && code !== 0x0A && code !== 0x0D) badChars++;
-        if (code >= 0xE000 && code <= 0xF8FF) badChars++;
-    }
-    return (badChars / clean.length) > 0.3;
-}
-
-/**
- * =============================
- * 外部 API 抓取 (EastMoney)
- * =============================
- */
-
-async function fetchStockName(code) {
-    const secid = toSecid(code);
-    if (!secid) return null;
-    try {
-        const url = `https://push2.eastmoney.com/api/qt/stock/get?secid=${secid}&fields=f58`;
-        const res = await fetchWithRetry(url, { headers: EASTMONEY_HEADERS });
-        if (res.ok) {
-            const json = await res.json();
-            if (json.data?.f58) return json.data.f58;
-        }
-    } catch (e) {
-        console.error(`[fetchStockName] Error fetching ${code}:`, e.message);
-    }
-    return null;
-}
-
-async function fetchFundName(code) {
-    const match = code.match(/^([a-zA-Z]{2})?(\d+)$/i);
-    const clean = match ? match[2] : code;
-    try {
-        const url = `https://qt.gtimg.cn/q=s_jj${clean}`;
-        const res = await fetchWithRetry(url, { headers: TENCENT_HEADERS });
-        if (res.ok) {
-            const arrayBuffer = await res.arrayBuffer();
-            const text = new TextDecoder('gbk').decode(arrayBuffer);
-            const parts = text.split('~');
-            if (parts.length > 2 && parts[1]) return parts[1].trim();
-        }
-    } catch (e) {
-        console.error(`[fetchFundName:Tencent] Error for ${code}:`, e.message);
-    }
-
-    try {
-        const url = `https://api.fund.eastmoney.com/f10/lsjz?fundCode=${clean}&pageIndex=1&pageSize=1&_=${Date.now()}`;
-        const res = await fetchWithRetry(url, { headers: EASTMONEY_FUND_HEADERS });
-        if (res.ok) {
-            const data = await res.json();
-            if (data.Expansion) return data.Expansion;
-        }
-    } catch (e) {
-        console.error(`[fetchFundName:EastMoney] Error for ${code}:`, e.message);
-    }
-    return null;
-}
-
-/**
- * =============================
- * 核心业务逻辑 (Exported Services)
- * =============================
- */
-
-const CACHE_KEY_PREFIX = 'api_intraday_';
-const CACHE_TTL = 30 * 1000;
-
-export async function fetchSingleIntraday(code, preFetchedDbData = null, externalAbortSignal = null) {
-    const cached = memoryCache.get(CACHE_KEY_PREFIX + code)
-    if (cached) return cached
-
-    const { getIntraday } = await import('@/lib/storage/intradayRepo')
-    const dbData = preFetchedDbData ?? await getIntraday(code, getBeijingTodayStr(), true)
-    if (isDbDataFresh(dbData, Date.now())) return dbData
-
-    const parsed = parseStockCode(code);
-    if (!parsed) return dbData;
-    const url = `https://push2.eastmoney.com/api/qt/stock/trends2/get?secid=${parsed.market}.${parsed.clean}&fields1=f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13&fields2=f51,f52,f53,f54,f55,f56,f57,f58`
-
-    let res
-    try {
-        res = await fetchWithRetry(url, { headers: EASTMONEY_HEADERS }, 0, externalAbortSignal)
-    } catch (e) {
-        console.error(`[Intraday] Fetch failed for ${code}:`, e.message)
-        return dbData
-    }
-
-    if (!res.ok) return dbData
-
-    const trendsData = parseTrends2Response(await res.json())
-    if (!trendsData) return dbData
-
-    const { points, prevClose } = trendsData
-    const lastPrice = points[points.length - 1].value
-    const effectivePrevClose = prevClose || points[0].value
-    const result = {
-        code,
-        price: lastPrice,
-        changePercent: effectivePrevClose > 0 ? ((lastPrice / effectivePrevClose - 1) * 100) : 0,
-        prevClose: effectivePrevClose,
-        points
-    }
-
-    memoryCache.set(CACHE_KEY_PREFIX + code, result, CACHE_TTL)
-    return result
-}
-
-export async function syncIntradayBulk(items, allowExternal = false) {
-    if (!Array.isArray(items) || items.length === 0) return {};
-
-    const today = getBeijingTodayStr();
-    const result = {};
-
-    const toFetchFromPersist = [];
-    for (const item of items) {
-        const cached = memoryCache.get(CACHE_KEY_PREFIX + item.code);
-        if (cached) {
-            result[item.code] = cached;
-        } else {
-            toFetchFromPersist.push(item);
-        }
-    }
-
-    if (toFetchFromPersist.length > 0) {
-        const { getBulkIntraday, saveIntradayBatch } = await import('@/lib/storage/intradayRepo')
-        const dbDataMap = await getBulkIntraday(toFetchFromPersist, today);
-        const externalFetchList = [];
-        const now = Date.now();
-
-        for (const item of toFetchFromPersist) {
-            const dbData = dbDataMap[item.code];
-            const stalenessThreshold = allowExternal ? 60000 : 300000;
-
-            if (isDbDataFresh(dbData, now, stalenessThreshold)) {
-                result[item.code] = dbData;
-                memoryCache.set(CACHE_KEY_PREFIX + item.code, dbData, CACHE_TTL);
-                continue;
-            }
-
-            if (allowExternal) {
-                externalFetchList.push(item);
-            } else if (dbData) {
-                result[item.code] = dbData;
-                memoryCache.set(CACHE_KEY_PREFIX + item.code, dbData, CACHE_TTL);
-            }
-        }
-
-        if (externalFetchList.length > 0 && allowExternal) {
-            const { default: pLimit } = await import('p-limit')
-            const limit = pLimit(5);
-            const safeFetchList = externalFetchList.slice(0, 15);
-            const globalController = new AbortController();
-            const globalTimeout = setTimeout(() => globalController.abort(), 25000);
-
-            const fetchPromises = safeFetchList.map(item =>
-                limit(async () => {
-                    const data = await fetchSingleIntraday(item.code, dbDataMap[item.code], globalController.signal);
-                    return data ? { code: item.code, data } : null;
-                })
+const CREATE_HEALTH_TASKS = (stockCode, fundCode) => [
+    {
+        name: 'Hist: EastMoney (Stock)',
+        fn: async (signal) => {
+            const d = await fetchStockEastmoney(stockCode, 1, signal);
+            return !!(d?.length > 0 && typeof d[0].value === 'number');
+        },
+    },
+    {
+        name: 'Hist: Tencent (Stock)',
+        fn: async (signal) => {
+            const d = await fetchStockTencent(stockCode, 1, signal);
+            return !!(d?.length > 0 && typeof d[0].value === 'number');
+        },
+    },
+    {
+        name: 'Hist: Sina (Stock)',
+        fn: async (signal) => {
+            const d = await fetchStockSina(stockCode, 1, signal);
+            return !!(d?.length > 0 && typeof d[0].value === 'number');
+        },
+    },
+    {
+        name: 'Hist: EastMoney (Fund)',
+        fn: async (signal) => {
+            const d = await fetchFundHistory(fundCode, 1, signal);
+            return !!(d?.length > 0 && typeof d[0].value === 'number');
+        },
+    },
+    {
+        name: 'Quote: Tencent (Realtime)',
+        fn: async (signal) => {
+            const res = await fetch(`https://qt.gtimg.cn/q=${stockCode}`, {
+                headers: { Referer: 'https://gu.qq.com/' }, signal,
+            });
+            const text = await res.text();
+            return res.ok && text.includes(stockCode.replace(/[a-z]/g, '')) && text.split('~').length > 10;
+        },
+    },
+    {
+        name: 'Intra: EastMoney (Trends)',
+        fn: async (signal) => {
+            const secid = stockCode.startsWith('sh') ? `1.${stockCode.slice(2)}` : `0.${stockCode.slice(2)}`;
+            const res = await fetch(
+                `https://push2.eastmoney.com/api/qt/stock/trends2/get?secid=${secid}&fields1=f1&fields2=f51`,
+                { headers: { Referer: 'https://quote.eastmoney.com/' }, signal }
             );
+            const d = await res.json();
+            return !!(res.ok && d?.data?.trends?.length > 0);
+        },
+    },
+    {
+        name: 'Name: EastMoney (Query)',
+        fn: async (signal) => {
+            const secid = stockCode.startsWith('sh') ? `1.${stockCode.slice(2)}` : `0.${stockCode.slice(2)}`;
+            const res = await fetch(
+                `https://push2.eastmoney.com/api/qt/stock/get?secid=${secid}&fields=f58`,
+                { headers: { Referer: 'https://quote.eastmoney.com/' }, signal }
+            );
+            const d = await res.json();
+            return !!(res.ok && d?.data?.f58);
+        },
+    },
+    {
+        name: 'Name: Tencent (Fund Spec)',
+        fn: async (signal) => {
+            const res = await fetch(`https://qt.gtimg.cn/q=s_jj${fundCode}`, {
+                headers: { Referer: 'https://gu.qq.com/' }, signal,
+            });
+            const text = await res.text();
+            return res.ok && text.includes(fundCode);
+        },
+    },
+    {
+        name: 'Name: EastMoney (Fund HTML)',
+        fn: async (signal) => {
+            const res = await fetch(`https://fund.eastmoney.com/${fundCode}.html`, {
+                headers: { Referer: 'https://fund.eastmoney.com/', Accept: 'text/html' }, signal,
+            });
+            const text = await res.text();
+            return res.ok && text.includes(fundCode);
+        },
+    },
+];
 
-            try {
-                const fetchedResults = await Promise.all(fetchPromises);
-                clearTimeout(globalTimeout);
-                const recordsToSave = [];
+// ── 主入口 ──────────────────────────────────────────────────────────────────
 
-                for (const res of fetchedResults) {
-                    if (res?.data) {
-                        result[res.code] = res.data;
-                        recordsToSave.push({ code: res.code, date: today, data: res.data });
-                    }
-                }
-
-                if (recordsToSave.length > 0) {
-                    await saveIntradayBatch(recordsToSave);
-                }
-            } catch (err) {
-                console.error(`[Intraday Bulk] Global error:`, err.message);
-            }
-        }
+export async function runSentinel(env) {
+    const db = await getD1Storage(env);
+    if (!db) {
+        console.error('[Sentinel] DB unreachable, skipping');
+        return;
     }
 
-    return result;
+    // 动态采样逻辑：从用户资产库随机选取一个股票和一个基金作为拨测标的
+    const sampleStock = await db.prepare("SELECT code FROM user_assets WHERE type = 'stock' ORDER BY RANDOM() LIMIT 1").first();
+    const sampleFund = await db.prepare("SELECT code FROM user_assets WHERE type = 'fund' ORDER BY RANDOM() LIMIT 1").first();
+
+    const stockCode = sampleStock?.code || 'sh600036'; // 兜底招行
+    const fundCode = sampleFund?.code || '110020';   // 兜底易方达沪深300
+
+    const tasks = CREATE_HEALTH_TASKS(stockCode, fundCode);
+    const results = await Promise.all(tasks.map(_probeOne));
+
+    await _batchWriteHealth(db, results);
+
+    const available = results.filter(r => r.status !== 'down').length;
+    const slaOk = results.filter(r => ['healthy', 'wary'].includes(r.status)).length;
+    const failures = results.filter(r => r.status === 'down');
+
+    let msg = `Sentinel done — Availability: ${available}/${results.length}, SLA OK: ${slaOk}/${results.length}`;
+    if (failures.length > 0) {
+        msg += `. Down: ${failures.map(f => f.name).join(', ')}`;
+    }
+
+    console.log(`[Sentinel] ${msg}`);
+    await _log(db, slaOk < results.length ? 'WARN' : 'INFO', 'Sentinel', msg);
 }
 
-export async function syncHistoryBulk(items, days = 250, allowExternal = false, env = null) {
-    if (!items?.length) return {}
-    const dbHistoryMap = await getBulkHistory(items, days)
-    const result = {}
-    const today = getBeijingTodayStr()
+// ── 单探针执行 ───────────────────────────────────────────────────────────────
 
-    for (const item of items) {
-        const key = `${item.type}:${item.code}`
-        let dbHistory = dbHistoryMap[key] || []
+async function _probeOne(task) {
+    const ctrl = new AbortController();
+    const tid = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
 
-        // [Fix] 如果 D1 没数据且允许外部抓取，则立即执行 fetch 并写入 D1
-        if (dbHistory.length === 0 && allowExternal) {
-            try {
-                const { fetchHistorySingle } = await import('./historyFetcher')
-                const { saveHistory } = await import('../storage/historyRepo')
+    const t0 = Date.now();
+    let success = false;
+    let errorMsg = '';
 
-                const externalData = await fetchHistorySingle(item.code, item.type, days)
-                if (externalData && externalData.length > 0) {
-                    await saveHistory(item.code, item.type, externalData)
-                    dbHistory = externalData
-                }
-            } catch (e) {
-                console.error(`[SyncBulk] External fetch failed for ${key}:`, e.message)
-            }
-        }
-
-        if (dbHistory.length === 0) {
-            result[key] = {
-                status: 'syncing',
-                history: [],
-                summary: { perf5d: 0, perf22d: 0, perf250d: 0 }
-            }
-            continue
-        }
-
-        const latestDate = dbHistory[dbHistory.length - 1].date
-        const gap = daysBetween(latestDate, today)
-
-        result[key] = {
-            status: gap > 0 ? 'updating' : 'ready',
-            history: dbHistory,
-            summary: calculateStats(dbHistory)
-        }
+    try {
+        success = await task.fn(ctrl.signal);
+        if (!success) errorMsg = 'Empty or invalid response';
+    } catch (e) {
+        errorMsg = e.name === 'AbortError'
+            ? `Timeout (>${TIMEOUT_MS}ms)`
+            : e.message;
+    } finally {
+        clearTimeout(tid);
     }
-    return result
+
+    const latency = Date.now() - t0;
+    return {
+        name: task.name,
+        status: _computeStatus(success, latency),
+        latency,
+        errorMsg: success ? '' : errorMsg,
+    };
 }
 
-export async function syncNamesBulk(items, allowExternal = false) {
-    if (!Array.isArray(items) || items.length === 0) return {};
+// ── D1 写入 ──────────────────────────────────────────────────────────────────
 
-    const CACHE_KEY_PREFIX = 'api_name_';
-    const CACHE_TTL = 3600 * 1000;
-    const result = {};
-    const missingInMem = [];
+async function _batchWriteHealth(db, results) {
+    const now = new Date().toISOString();
+    const stmts = results.map(r =>
+        db.prepare(`
+            INSERT INTO api_health (api_name, status, avg_latency, error_msg, last_check)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(api_name) DO UPDATE SET
+                status      = excluded.status,
+                avg_latency = excluded.avg_latency,
+                error_msg   = excluded.error_msg,
+                last_check  = excluded.last_check
+        `).bind(r.name, r.status, r.latency, r.errorMsg, now)
+    );
+    await db.batch(stmts);
+}
 
-    for (const item of items) {
-        const key = `${item.type}:${item.code}`;
-        const cached = memoryCache.get(CACHE_KEY_PREFIX + key);
-        if (cached && !isInvalidName(cached)) {
-            result[key] = cached;
-        } else {
-            missingInMem.push(item);
-        }
+// ── 状态判别 ─────────────────────────────────────────────────────────────────
+
+function _computeStatus(success, latency) {
+    if (!success) return 'down';
+    if (latency < 1200) return 'healthy';
+    if (latency < 2200) return 'wary';
+    if (latency < 3500) return 'slow';
+    return 'critical';
+}
+
+// ── 工具 ─────────────────────────────────────────────────────────────────────
+
+async function _log(db, level, source, message) {
+    try {
+        await db
+            .prepare('INSERT INTO system_logs (level, module, message) VALUES (?, ?, ?)')
+            .bind(level, source, message)
+            .run();
+    } catch (e) {
+        console.error('[Sentinel] log write failed:', e.message);
     }
-
-    if (missingInMem.length === 0) return result;
-
-    const d1Result = await getAssetNames(missingInMem);
-    const toFetch = [];
-
-    for (const item of missingInMem) {
-        const key = `${item.type}:${item.code}`;
-        const name = d1Result[key];
-        if (name && !isInvalidName(name)) {
-            result[key] = name;
-            memoryCache.set(CACHE_KEY_PREFIX + key, name, CACHE_TTL);
-        } else {
-            toFetch.push(item);
-        }
-    }
-
-    if (toFetch.length > 0 && allowExternal) {
-        const fetched = [];
-        const CHUNK_SIZE = 5;
-        const NAME_SUBREQ_BUDGET = 20;
-        let subreqCount = 0;
-
-        for (let i = 0; i < toFetch.length; i += CHUNK_SIZE) {
-            if (subreqCount >= NAME_SUBREQ_BUDGET) {
-                console.warn(`[syncNamesBulk] Budget exceeded (${subreqCount}/${NAME_SUBREQ_BUDGET}). Skipping ${toFetch.length - i} names.`);
-                break;
-            }
-            const chunk = toFetch.slice(i, i + CHUNK_SIZE);
-            const chunkFetched = await Promise.all(chunk.map(async (item) => {
-                const key = `${item.type}:${item.code}`;
-                let name = (item.type === 'fund') ? await fetchFundName(item.code) : await fetchStockName(item.code);
-                return { key, name };
-            }));
-            fetched.push(...chunkFetched);
-            subreqCount += chunk.length;
-        }
-
-        let newNames = {};
-        for (const { key, name } of fetched) {
-            if (name) {
-                result[key] = name;
-                newNames[key] = name;
-                memoryCache.set(CACHE_KEY_PREFIX + key, name, CACHE_TTL);
-            }
-        }
-        if (Object.keys(newNames).length > 0) {
-            await saveAssetNames(newNames);
-        }
-    }
-
-    for (const item of items) {
-        const key = `${item.type}:${item.code}`;
-        if (!result[key]) result[key] = item.code;
-    }
-
-    return result;
 }
 </file>
 
@@ -6871,53 +6456,125 @@ export async function batchSql(statements, env = null) {
 }
 </file>
 
-<file path=".github/workflows/deploy.yml">
-name: Deploy to Cloudflare Workers
+<file path="worker-entry.js">
+/**
+ * worker-entry.js
+ * 
+ * Cloudflare Workers 统一入口 (Refactored for D1 Task Queue)
+ */
 
-on:
-  push:
-    branches:
-      - main
+import openNextWorker from './.open-next/worker.js';
+import { runHistorySync } from './lib/cron/historySync.js';
+import { runRealtimeSync } from './lib/cron/realtimeSync.js';
+import { runSentinel } from './lib/cron/sentinel.js';
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  # Diagnostic: Triggering re-fetch due to transient checkout failure in previous run.
+export default {
+    fetch(request, env, ctx) {
+        return openNextWorker.fetch(request, env, ctx);
+    },
 
-jobs:
-  deploy:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          persist-credentials: false
+    async scheduled(event, env, ctx) {
+        switch (event.cron) {
+            case '0 13 * * 1-5':
+            case '0 19 * * 1-6':
+                ctx.waitUntil(runHistorySync(env));
+                break;
+            case '*/5 1-7 * * 1-5':
+                ctx.waitUntil(runRealtimeSync(env));
+                break;
+            case '*/15 * * * *':
+                ctx.waitUntil(runSentinel(env));
+                break;
+            case '*/1 * * * *':
+                // 切换至 D1 任务中心处理器
+                ctx.waitUntil(processSyncJobs(env));
+                break;
+            default:
+                console.warn(`[Scheduled] Unknown cron: "${event.cron}"`);
+        }
+    },
+};
 
-      - name: Install Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: 'npm'
+/**
+ * D1 任务中心处理器
+ * 采用原子锁定模式：通过 CTE 锁定任务并立即标记为 processing，防止多实例重复执行
+ */
+async function processSyncJobs(env) {
+    const DB = env.DB;
+    if (!DB) return;
 
-      - name: Install dependencies
-        run: npm ci
+    // 1. 先把卡死超过 10 分钟的 processing 任务重置回 pending
+    try {
+        await DB.prepare(`
+            UPDATE sync_jobs 
+            SET status = 'pending', updated_at = CURRENT_TIMESTAMP
+            WHERE status = 'processing' 
+            AND updated_at < datetime('now', '-10 minutes')
+        `).run();
+    } catch (cleanupErr) {
+        console.error('[Queue:Cleanup] Reset stuck jobs failed:', cleanupErr.message);
+    }
 
-      - name: Setup Next.js Cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.npm
-            ${{ github.workspace }}/.next/cache
-          key: ${{ runner.os }}-nextjs-${{ hashFiles('**/package-lock.json') }}-${{ hashFiles('**/*.[jt]s', '**/*.[jt]sx') }}
-          restore-keys: |
-            ${{ runner.os }}-nextjs-${{ hashFiles('**/package-lock.json') }}-
+    // 2. 超过最大重试次数的直接标记 failed，不再阻塞队列
+    try {
+        await DB.prepare(`
+            UPDATE sync_jobs
+            SET status = 'failed', error_msg = 'max retries exceeded', updated_at = CURRENT_TIMESTAMP
+            WHERE status = 'pending'
+            AND retry_count >= 3
+        `).run();
+    } catch (retryLimitErr) {
+        console.error('[Queue:RetryLimit] Mark max retries failed:', retryLimitErr.message);
+    }
 
-      # 由于 OpenNext 构建需要特定的 Windows 二进制包，但在 Linux 环境下 npm 会根据平台自动处理。
-      # 我们直接运行 package.json 中定义的 deploy 脚本。
-      - name: Build and Deploy
-        run: npm run deploy
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    const BATCH_SIZE = 5;
+    try {
+        const { results: jobs } = await DB.prepare(`
+            WITH targets AS (
+                SELECT id FROM sync_jobs 
+                WHERE status = 'pending' 
+                ORDER BY created_at ASC 
+                LIMIT ?
+            )
+            UPDATE sync_jobs 
+            SET status = 'processing', updated_at = CURRENT_TIMESTAMP 
+            WHERE id IN (SELECT id FROM targets)
+            RETURNING *
+        `).bind(BATCH_SIZE).all();
+
+        if (!jobs || jobs.length === 0) return;
+
+        console.log(`[Queue:D1] Processing ${jobs.length} jobs`);
+
+        for (const job of jobs) {
+            try {
+                if (job.type === 'fund_history') {
+                    const { syncHistoryBulk } = await import('./lib/services/assetSyncService');
+                    let force = false;
+                    try {
+                        const payload = JSON.parse(job.payload || '{}');
+                        force = !!payload.force;
+                    } catch (e) { /* ignore */ }
+
+                    // 传入 env 确保 service 内部获取正确的 DB 绑定，并透传 force 标志
+                    await syncHistoryBulk([{ code: job.code, type: 'fund' }], 250, true, env, force);
+                }
+
+                await DB.prepare("UPDATE sync_jobs SET status = 'completed', updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+                    .bind(job.id)
+                    .run();
+
+            } catch (jobErr) {
+                console.error(`[Queue:D1] Job ${job.id} failed:`, jobErr.message);
+                await DB.prepare("UPDATE sync_jobs SET status = 'failed', error_msg = ?, retry_count = retry_count + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+                    .bind(jobErr.message, job.id)
+                    .run();
+            }
+        }
+    } catch (e) {
+        console.error('[Queue:D1] Batch process failed:', e.message);
+    }
+}
 </file>
 
 <file path="components/DashboardClient.js">
@@ -7314,9 +6971,10 @@ export async function runHistorySync(env, options = {}) {
         console.log(`[HistorySync] ${summary}`);
         await _log(env, fail > 0 || budgetExceeded ? 'WARN' : 'INFO', 'HistorySync', summary);
 
-        // 5. 定期清理任务 (SaaS: 自动删除过期会话)
+        // 5. 定期清理任务 (SaaS: 自动删除过期会话与旧日志)
         if (subreqCount < 48) { // 留最后几格配额给清理操作
             await env.DB.prepare("DELETE FROM user_sessions WHERE expires_at < datetime('now')").run();
+            await env.DB.prepare("DELETE FROM system_logs WHERE timestamp < datetime('now', '-30 days')").run();
         }
 
         if (errors.length) {
@@ -7405,6 +7063,590 @@ async function _log(env, level, module, message) {
 }
 
 const _sleep = ms => new Promise(r => setTimeout(r, ms));
+</file>
+
+<file path="lib/services/assetSyncService.js">
+/**
+ * lib/services/assetSyncService.js
+ * 
+ * 资产同步 Service 层 (L3 Logic)
+ * 
+ * 职责：
+ * 1. 统筹资产名称 (syncNamesBulk) 与历史数据 (syncHistoryBulk) 的多级同步逻辑。
+ * 2. 封装外部 API 交互 (fetch) 与 D1 存储操作。
+ * 3. 作为唯一的事实来源供 API 路由、Cron 任务及后台机制调用。
+ */
+
+import { getBulkHistory, insertDailyPricesBatch } from '@/lib/storage/historyRepo'
+import { getAssetNames, saveAssetNames } from '@/lib/storage/nameRepo'
+import { memoryCache } from '@/lib/storage/memoryCache'
+import { calculateStats, fetchWithRetry, getBeijingDate, getBeijingTodayStr } from '@/lib/utils'
+import {
+    EASTMONEY_HEADERS,
+    EASTMONEY_FUND_HEADERS,
+    EASTMONEY_FUND_HTML_HEADERS,
+    TENCENT_HEADERS
+} from '@/lib/constants/headers'
+import { parseStockCode, toSecid } from '@/lib/utils/stockCode'
+
+/**
+ * =============================
+ * 辅助工具函数 (Internal)
+ * =============================
+ */
+
+function daysBetween(d1, d2) {
+    if (!d1 || !d2) return 0;
+    const date1 = new Date(d1);
+    const date2 = new Date(d2);
+    const diffTime = date2 - date1;
+    return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+}
+
+function parseTrends2Response(json) {
+    const d = json?.data
+    if (!d?.trends?.length) return null
+
+    const prevClose = parseFloat(d.preClose) || parseFloat(d.prePrice) || 0
+    const points = d.trends
+        .map(line => {
+            const parts = line.split(',')
+            const timePart = parts[0].includes(' ') ? parts[0].split(' ')[1] : parts[0]
+            const val = parseFloat(parts[2])
+            return { time: timePart, value: isNaN(val) ? 0 : val }
+        })
+        .filter(p => p.value > 0)
+
+    return points.length ? { points, prevClose } : null
+}
+
+function isDbDataFresh(dbData, nowMs, maxAgeMs = 60000) {
+    if (!dbData?.points?.length) return false
+    const isToday = dbData.points[0]?.time?.includes(':') && !dbData.points[0]?.time?.includes('-')
+    if (!isToday) return true
+    const updatedAt = dbData.updated_at ? new Date(dbData.updated_at).getTime() : 0
+    return nowMs - updatedAt < maxAgeMs
+}
+
+function isInvalidName(name) {
+    if (!name || typeof name !== 'string') return true;
+    const clean = name.trim();
+    if (clean.length === 0) return true;
+    const ERROR_PATTERNS = ['页面未找到', '404', 'Bad Gateway', 'Service Unavailable', 'Cloudflare', 'Internal Server Error', '东方财富网'];
+    if (ERROR_PATTERNS.some(p => clean.includes(p)) && clean.length < 20) return true;
+    if (/^\d{6}$/.test(clean)) return true;
+    let badChars = 0;
+    for (let i = 0; i < clean.length; i++) {
+        const code = clean.charCodeAt(i);
+        if (code === 0xFFFD) return true;
+        if (code < 0x20 && code !== 0x0A && code !== 0x0D) badChars++;
+        if (code >= 0xE000 && code <= 0xF8FF) badChars++;
+    }
+    return (badChars / clean.length) > 0.3;
+}
+
+/**
+ * =============================
+ * 外部 API 抓取 (EastMoney)
+ * =============================
+ */
+
+async function fetchStockName(code) {
+    const secid = toSecid(code);
+    if (!secid) return null;
+    try {
+        const url = `https://push2.eastmoney.com/api/qt/stock/get?secid=${secid}&fields=f58`;
+        const res = await fetchWithRetry(url, { headers: EASTMONEY_HEADERS });
+        if (res.ok) {
+            const json = await res.json();
+            if (json.data?.f58) return json.data.f58;
+        }
+    } catch (e) {
+        console.error(`[fetchStockName] Error fetching ${code}:`, e.message);
+    }
+    return null;
+}
+
+async function fetchFundName(code) {
+    const match = code.match(/^([a-zA-Z]{2})?(\d+)$/i);
+    const clean = match ? match[2] : code;
+    try {
+        const url = `https://qt.gtimg.cn/q=s_jj${clean}`;
+        const res = await fetchWithRetry(url, { headers: TENCENT_HEADERS });
+        if (res.ok) {
+            const arrayBuffer = await res.arrayBuffer();
+            const text = new TextDecoder('gbk').decode(arrayBuffer);
+            const parts = text.split('~');
+            if (parts.length > 2 && parts[1]) return parts[1].trim();
+        }
+    } catch (e) {
+        console.error(`[fetchFundName:Tencent] Error for ${code}:`, e.message);
+    }
+
+    try {
+        const url = `https://api.fund.eastmoney.com/f10/lsjz?fundCode=${clean}&pageIndex=1&pageSize=1&_=${Date.now()}`;
+        const res = await fetchWithRetry(url, { headers: EASTMONEY_FUND_HEADERS });
+        if (res.ok) {
+            const data = await res.json();
+            if (data.Expansion) return data.Expansion;
+        }
+    } catch (e) {
+        console.error(`[fetchFundName:EastMoney] Error for ${code}:`, e.message);
+    }
+    return null;
+}
+
+/**
+ * =============================
+ * 核心业务逻辑 (Exported Services)
+ * =============================
+ */
+
+const CACHE_KEY_PREFIX = 'api_intraday_';
+const CACHE_TTL = 30 * 1000;
+
+export async function fetchSingleIntraday(code, preFetchedDbData = null, externalAbortSignal = null) {
+    const cached = memoryCache.get(CACHE_KEY_PREFIX + code)
+    if (cached) return cached
+
+    const { getIntraday } = await import('@/lib/storage/intradayRepo')
+    const dbData = preFetchedDbData ?? await getIntraday(code, getBeijingTodayStr(), true)
+    if (isDbDataFresh(dbData, Date.now())) return dbData
+
+    const parsed = parseStockCode(code);
+    if (!parsed) return dbData;
+    const url = `https://push2.eastmoney.com/api/qt/stock/trends2/get?secid=${parsed.market}.${parsed.clean}&fields1=f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13&fields2=f51,f52,f53,f54,f55,f56,f57,f58`
+
+    let res
+    try {
+        res = await fetchWithRetry(url, { headers: EASTMONEY_HEADERS }, 0, externalAbortSignal)
+    } catch (e) {
+        console.error(`[Intraday] Fetch failed for ${code}:`, e.message)
+        return dbData
+    }
+
+    if (!res.ok) return dbData
+
+    const trendsData = parseTrends2Response(await res.json())
+    if (!trendsData) return dbData
+
+    const { points, prevClose } = trendsData
+    const lastPrice = points[points.length - 1].value
+    const effectivePrevClose = prevClose || points[0].value
+    const result = {
+        code,
+        price: lastPrice,
+        changePercent: effectivePrevClose > 0 ? ((lastPrice / effectivePrevClose - 1) * 100) : 0,
+        prevClose: effectivePrevClose,
+        points
+    }
+
+    memoryCache.set(CACHE_KEY_PREFIX + code, result, CACHE_TTL)
+    return result
+}
+
+export async function syncIntradayBulk(items, allowExternal = false) {
+    if (!Array.isArray(items) || items.length === 0) return {};
+
+    const today = getBeijingTodayStr();
+    const result = {};
+
+    const toFetchFromPersist = [];
+    for (const item of items) {
+        const cached = memoryCache.get(CACHE_KEY_PREFIX + item.code);
+        if (cached) {
+            result[item.code] = cached;
+        } else {
+            toFetchFromPersist.push(item);
+        }
+    }
+
+    if (toFetchFromPersist.length > 0) {
+        const { getBulkIntraday, saveIntradayBatch } = await import('@/lib/storage/intradayRepo')
+        const dbDataMap = await getBulkIntraday(toFetchFromPersist, today);
+        const externalFetchList = [];
+        const now = Date.now();
+
+        for (const item of toFetchFromPersist) {
+            const dbData = dbDataMap[item.code];
+            const stalenessThreshold = allowExternal ? 60000 : 300000;
+
+            if (isDbDataFresh(dbData, now, stalenessThreshold)) {
+                result[item.code] = dbData;
+                memoryCache.set(CACHE_KEY_PREFIX + item.code, dbData, CACHE_TTL);
+                continue;
+            }
+
+            if (allowExternal) {
+                externalFetchList.push(item);
+            } else if (dbData) {
+                result[item.code] = dbData;
+                memoryCache.set(CACHE_KEY_PREFIX + item.code, dbData, CACHE_TTL);
+            }
+        }
+
+        if (externalFetchList.length > 0 && allowExternal) {
+            const { default: pLimit } = await import('p-limit')
+            const limit = pLimit(5);
+            const safeFetchList = externalFetchList.slice(0, 15);
+            const globalController = new AbortController();
+            const globalTimeout = setTimeout(() => globalController.abort(), 25000);
+
+            const fetchPromises = safeFetchList.map(item =>
+                limit(async () => {
+                    const data = await fetchSingleIntraday(item.code, dbDataMap[item.code], globalController.signal);
+                    return data ? { code: item.code, data } : null;
+                })
+            );
+
+            try {
+                const fetchedResults = await Promise.all(fetchPromises);
+                clearTimeout(globalTimeout);
+                const recordsToSave = [];
+
+                for (const res of fetchedResults) {
+                    if (res?.data) {
+                        result[res.code] = res.data;
+                        recordsToSave.push({ code: res.code, date: today, data: res.data });
+                    }
+                }
+
+                if (recordsToSave.length > 0) {
+                    await saveIntradayBatch(recordsToSave);
+                }
+            } catch (err) {
+                console.error(`[Intraday Bulk] Global error:`, err.message);
+            }
+        }
+    }
+
+    return result;
+}
+
+export async function syncHistoryBulk(items, days = 250, allowExternal = false, env = null, forceRefresh = false) {
+    if (!items?.length) return {}
+    const dbHistoryMap = (forceRefresh) ? {} : await getBulkHistory(items, days, env)
+    const result = {}
+    const today = getBeijingTodayStr()
+
+    for (const item of items) {
+        const key = `${item.type}:${item.code}`
+        let dbHistory = dbHistoryMap[key] || []
+
+        // forceRefresh 时跳过缓存，或 D1 无数据且允许外部抓取时执行抓取
+        const shouldFetch = allowExternal && (forceRefresh || dbHistory.length === 0)
+
+        if (shouldFetch) {
+            try {
+                const { fetchStockHistory, fetchFundHistory } = await import('./historyFetcher')
+                const externalData = item.type === 'fund'
+                    ? await fetchFundHistory(item.code, days)
+                    : await fetchStockHistory(item.code, days)
+
+                if (externalData?.length > 0) {
+                    // force 模式先物理删除旧数据，确保脏数据不会干扰后续同步
+                    if (forceRefresh && dbHistory.length > 0) {
+                        const { deleteAssetHistory } = await import('../storage/historyRepo')
+                        await deleteAssetHistory(item.code, item.type, env)
+                    }
+
+                    // 适配 insertDailyPricesBatch 所需的 records 格式
+                    const records = externalData.map(d => ({
+                        code: item.code,
+                        type: item.type,
+                        price: d.value,
+                        date: d.date
+                    }))
+                    await insertDailyPricesBatch(records, env)
+                    dbHistory = externalData
+                }
+            } catch (e) {
+                console.error(`[SyncBulk] External fetch failed for ${key}:`, e.message)
+            }
+        }
+
+        if (dbHistory.length === 0) {
+            result[key] = {
+                status: 'syncing',
+                history: [],
+                summary: { perf5d: 0, perf22d: 0, perf250d: 0 }
+            }
+            continue
+        }
+
+        const latestDate = dbHistory[dbHistory.length - 1].date
+        const gap = daysBetween(latestDate, today)
+
+        result[key] = {
+            status: gap > 0 ? 'updating' : 'ready',
+            history: dbHistory,
+            summary: calculateStats(dbHistory)
+        }
+    }
+    return result
+}
+
+export async function syncNamesBulk(items, allowExternal = false) {
+    if (!Array.isArray(items) || items.length === 0) return {};
+
+    const CACHE_KEY_PREFIX = 'api_name_';
+    const CACHE_TTL = 3600 * 1000;
+    const result = {};
+    const missingInMem = [];
+
+    for (const item of items) {
+        const key = `${item.type}:${item.code}`;
+        const cached = memoryCache.get(CACHE_KEY_PREFIX + key);
+        if (cached && !isInvalidName(cached)) {
+            result[key] = cached;
+        } else {
+            missingInMem.push(item);
+        }
+    }
+
+    if (missingInMem.length === 0) return result;
+
+    const d1Result = await getAssetNames(missingInMem);
+    const toFetch = [];
+
+    for (const item of missingInMem) {
+        const key = `${item.type}:${item.code}`;
+        const name = d1Result[key];
+        if (name && !isInvalidName(name)) {
+            result[key] = name;
+            memoryCache.set(CACHE_KEY_PREFIX + key, name, CACHE_TTL);
+        } else {
+            toFetch.push(item);
+        }
+    }
+
+    if (toFetch.length > 0 && allowExternal) {
+        const fetched = [];
+        const CHUNK_SIZE = 5;
+        const NAME_SUBREQ_BUDGET = 20;
+        let subreqCount = 0;
+
+        for (let i = 0; i < toFetch.length; i += CHUNK_SIZE) {
+            if (subreqCount >= NAME_SUBREQ_BUDGET) {
+                console.warn(`[syncNamesBulk] Budget exceeded (${subreqCount}/${NAME_SUBREQ_BUDGET}). Skipping ${toFetch.length - i} names.`);
+                break;
+            }
+            const chunk = toFetch.slice(i, i + CHUNK_SIZE);
+            const chunkFetched = await Promise.all(chunk.map(async (item) => {
+                const key = `${item.type}:${item.code}`;
+                let name = (item.type === 'fund') ? await fetchFundName(item.code) : await fetchStockName(item.code);
+                return { key, name };
+            }));
+            fetched.push(...chunkFetched);
+            subreqCount += chunk.length;
+        }
+
+        let newNames = {};
+        for (const { key, name } of fetched) {
+            if (name) {
+                result[key] = name;
+                newNames[key] = name;
+                memoryCache.set(CACHE_KEY_PREFIX + key, name, CACHE_TTL);
+            }
+        }
+        if (Object.keys(newNames).length > 0) {
+            await saveAssetNames(newNames);
+        }
+    }
+
+    for (const item of items) {
+        const key = `${item.type}:${item.code}`;
+        if (!result[key]) result[key] = item.code;
+    }
+
+    return result;
+}
+</file>
+
+<file path="lib/services/historyFetcher.js">
+import { fetchWithRetry, getBeijingTodayStr, isMarketClosedBeijing, formatDateInTimezone } from '@/lib/utils';
+import { addSystemLog } from '@/lib/storage/logRepo';
+import { parseStockCode } from '@/lib/utils/stockCode';
+
+const BASE_HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    Accept: '*/*'
+}
+
+/**
+ * 统一 Schema 校验与归一化
+ */
+function normalizePoints(points) {
+    if (!Array.isArray(points)) return [];
+    return points
+        .map(p => ({
+            date: String(p.date),
+            value: parseFloat(p.value)
+        }))
+        .filter(p => p.date && !isNaN(p.value) && p.value > 0);
+}
+
+export async function fetchStockEastmoney(code, days, signal = null) {
+    const parsed = parseStockCode(code);
+    if (!parsed) return null;
+
+    const url = `https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=${parsed.market}.${parsed.clean}&fields1=f1,f2&fields2=f51,f53&klt=101&fqt=1&end=20500101&lmt=${days + 10}`
+
+    try {
+        const res = await fetchWithRetry(url, { headers: { ...BASE_HEADERS, 'Referer': 'https://quote.eastmoney.com/' } }, 0, signal)
+        if (!res) return null
+        const d = await res.json()
+        if (!d?.data?.klines) return null
+
+        const today = getBeijingTodayStr();
+        const closed = isMarketClosedBeijing();
+        const points = d.data.klines.map(line => {
+            const p = line.split(',')
+            return { date: p[0], value: parseFloat(p[1]) }
+        });
+
+        const data = normalizePoints(points)
+            .filter(i => (closed ? i.date <= today : i.date < today))
+
+        if (data.length > 0) {
+            return data.slice(-days);
+        }
+        return null
+    } catch (e) {
+        return null
+    }
+}
+
+export async function fetchStockTencent(code, days, signal = null) {
+    try {
+        const year = new Date().getFullYear() + 2
+        const url = `https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?_var=kline_dayqfq&param=${code.toLowerCase()},day,2020-01-01,${year}-12-31,500,qfq`
+        const res = await fetchWithRetry(url, { headers: BASE_HEADERS }, 0, signal)
+        if (!res) return null
+        const text = await res.text()
+        const jsonStr = text.replace(/^kline_dayqfq=/, '')
+        const d = JSON.parse(jsonStr)
+        const stockData = d.data?.[code.toLowerCase()]
+        const kline = stockData?.qfqday || stockData?.day
+
+        const today = getBeijingTodayStr();
+        const closed = isMarketClosedBeijing();
+        if (kline && Array.isArray(kline)) {
+            const points = kline.map(item => ({
+                date: item[0],
+                value: parseFloat(item[2])
+            }));
+
+            return normalizePoints(points)
+                .filter(i => (closed ? i.date <= today : i.date < today))
+                .slice(-days)
+        }
+        return null
+    } catch (e) {
+        return null
+    }
+}
+
+export async function fetchStockSina(code, days, signal = null) {
+    try {
+        const url = `https://money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData?symbol=${code}&scale=240&ma=no&datalen=${days}`
+        const res = await fetchWithRetry(url, {}, 0, signal)
+        if (!res) return null
+        const d = await res.json()
+        if (!Array.isArray(d)) return null
+
+        const today = getBeijingTodayStr();
+        const closed = isMarketClosedBeijing();
+        const points = d.map(i => ({
+            date: i.day.split(' ')[0],
+            value: parseFloat(i.close)
+        }));
+
+        const data = normalizePoints(points)
+            .filter(i => (closed ? i.date <= today : i.date < today))
+
+        if (data.length > 0) {
+            return data;
+        }
+        return null
+    } catch (e) {
+        return null
+    }
+}
+
+export async function fetchStockHistory(code, days, signal = null) {
+    const res = (await fetchStockEastmoney(code, days, signal)) ||
+        (await fetchStockTencent(code, days, signal)) ||
+        (await fetchStockSina(code, days, signal));
+    if (res) {
+        console.log(`[Fetcher] Fetched ${res.length} points for stock ${code}`);
+    }
+    return res;
+}
+
+export async function fetchFundHistory(code, days, signal = null) {
+    const match = code.match(/^([a-zA-Z]{2})?(\d+)$/i);
+    const clean = match ? match[2] : code;
+
+    try {
+        // 使用天天基金“一波流”接口：获取全量历史走势 JS
+        // 修正为 HTTPS 避免明文请求
+        const url = `https://fund.eastmoney.com/pingzhongdata/${clean}.js`;
+        const res = await fetchWithRetry(url, {
+            headers: { ...BASE_HEADERS, 'Referer': 'https://fund.eastmoney.com/' }
+        }, 0, signal);
+        if (!res) return null;
+
+        const text = await res.text();
+
+        // 使用正则提取“累计净值走势”数据：Data_ACWorthTrend
+        // 数据格式通常为：[[时间戳, 净值], [时间戳, 净值], ...]
+        const regex = /var Data_ACWorthTrend = (\[.*?\]);/;
+        const found = text.match(regex);
+        if (!found || !found[1]) {
+            console.error(`[Fetcher] Fund ${code}: Data_ACWorthTrend not found in JS response.`);
+            return null;
+        }
+
+        const rawData = JSON.parse(found[1]);
+        if (!Array.isArray(rawData) || rawData.length === 0) return null;
+
+        const today = getBeijingTodayStr();
+        const closed = isMarketClosedBeijing();
+
+        // 转换数据：时间戳(ms) -> YYYY-MM-DD (强制北京时间)
+        const points = rawData.map(item => {
+            return {
+                date: formatDateInTimezone(item[0], "Asia/Shanghai"),
+                value: parseFloat(item[1])
+            };
+        });
+
+        const converted = normalizePoints(points).filter(i => {
+            return closed ? i.date <= today : i.date < today;
+        });
+
+        // 关键：数据完整性保护 (确保抓取质量)
+        // 逻辑：如果原始数据点很多，但经过解析/过滤后只剩下很少，说明解析逻辑或数据可能异常
+        const rawPointCount = rawData.length;
+        const result = converted.slice(-days);
+
+        // 期望得到的条数：或者是 days，或者是该基金从诞生至今的总天数
+        const expectation = Math.min(days, rawPointCount);
+
+        // 如果解析出来的条数明显少于原始条数（且属于需要审计的大样本），触发熔断
+        if (result.length < expectation * 0.9 && expectation > 30) {
+            console.error(`[Fetcher] Fund ${code} integrity check failed: Got ${result.length}, expected near ${expectation} (from ${rawPointCount} raw points).`);
+            return null;
+        }
+
+        console.log(`[Fetcher] Fund: Bulk-Fetched ${result.length} points for fund ${code} via pingzhongdata JS.`);
+        return result;
+    } catch (e) {
+        console.error(`[Fetcher] Fund ${code} failed:`, e.message);
+        return null;
+    }
+}
 </file>
 
 <file path="app/admin/_hooks/useAdminData.js">
@@ -7616,192 +7858,6 @@ export function useAdminData(secretKey, showToast, onAuthFailure) {
         triggerForceSync,
         triggerCleanup,
     };
-}
-</file>
-
-<file path="lib/services/historyFetcher.js">
-import { fetchWithRetry, getBeijingTodayStr, isMarketClosedBeijing, formatDateInTimezone } from '@/lib/utils';
-import { addSystemLog } from '@/lib/storage/logRepo';
-import { parseStockCode } from '@/lib/utils/stockCode';
-
-const BASE_HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    Accept: '*/*'
-}
-
-/**
- * 统一 Schema 校验与归一化
- */
-function normalizePoints(points) {
-    if (!Array.isArray(points)) return [];
-    return points
-        .map(p => ({
-            date: String(p.date),
-            value: parseFloat(p.value)
-        }))
-        .filter(p => p.date && !isNaN(p.value) && p.value > 0);
-}
-
-export async function fetchStockEastmoney(code, days, signal = null) {
-    const parsed = parseStockCode(code);
-    if (!parsed) return null;
-
-    const url = `https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=${parsed.market}.${parsed.clean}&fields1=f1,f2&fields2=f51,f53&klt=101&fqt=1&end=20500101&lmt=${days + 10}`
-
-    try {
-        const res = await fetchWithRetry(url, { headers: { ...BASE_HEADERS, 'Referer': 'https://quote.eastmoney.com/' } }, 0, signal)
-        if (!res) return null
-        const d = await res.json()
-        if (!d?.data?.klines) return null
-
-        const today = getBeijingTodayStr();
-        const closed = isMarketClosedBeijing();
-        const points = d.data.klines.map(line => {
-            const p = line.split(',')
-            return { date: p[0], value: parseFloat(p[1]) }
-        });
-
-        const data = normalizePoints(points)
-            .filter(i => (closed ? i.date <= today : i.date < today))
-
-        if (data.length > 0) {
-            return data.slice(-days);
-        }
-        return null
-    } catch (e) {
-        return null
-    }
-}
-
-export async function fetchStockTencent(code, days, signal = null) {
-    try {
-        const year = new Date().getFullYear() + 2
-        const url = `https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?_var=kline_dayqfq&param=${code.toLowerCase()},day,2020-01-01,${year}-12-31,500,qfq`
-        const res = await fetchWithRetry(url, { headers: BASE_HEADERS }, 0, signal)
-        if (!res) return null
-        const text = await res.text()
-        const jsonStr = text.replace(/^kline_dayqfq=/, '')
-        const d = JSON.parse(jsonStr)
-        const stockData = d.data?.[code.toLowerCase()]
-        const kline = stockData?.qfqday || stockData?.day
-
-        const today = getBeijingTodayStr();
-        const closed = isMarketClosedBeijing();
-        if (kline && Array.isArray(kline)) {
-            const points = kline.map(item => ({
-                date: item[0],
-                value: parseFloat(item[2])
-            }));
-
-            return normalizePoints(points)
-                .filter(i => (closed ? i.date <= today : i.date < today))
-                .slice(-days)
-        }
-        return null
-    } catch (e) {
-        return null
-    }
-}
-
-export async function fetchStockSina(code, days, signal = null) {
-    try {
-        const url = `https://money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData?symbol=${code}&scale=240&ma=no&datalen=${days}`
-        const res = await fetchWithRetry(url, {}, 0, signal)
-        if (!res) return null
-        const d = await res.json()
-        if (!Array.isArray(d)) return null
-
-        const today = getBeijingTodayStr();
-        const closed = isMarketClosedBeijing();
-        const points = d.map(i => ({
-            date: i.day.split(' ')[0],
-            value: parseFloat(i.close)
-        }));
-
-        const data = normalizePoints(points)
-            .filter(i => (closed ? i.date <= today : i.date < today))
-
-        if (data.length > 0) {
-            return data;
-        }
-        return null
-    } catch (e) {
-        return null
-    }
-}
-
-export async function fetchStockHistory(code, days, signal = null) {
-    const res = (await fetchStockEastmoney(code, days, signal)) ||
-        (await fetchStockTencent(code, days, signal)) ||
-        (await fetchStockSina(code, days, signal));
-    if (res) {
-        console.log(`[Fetcher] Fetched ${res.length} points for stock ${code}`);
-    }
-    return res;
-}
-
-export async function fetchFundHistory(code, days, signal = null) {
-    const match = code.match(/^([a-zA-Z]{2})?(\d+)$/i);
-    const clean = match ? match[2] : code;
-
-    try {
-        // 使用天天基金“一波流”接口：获取全量历史走势 JS
-        // 修正为 HTTPS 避免明文请求
-        const url = `https://fund.eastmoney.com/pingzhongdata/${clean}.js`;
-        const res = await fetchWithRetry(url, {
-            headers: { ...BASE_HEADERS, 'Referer': 'https://fund.eastmoney.com/' }
-        }, 0, signal);
-        if (!res) return null;
-
-        const text = await res.text();
-
-        // 使用正则提取“累计净值走势”数据：Data_ACWorthTrend
-        // 数据格式通常为：[[时间戳, 净值], [时间戳, 净值], ...]
-        const regex = /var Data_ACWorthTrend = (\[.*?\]);/;
-        const found = text.match(regex);
-        if (!found || !found[1]) {
-            console.error(`[Fetcher] Fund ${code}: Data_ACWorthTrend not found in JS response.`);
-            return null;
-        }
-
-        const rawData = JSON.parse(found[1]);
-        if (!Array.isArray(rawData) || rawData.length === 0) return null;
-
-        const today = getBeijingTodayStr();
-        const closed = isMarketClosedBeijing();
-
-        // 转换数据：时间戳(ms) -> YYYY-MM-DD (强制北京时间)
-        const points = rawData.map(item => {
-            return {
-                date: formatDateInTimezone(item[0], "Asia/Shanghai"),
-                value: parseFloat(item[1])
-            };
-        });
-
-        const converted = normalizePoints(points).filter(i => {
-            return closed ? i.date <= today : i.date < today;
-        });
-
-        // 关键：数据完整性保护 (确保抓取质量)
-        // 逻辑：如果原始数据点很多，但经过解析/过滤后只剩下很少，说明解析逻辑或数据可能异常
-        const rawPointCount = rawData.length;
-        const result = converted.slice(-days);
-
-        // 期望得到的条数：或者是 days，或者是该基金从诞生至今的总天数
-        const expectation = Math.min(days, rawPointCount);
-
-        // 如果解析出来的条数明显少于原始条数（且属于需要审计的大样本），触发熔断
-        if (result.length < expectation * 0.9 && expectation > 30) {
-            console.error(`[Fetcher] Fund ${code} integrity check failed: Got ${result.length}, expected near ${expectation} (from ${rawPointCount} raw points).`);
-            return null;
-        }
-
-        console.log(`[Fetcher] Fund: Bulk-Fetched ${result.length} points for fund ${code} via pingzhongdata JS.`);
-        return result;
-    } catch (e) {
-        console.error(`[Fetcher] Fund ${code} failed:`, e.message);
-        return null;
-    }
 }
 </file>
 

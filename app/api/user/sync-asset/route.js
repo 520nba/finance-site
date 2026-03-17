@@ -19,14 +19,15 @@ export async function POST(request) {
             return NextResponse.json({ success: false, error: 'Invalid parameters' }, { status: 400 });
         }
 
-        const env = await getCloudflareCtx();
+        const cfCtx = await getCloudflareCtx();
+        const env = cfCtx?.env || null;
         const items = [{ code, type }];
 
-        // 1. 同步名称 (不传 env，service 内部会自动获取)
+        // 1. 同步名称
         await syncNamesBulk(items, true);
 
-        // 2. 同步 250 天历史数据
-        await syncHistoryBulk(items, 250, true);
+        // 2. 同步 250 天历史数据 (透传 env 确保 D1 访问正常)
+        await syncHistoryBulk(items, 250, true, env);
 
         return NextResponse.json({ success: true, code, type });
     } catch (e) {
