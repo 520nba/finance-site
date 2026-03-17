@@ -29,9 +29,28 @@ export async function GET(request) {
     if (!db) return NextResponse.json({ error: 'DB unavailable' }, { status: 500 });
 
     // 3. 获取 KV 绑定 (由 Cloudflare 提供)
-    const FUND_QUEUE = await getKvStorage('STOCK_DATA');
+    let FUND_QUEUE = await getKvStorage('STOCK_DATA');
+
+    // ── [DEBUG] 生产环境环境变量探测 ──────────────────────────────────────────
     if (!FUND_QUEUE) {
-        return NextResponse.json({ error: 'STOCK_DATA KV 未绑定，请检查 Cloudflare 配置' }, { status: 500 });
+        try {
+            const ctx = await getCloudflareCtx();
+            const debugInfo = {
+                envKeys: Object.keys(process.env || {}),
+                ctxEnvKeys: Object.keys(ctx?.env || {}),
+                globalKeys: Object.keys(globalThis || {}).filter(k => k.match(/^[A-Z_]+$/)),
+                runtime: 'EdgeRuntime'
+            };
+            await db.prepare("INSERT INTO system_logs (level, module, message) VALUES (?, ?, ?)")
+                .bind('ERROR', 'KV_DEBUG', `Missing STOCK_DATA. Available keys: ${JSON.stringify(debugInfo)}`)
+                .run();
+        } catch (e) {
+            console.error('Debug log failed', e);
+        }
+        return NextResponse.json({
+            error: 'STOCK_DATA KV 未绑定，请检查 Cloudflare 配置。调试日志已记录至 system_logs 表',
+            tips: '请确认是否已在 Cloudflare 控制台将 KV Namespace 绑定到名为 STOCK_DATA 的变量上'
+        }, { status: 500 });
     }
 
     // 4. 获取所有待重刷基金列表
