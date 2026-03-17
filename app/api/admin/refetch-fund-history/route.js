@@ -28,12 +28,24 @@ export async function GET(request) {
     const db = await getD1Storage();
     if (!db) return NextResponse.json({ error: 'DB unavailable' }, { status: 500 });
 
-    // 3. 获取所有基金列表
+    // 3. 获取所有基金列表及最新时间戳 (优化点：单次批量查询，节省 25 次子请求)
     const { results: funds } = await db
         .prepare("SELECT DISTINCT code FROM user_assets WHERE type = 'fund'")
         .all();
 
     if (!funds?.length) return NextResponse.json({ ok: true, message: 'No funds found' });
+
+    // 如果是非 force 模式，预先批量抓取所有基金的最新记录日期，避免在循环中产生 25 次子请求
+    const latestDatesMap = {};
+    if (!force) {
+        const batchQuery = funds.map(f =>
+            db.prepare("SELECT MAX(record_date) AS latest FROM asset_history WHERE code = ? AND type = 'fund'").bind(f.code.toLowerCase())
+        );
+        const results = await db.batch(batchQuery);
+        funds.forEach((f, idx) => {
+            latestDatesMap[f.code.toLowerCase()] = results[idx]?.results?.[0]?.latest ?? null;
+        });
+    }
 
     // 4. 使用 Stream 处理多阶段逻辑报告
     const encoder = new TextEncoder();
@@ -46,7 +58,7 @@ export async function GET(request) {
             const allStatements = [];
             const fetchResults = [];
 
-            // 阶段一：批量离线抓取 (数据密集型，不涉及 D1 写入)
+            // 阶段一：批量离线抓取 (数据密集型，仅 fetch)
             for (let i = 0; i < funds.length; i++) {
                 const { code } = funds[i];
                 try {
@@ -56,13 +68,7 @@ export async function GET(request) {
                         continue;
                     }
 
-                    // 预处理增量逻辑 (如果是 force 模式，之后会补 delete 语句)
-                    let latestDate = null;
-                    if (!force) {
-                        const row = await db.prepare("SELECT MAX(record_date) AS latest FROM asset_history WHERE code = ? AND type = 'fund'").bind(code.toLowerCase()).first();
-                        latestDate = row?.latest ?? null;
-                    }
-
+                    const latestDate = latestDatesMap[code.toLowerCase()] || null;
                     fetchResults.push({ code, history, latestDate });
                     send({ index: i + 1, code, status: 'fetched', count: history.length });
                 } catch (e) {
@@ -70,7 +76,7 @@ export async function GET(request) {
                 }
             }
 
-            // 阶段二：聚合生成 SQL 语句 (准备进行一次性原子写入)
+            // 阶段二：聚合生成 SQL 语句
             send({ status: 'writing_prepare', count: fetchResults.length });
 
             for (const item of fetchResults) {
@@ -83,12 +89,9 @@ export async function GET(request) {
                 const toWrite = (latestDate && !force) ? history.filter(h => h.date > latestDate) : history;
                 if (!toWrite.length) continue;
 
-                // 为了节省 D1 batch 语句数限制 (上限100)，这里每只基金的历史点进行一次内部 Chunk 收集
-                // 由于每只基金 250 天，按 100 条分片，每只有 3 条 INSERT 语句
-                for (let j = 0; j < toWrite.length; j += 100) {
-                    const chunk = toWrite.slice(j, j + 100);
-                    // 此处暂不改写 historyRepo，直接手动快速构建 stmts
-                    // 本次优化目标是解决 subrequest 配额，分片写入仍使用 .batch 提升效率
+                // 250 天数据，按 50 条分片，保证 stmts 数量可控
+                for (let j = 0; j < toWrite.length; j += 50) {
+                    const chunk = toWrite.slice(j, j + 50);
                     const insertSql = `INSERT OR REPLACE INTO asset_history (code, type, price, record_date) VALUES ` +
                         chunk.map(() => "(?, 'fund', ?, ?)").join(', ');
                     const params = [];
@@ -97,14 +100,14 @@ export async function GET(request) {
                 }
             }
 
-            // 阶段三：执行 D1 Batch (核心性能优化：降低子请求到 1 次)
+            // 阶段三：分批执行 D1 Batch (每个 batch 控制在 50 条语句内，更稳健)
             if (allStatements.length > 0) {
-                // 如果语句总数还是很多（例如 > 100），仍需切分 batch
-                // 25 只基金 * 4 句 = 100 句，正好能卡在 D1 单次 batch 限制内
-                for (let k = 0; k < allStatements.length; k += 100) {
-                    const batchChunk = allStatements.slice(k, k + 100);
+                const totalBatches = Math.ceil(allStatements.length / 50);
+                for (let k = 0; k < allStatements.length; k += 50) {
+                    const batchChunk = allStatements.slice(k, k + 50);
                     await db.batch(batchChunk);
-                    send({ status: 'ok', batch_index: Math.floor(k / 100) + 1, batch_size: batchChunk.length });
+                    const batchIdx = Math.floor(k / 50) + 1;
+                    send({ status: 'ok', batch_index: batchIdx, total_batches: totalBatches });
                 }
             }
 
