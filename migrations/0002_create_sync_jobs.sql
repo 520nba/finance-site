@@ -12,5 +12,5 @@ CREATE TABLE IF NOT EXISTS sync_jobs (
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX IF NOT EXISTS idx_sync_jobs_status ON sync_jobs(status, updated_at);
+CREATE INDEX IF NOT EXISTS idx_sync_jobs_status ON sync_jobs(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_sync_jobs_code ON sync_jobs(code);

@@ -4,8 +4,6 @@ import { isAdminAuthorized } from '@/lib/storage/authRepo';
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
-import { getKvStorage } from '@/lib/storage/d1Client';
-
 import { queryAll, getD1Storage } from '@/lib/storage/d1Client';
 
 export async function GET(request) {
