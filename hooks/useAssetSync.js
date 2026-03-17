@@ -133,7 +133,7 @@ export function useAssetSync({ userId, isLogged }) {
     }, [userId, refreshAssets]);
 
 
-    const [isSyncingItems, setIsSyncingItems] = useState(new Set());
+    const syncingItemsRef = useRef(new Set());
 
     // [Feature: Client-side Offloading] 
     // 前端主动拨调：发现数据空洞（缺失名称或历史）时，分片同步至 D1
@@ -142,7 +142,7 @@ export function useAssetSync({ userId, isLogged }) {
 
         const pending = assets.filter(a =>
             (a.name === '加载中...' || !a.history || a.history.length === 0) &&
-            !isSyncingItems.has(`${a.type}:${a.code}`)
+            !syncingItemsRef.current.has(`${a.type}:${a.code}`)
         );
 
         if (pending.length === 0) return;
@@ -153,9 +153,7 @@ export function useAssetSync({ userId, isLogged }) {
 
         const runSync = async () => {
             // 锁定正在处理的项目，防止重入导致的无限循环
-            const newSyncing = new Set(isSyncingItems);
-            toSync.forEach(item => newSyncing.add(`${item.type}:${item.code}`));
-            setIsSyncingItems(newSyncing);
+            toSync.forEach(item => syncingItemsRef.current.add(`${item.type}:${item.code}`));
 
             await Promise.all(toSync.map(async (item) => {
                 const itemKey = `${item.type}:${item.code}`;
@@ -173,18 +171,14 @@ export function useAssetSync({ userId, isLogged }) {
                     console.warn(`[ClientSync] Failed for ${item.code}:`, e.message);
                 } finally {
                     // 解锁
-                    setIsSyncingItems(prev => {
-                        const next = new Set(prev);
-                        next.delete(itemKey);
-                        return next;
-                    });
+                    syncingItemsRef.current.delete(itemKey);
                 }
             }));
         };
 
         const timer = setTimeout(runSync, 1000);
         return () => clearTimeout(timer);
-    }, [assets, isSessionReady, isSyncing, refreshAssets, isSyncingItems]);
+    }, [assets, isSessionReady, isSyncing, refreshAssets]);
 
 
     const assetsRef = useRef(assets);
