@@ -57,31 +57,15 @@ export async function POST(request) {
         // 1. 优先写入资产基础关联
         await saveUserAssets(userId, cleanAssets);
 
-        // 2. 利用 Serverless 异步机制后台静默抓取历史数据与名称
-        if (addedAssets.length > 0) {
-            const cloudflare = await getCloudflareCtx();
-            if (cloudflare?.ctx?.waitUntil) {
-                // 利用 ctx.waitUntil 在响应后继续执行抓取任务
-                cloudflare.ctx.waitUntil((async () => {
-                    try {
-                        console.log(`[Assets] Background Sync starting for ${addedAssets.length} new items of ${userId}`);
-                        // 同步名称
-                        await syncNamesBulk(addedAssets, true);
-                        // 同步 250 天历史数据
-                        await syncHistoryBulk(addedAssets, 250, true);
-                        console.log(`[Assets] Background Sync finished for ${userId}`);
-                    } catch (err) {
-                        console.error(`[Assets] Background Sync failed for ${userId}:`, err.message);
-                    }
-                })());
-            } else {
-                // 非 Edge 环境或不支持 waitUntil 时，还是得稍微挡一下或者忽略（本地开发环境通常不支持 waitUntil）
-                console.log(`[Assets] ctx.waitUntil not available, skipping background sync`);
-            }
-        }
+        // 1. 优先写入资产基础关联
+        await saveUserAssets(userId, cleanAssets);
+
+        // 2. 架构减负：移除原本笨重的 ctx.waitUntil 历史抓取逻辑。
+        // 现在抓取压力由前端 useAssetSync 识别数据空洞并分片发起请求。
+        // 这里仅辅助触发轻量级的名称预热（可选）或直接返回告知前端哪些是新增的。
 
         if (removedAssets.length > 0) {
-            // 背景清理
+            // 背景清理 (保留轻量级清理任务)
             const cloudflare = await getCloudflareCtx();
             const cleanupTask = Promise.all(
                 removedAssets.map(r => cleanupSingleAssetIfNotUsed(r.type, r.code).catch(() => { }))
@@ -91,7 +75,13 @@ export async function POST(request) {
             }
         }
 
-        return NextResponse.json({ success: true, data: { added: addedAssets.length, removed: removedAssets.length } });
+        return NextResponse.json({
+            success: true,
+            data: {
+                added: addedAssets.map(a => ({ code: a.code, type: a.type })),
+                removedCount: removedAssets.length
+            }
+        });
     } catch (e) {
         console.error(`[Assets] POST critical failure for ${userId}:`, e.message);
         return NextResponse.json({

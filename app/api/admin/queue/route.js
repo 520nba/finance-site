@@ -6,30 +6,33 @@ export const revalidate = 0;
 
 import { getKvStorage } from '@/lib/storage/d1Client';
 
+import { queryAll, getD1Storage } from '@/lib/storage/d1Client';
+
 export async function GET(request) {
     if (!(await isAdminAuthorized(request))) {
         return NextResponse.json({ error: 'Unauthorized' }, { status: 403 });
     }
 
-    const QUEUE = await getKvStorage('STOCK_DATA');
-    if (!QUEUE) {
-        return NextResponse.json({ queue: [], count: 0, status: 'error', message: 'STOCK_DATA KV not bound' });
-    }
+    const db = await getD1Storage();
+    if (!db) return NextResponse.json({ error: 'DB unavailable' }, { status: 500 });
 
     try {
-        const list = await QUEUE.list({ prefix: 'fund:' });
-        const items = await Promise.all(list.keys.map(async (key) => {
-            const val = await QUEUE.get(key.name);
-            return {
-                id: key.name.split(':')[1],
-                ...(val ? JSON.parse(val) : { status: 'unknown' })
-            };
-        }));
+        // 读取最近 100 条任务状态用于前端显示
+        const items = await queryAll(`
+            SELECT id, code, status, type, updated_at 
+            FROM sync_jobs 
+            ORDER BY updated_at DESC LIMIT 100
+        `);
 
         return NextResponse.json({
-            queue: items,
+            queue: items.map(i => ({
+                id: i.code,
+                status: i.status,
+                type: i.type,
+                updatedAt: i.updated_at
+            })),
             count: items.length,
-            status: items.some(i => i.status === 'processing') ? 'running' : (items.length > 0 ? 'pending' : 'idle')
+            status: items.some(i => i.status === 'processing') ? 'running' : (items.some(i => i.status === 'pending') ? 'pending' : 'idle')
         });
     } catch (e) {
         return NextResponse.json({ error: e.message, status: 'error' }, { status: 500 });
@@ -37,18 +40,17 @@ export async function GET(request) {
 }
 
 /**
- * 允许手动重置/清理队列（危险操作，仅限管理员）
+ * 允许手动清理已完成或已失败的任务
  */
 export async function DELETE(request) {
     if (!(await isAdminAuthorized(request))) {
         return NextResponse.json({ error: 'Unauthorized' }, { status: 403 });
     }
 
-    const QUEUE = await getKvStorage('STOCK_DATA');
-    if (!QUEUE) return NextResponse.json({ error: 'KV not found' }, { status: 500 });
+    const db = await getD1Storage();
+    if (!db) return NextResponse.json({ error: 'DB unavailable' }, { status: 500 });
 
-    const list = await QUEUE.list({ prefix: 'fund:' });
-    await Promise.all(list.keys.map(k => QUEUE.delete(k.name)));
+    await db.prepare("DELETE FROM sync_jobs WHERE status IN ('completed', 'failed')").run();
 
-    return NextResponse.json({ ok: true, cleared: list.keys.length });
+    return NextResponse.json({ ok: true });
 }

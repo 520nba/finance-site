@@ -28,31 +28,6 @@ export async function GET(request) {
     const db = await getD1Storage();
     if (!db) return NextResponse.json({ error: 'DB unavailable' }, { status: 500 });
 
-    // 3. 获取 KV 绑定 (由 Cloudflare 提供)
-    let FUND_QUEUE = await getKvStorage('STOCK_DATA');
-
-    // ── [DEBUG] 生产环境环境变量探测 ──────────────────────────────────────────
-    if (!FUND_QUEUE) {
-        try {
-            const ctx = await getCloudflareCtx();
-            const debugInfo = {
-                envKeys: Object.keys(process.env || {}),
-                ctxEnvKeys: Object.keys(ctx?.env || {}),
-                globalKeys: Object.keys(globalThis || {}).filter(k => k.match(/^[A-Z_]+$/)),
-                runtime: 'EdgeRuntime'
-            };
-            await db.prepare("INSERT INTO system_logs (level, module, message) VALUES (?, ?, ?)")
-                .bind('ERROR', 'KV_DEBUG', `Missing STOCK_DATA. Available keys: ${JSON.stringify(debugInfo)}`)
-                .run();
-        } catch (e) {
-            console.error('Debug log failed', e);
-        }
-        return NextResponse.json({
-            error: 'STOCK_DATA KV 未绑定，请检查 Cloudflare 配置。调试日志已记录至 system_logs 表',
-            tips: '请确认是否已在 Cloudflare 控制台将 KV Namespace 绑定到名为 STOCK_DATA 的变量上'
-        }, { status: 500 });
-    }
-
     // 4. 获取所有待重刷基金列表
     const { results: funds } = await db
         .prepare("SELECT DISTINCT code FROM user_assets WHERE type = 'fund'")
@@ -60,36 +35,27 @@ export async function GET(request) {
 
     if (!funds?.length) return NextResponse.json({ ok: true, message: 'No funds found' });
 
-    // 5. 任务投递：将重刷需求写入 KV 队列
+    // 5. 任务投递：写入 D1 sync_jobs 任务表
     const t0 = Date.now();
-    let submittedCount = 0;
-    const errors = [];
+    try {
+        const stmts = funds.map(f =>
+            db.prepare(`
+                INSERT INTO sync_jobs (type, code, payload, status) 
+                VALUES (?, ?, ?, 'pending')
+            `).bind('fund_history', f.code.toLowerCase(), JSON.stringify({ force }))
+        );
 
-    // 分批次投递以防 API 超时
-    const writes = funds.map(async (f) => {
-        try {
-            const key = `fund:${f.code.toLowerCase()}`;
-            await FUND_QUEUE.put(key, JSON.stringify({
-                status: 'pending',
-                retry: 0,
-                force: force,
-                updatedAt: Date.now()
-            }));
-            submittedCount++;
-        } catch (e) {
-            errors.push(`${f.code}: ${e.message}`);
-        }
-    });
+        await db.batch(stmts);
 
-    await Promise.all(writes);
-
-    const elapsed = Date.now() - t0;
-    return NextResponse.json({
-        ok: true,
-        message: `已将 ${submittedCount} 只基金投递至后端异步队列`,
-        total: funds.length,
-        submitted: submittedCount,
-        errors: errors.length ? errors : undefined,
-        elapsed_ms: elapsed
-    });
+        const elapsed = Date.now() - t0;
+        return NextResponse.json({
+            ok: true,
+            message: `已向任务中心投递 ${funds.length} 只基金的重刷请求`,
+            total: funds.length,
+            elapsed_ms: elapsed
+        });
+    } catch (e) {
+        console.error('[Admin:Refetch] Task injection failed:', e.message);
+        return NextResponse.json({ ok: false, error: '任务投递失败: ' + e.message }, { status: 500 });
+    }
 }

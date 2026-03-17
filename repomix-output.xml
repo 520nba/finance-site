@@ -3096,71 +3096,6 @@ export function generateToken() {
 }
 </file>
 
-<file path="lib/storage/kvClient.js">
-import { memoryCache } from './memoryCache';
-
-export async function getKvStorage() {
-    // Edge Runtime: KV Namespace 绑定只能通过 getCloudflareContext().env 获取。
-    // 注意：process.env.STOCK_DATA 在 Workers 中永远不会是 KV Namespace 对象，
-    //       因此移除了原先的 process.env 检查，避免制造无效的代码路径。
-    try {
-        const openNext = await import("@opennextjs/cloudflare");
-        if (openNext?.getCloudflareContext) {
-            const ctx = await openNext.getCloudflareContext();
-            if (ctx?.env?.STOCK_DATA) return ctx.env.STOCK_DATA;
-        }
-    } catch (e) {
-        console.error('[KV:getKvStorage] Critical context check failed:', e.message);
-    }
-
-    // 本地 Dev 兜底：返回 null，调用方降级至 memoryCache
-    return null;
-}
-
-export async function readDoc(key, defaultValue = {}) {
-    const kv = await getKvStorage();
-    if (kv) {
-        try {
-            const data = await kv.get(key);
-            return data ? JSON.parse(data) : defaultValue;
-        } catch (e) {
-            console.error(`[KV:readDoc] Failed to get key "${key}":`, e.message);
-        }
-    }
-    const cached = memoryCache.get(key);
-    return cached !== undefined ? cached : defaultValue;
-}
-
-export async function writeDoc(key, val) {
-    const kv = await getKvStorage();
-    const dataStr = typeof val === 'string' ? val : JSON.stringify(val);
-    if (kv) {
-        try {
-            await kv.put(key, dataStr);
-            return true;
-        } catch (e) {
-            console.error(`[KV:writeDoc] Failed to put key "${key}":`, e.message);
-        }
-    }
-    memoryCache.set(key, val);
-    return true;
-}
-
-export async function deleteDoc(key) {
-    const kv = await getKvStorage();
-    if (kv) {
-        try {
-            await kv.delete(key);
-            return true;
-        } catch (e) {
-            console.error(`[KV:deleteDoc] Failed to delete key "${key}":`, e.message);
-        }
-    }
-    memoryCache.delete(key);
-    return true;
-}
-</file>
-
 <file path="lib/storage/logRepo.js">
 import { runSql, queryAll } from './d1Client';
 
@@ -3215,102 +3150,6 @@ export async function getSystemLogs(hours = 72, env = null) {
     } catch (e) {
         console.error('[LogRepo] getSystemLogs failed:', e.message);
         return [];
-    }
-}
-</file>
-
-<file path="lib/storage/maintenanceRepo.js">
-import { queryOne, runSql, getD1Storage } from './d1Client';
-
-/**
- * 清理指定资产的数据（如果已无用户使用）
- * @param {string} type
- * @param {string} code
- * @param {Object} env
- */
-export async function cleanupSingleAssetIfNotUsed(type, code, env = null) {
-    try {
-        // 在 D1 架构下，JOIN/EXISTS 查询是实时的，移除旧时代的 3s 宽限期延迟
-        // 从而实现用户要求的“马上删除”反馈。
-
-        // 检查是否有任何用户仍在使用此资产
-        const row = await queryOne(
-            'SELECT 1 FROM user_assets WHERE code = ? AND type = ? LIMIT 1',
-            [code.toLowerCase(), type],
-            env
-        );
-
-        if (!row) {
-            const db = await getD1Storage(env);
-            if (!db) return false;
-
-            // 执行物理清理
-            await db.batch([
-                db.prepare('DELETE FROM asset_history WHERE code = ? AND type = ?').bind(code, type),
-                db.prepare('DELETE FROM asset_names WHERE code = ? AND type = ?').bind(code, type),
-                db.prepare('DELETE FROM asset_intraday WHERE code = ?').bind(code),
-                db.prepare('DELETE FROM asset_quotes WHERE code = ?').bind(code)
-            ]);
-
-            console.log(`[Cleanup] Auto-purged D1 data for abandoned asset: ${type} ${code}`);
-            return true;
-        }
-    } catch (e) {
-        console.error('[Auto Purge] Error:', e.message);
-    }
-    return false;
-}
-
-/**
- * 扫描并清理所有“僵尸”资产 (没有任何用户引用的缓存数据)
- * D1 下此操作非常高效，不再需要遍历整个命名空间
- * @param {Object} env
- */
-export async function purgeZombieAssets(env = null) {
-    const db = await getD1Storage(env);
-    if (!db) return { success: false, reason: 'D1 unavailable' };
-
-    try {
-        const results = {
-            deleted_hist: 0,
-            deleted_names: 0,
-            deleted_quotes: 0,
-            deleted_intra: 0
-        };
-
-        // 1. 清理历史数据记录 (优化算子：避免 NOT EXISTS 对数万行做子查询)
-        const resHist = await db.prepare(`
-            DELETE FROM asset_history 
-            WHERE code NOT IN (SELECT DISTINCT code FROM user_assets)
-        `).run();
-        results.deleted_hist = resHist.meta.changes || 0;
-
-        // 2. 清理资产名称
-        const resNames = await db.prepare(`
-            DELETE FROM asset_names 
-            WHERE code NOT IN (SELECT DISTINCT code FROM user_assets)
-        `).run();
-        results.deleted_names = resNames.meta.changes || 0;
-
-        // 3. 清理分时数据
-        const resIntra = await db.prepare(`
-            DELETE FROM asset_intraday 
-            WHERE code NOT IN (SELECT DISTINCT code FROM user_assets)
-        `).run();
-        results.deleted_intra = resIntra.meta.changes || 0;
-
-        // 4. 清理报价缓存
-        const resQuotes = await db.prepare(`
-            DELETE FROM asset_quotes 
-            WHERE code NOT IN (SELECT DISTINCT code FROM user_assets)
-        `).run();
-        results.deleted_quotes = resQuotes.meta.changes || 0;
-
-        console.log(`[Purge] D1 Zombie Cleanup finished: ${JSON.stringify(results)}`);
-        return { success: true, ...results };
-    } catch (e) {
-        console.error('[Purge] SQL Cleanup error:', e.message);
-        return { success: false, error: e.message };
     }
 }
 </file>
@@ -4545,320 +4384,163 @@ export const SESSION_COOKIE_OPTIONS = {
 };
 </file>
 
-<file path="lib/storage/intradayRepo.js">
-import { queryOne, queryAll, runSql, getD1Storage, getRequiredDb } from './d1Client';
+<file path="lib/storage/kvClient.js">
 import { memoryCache } from './memoryCache';
-import { chunkArray, getBeijingDate } from '../utils';
+import { getKvStorage as getBaseKv } from './d1Client';
 
 /**
- * 从 D1 或内存获取分时数据
+ * 统一获取项目主 KV (STOCK_DATA)
  */
-export async function getIntraday(code, date, fallbackToLatest = false, env = null) {
-    const memKey = `intra:${code}:${date}`;
-    const cached = memoryCache.get(memKey);
-    if (cached) return cached;
-
-    try {
-        let row = await queryOne('SELECT data FROM asset_intraday WHERE code = ? AND record_date = ?', [code, date], env);
-
-        if (!row && fallbackToLatest) {
-            // 尝试获取最近 3 天的数据作为兜底
-            row = await queryOne(
-                'SELECT data FROM asset_intraday WHERE code = ? AND record_date < ? ORDER BY record_date DESC LIMIT 1',
-                [code, date],
-                env
-            );
-        }
-
-        if (row && row.data) {
-            const data = JSON.parse(row.data);
-            return data;
-        }
-    } catch (e) {
-        console.error(`[IntradayRepo] getIntraday failed for ${code}:`, e.message);
-    }
-    return null;
+export async function getKvStorage() {
+    return await getBaseKv('STOCK_DATA');
 }
 
-/**
- * 保存分时数据到 D1
- */
-export async function saveIntraday(code, date, data, forcePersist = false, env = null) {
-    const memKey = `intra:${code}:${date}`;
-
-    try {
-        // 使用统一的 getBeijingDate 获取稳健的北京时间
-        const bjNow = getBeijingDate();
-        const timeValue = bjNow.getHours() * 100 + bjNow.getMinutes();
-        const isMarketClosed = timeValue >= 1515 || timeValue < 900;
-
-        if (isMarketClosed || forcePersist) {
-            await runSql(
-                'INSERT OR REPLACE INTO asset_intraday (code, record_date, data, updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)',
-                [code, date, JSON.stringify(data)],
-                env
-            );
-            memoryCache.delete(memKey);
-        } else {
-            memoryCache.set(memKey, data);
+export async function readDoc(key, defaultValue = {}) {
+    const kv = await getKvStorage();
+    if (kv) {
+        try {
+            const data = await kv.get(key);
+            return data ? JSON.parse(data) : defaultValue;
+        } catch (e) {
+            console.error(`[KV:readDoc] Failed to get key "${key}":`, e.message);
         }
-    } catch (e) {
-        console.error(`[IntradayRepo] saveIntraday failed for ${code}:`, e.message);
     }
+    const cached = memoryCache.get(key);
+    return cached !== undefined ? cached : defaultValue;
 }
 
-/**
- * 批量获取分时数据
- */
-export async function getBulkIntraday(items, date, env = null) {
-    if (!items || items.length === 0) return {};
+export async function writeDoc(key, val) {
+    const kv = await getKvStorage();
+    const dataStr = typeof val === 'string' ? val : JSON.stringify(val);
 
-    const result = {};
-    const toQuery = [];
-
-    for (const it of items) {
-        const cached = memoryCache.get(`intra:${it.code}:${date}`);
-        if (cached) {
-            result[it.code] = cached;
-        } else {
-            toQuery.push(it.code);
+    let success = false;
+    if (kv) {
+        try {
+            await kv.put(key, dataStr);
+            success = true;
+        } catch (e) {
+            console.error(`[KV:writeDoc] Failed to put key "${key}":`, e.message);
         }
     }
 
-    if (toQuery.length > 0) {
-        const groups = chunkArray(toQuery, 30);
-        for (const codes of groups) {
-            try {
-                const placeholders = codes.map(() => '?').join(',');
-                const sql = `SELECT code, data FROM asset_intraday WHERE record_date = ? AND code IN (${placeholders})`;
-                const rows = await queryAll(sql, [date, ...codes], env);
-                for (const row of rows) {
-                    result[row.code] = JSON.parse(row.data);
-                }
-            } catch (e) {
-                console.error('[IntradayRepo] getBulkIntraday group failed:', e.message);
-            }
-        }
-    }
+    // 写入本地缓存作为热备份/降级
+    memoryCache.set(key, val);
 
-    return result;
+    // 维度 9 优化：仅在 KV 真正写入成功时返回 true
+    // 如果 KV 失败但写入了内存库，也返回 false 提示调用方存在持久化风险
+    return success;
 }
 
-/**
- * 批量保存分时数据到 D1
- */
-export async function saveIntradayBatch(records, env = null) {
-    if (!records || records.length === 0) return;
-    const db = await getRequiredDb(env);
+export async function deleteDoc(key) {
+    const kv = await getKvStorage();
+    let success = false;
 
-    try {
-        const statements = records.map(r =>
-            db.prepare('INSERT OR REPLACE INTO asset_intraday (code, record_date, data, updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)')
-                .bind(r.code, r.date, JSON.stringify(r.data))
-        );
-
-        const CHUNK = 50;
-        for (let i = 0; i < statements.length; i += CHUNK) {
-            await db.batch(statements.slice(i, i + CHUNK));
+    if (kv) {
+        try {
+            await kv.delete(key);
+            success = true;
+        } catch (e) {
+            console.error(`[KV:deleteDoc] Failed to delete key "${key}":`, e.message);
         }
-
-        for (const r of records) {
-            memoryCache.set(`intra:${r.code}:${r.date}`, r.data);
-        }
-    } catch (e) {
-        console.error(`[IntradayRepo] saveIntradayBatch failed:`, e.message);
     }
-}
 
-/**
- * 拼装巨型 SQL 批量插入分时点 (Cron 专用)
- */
-export async function saveIntradayPointsBulk(points, env = null) {
-    if (!points || points.length === 0) return;
-
-    // 维度 4 优化：循环外提取 DB 绑定，减少重复获取开销
-    const db = await getRequiredDb(env);
-
-    try {
-        const CHUNK = 200;
-        for (let i = 0; i < points.length; i += CHUNK) {
-            const chunk = points.slice(i, i + CHUNK);
-            const placeholders = chunk.map(() => '(?, ?, ?, ?)').join(',');
-
-            // 使用 flatMap 使代码更简洁
-            const flatParams = chunk.flatMap(p => [p.code, p.time, p.price, p.vol || 0]);
-
-            await db.prepare(`INSERT OR REPLACE INTO asset_intraday_points (code, time, price, vol) VALUES ${placeholders}`)
-                .bind(...flatParams)
-                .run();
-        }
-    } catch (e) {
-        console.error(`[IntradayRepo] saveIntradayPointsBulk failed:`, e.message);
-    }
-}
-
-/**
- * 清理分时数据
- */
-export async function pruneIntradayPoints(env = null) {
-    try {
-        const codes = await queryAll('SELECT DISTINCT code FROM asset_intraday_points', [], env);
-        const db = await getRequiredDb(env);
-
-        const statements = codes.map(c =>
-            db.prepare(`
-                DELETE FROM asset_intraday_points 
-                WHERE code = ? AND ROWID NOT IN (
-                    SELECT ROWID FROM asset_intraday_points 
-                    WHERE code = ? 
-                    ORDER BY ROWID DESC LIMIT 480
-                )
-            `).bind(c.code, c.code)
-        );
-
-        for (let i = 0; i < statements.length; i += 50) {
-            await db.batch(statements.slice(i, i + 50));
-        }
-    } catch (e) {
-        console.error(`[IntradayRepo] pruneIntradayPoints failed:`, e.message);
-    }
+    memoryCache.delete(key);
+    return success;
 }
 </file>
 
-<file path="lib/storage/userRepo.js">
-import { queryOne, queryAll, getRequiredDb } from './d1Client';
-import { memoryCache } from './memoryCache';
-
-const ASSETS_CACHE_PREFIX = 'user:assets:';
-const CACHE_TTL = 300000; // 5 分钟缓存
+<file path="lib/storage/maintenanceRepo.js">
+import { queryOne, runSql, getD1Storage } from './d1Client';
 
 /**
- * 获取用户的资产列表
- * @param {string} userId
+ * 清理指定资产的数据（如果已无用户使用）
+ * @param {string} type
+ * @param {string} code
  * @param {Object} env
  */
-export async function getUserAssets(userId, env = null) {
-    if (!userId) return [];
-
-    // 1. 优先查内存缓存
-    const cacheKey = ASSETS_CACHE_PREFIX + userId;
-    const cached = memoryCache.get(cacheKey);
-    if (cached) {
-        return cached;
-    }
-
-    const sql = 'SELECT code, type FROM user_assets WHERE user_id = ? ORDER BY added_at ASC';
-    const assets = await queryAll(sql, [userId], env);
-
-    // 2. 回填内存，直接利用 memoryCache 内置 TTL
-    memoryCache.set(cacheKey, assets, CACHE_TTL);
-
-    return assets;
-}
-
-/**
- * 检查用户是否在 D1 中存在
- * @param {string} userId
- * @param {Object} env
- */
-export async function checkUserExists(userId, env = null) {
-    if (!userId) return false;
+export async function cleanupSingleAssetIfNotUsed(type, code, env = null) {
     try {
-        const row = await queryOne('SELECT 1 FROM users WHERE id = ? LIMIT 1', [userId], env);
-        return !!row;
-    } catch (e) {
-        console.error(`[UserRepo] checkUserExists failed for ${userId}:`, e.message);
-        return false;
-    }
-}
+        // 在 D1 架构下，JOIN/EXISTS 查询是实时的，移除旧时代的 3s 宽限期延迟
+        // 从而实现用户要求的“马上删除”反馈。
 
-/**
- * 更新用户的资产列表 (全量覆盖模式，对齐原有 D1 行为)
- * @param {string} userId
- * @param {Array} assets
- * @param {Object} env
- */
-export async function saveUserAssets(userId, assets, env = null) {
-    if (!userId) return false;
+        // 检查是否有任何用户仍在使用此资产
+        const row = await queryOne(
+            'SELECT 1 FROM user_assets WHERE code = ? AND type = ? LIMIT 1',
+            [code.toLowerCase(), type],
+            env
+        );
 
-    const db = await getRequiredDb(env);
+        if (!row) {
+            const db = await getD1Storage(env);
+            if (!db) return false;
 
-    try {
-        // 使用事务确保更新原子性
-        const statements = [
-            // 1. 记录最后活动时间（不再隐式创建用户，若用户不存在此 UPDATE 会静默失败而不产生无效记录）
-            db.prepare('UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = ?').bind(userId),
-            // 2. 删除旧资产
-            db.prepare('DELETE FROM user_assets WHERE user_id = ?').bind(userId)
-        ];
+            // 执行物理清理 (注意 code 统配小写)
+            await db.batch([
+                db.prepare('DELETE FROM asset_history WHERE code = ? AND type = ?').bind(code.toLowerCase(), type),
+                db.prepare('DELETE FROM asset_names WHERE code = ? AND type = ?').bind(code.toLowerCase(), type),
+                db.prepare('DELETE FROM asset_intraday WHERE code = ?').bind(code.toLowerCase()),
+                db.prepare('DELETE FROM asset_quotes WHERE code = ?').bind(code.toLowerCase())
+            ]);
 
-        // 3. 插入新资产
-        for (const a of assets) {
-            statements.push(
-                db.prepare('INSERT INTO user_assets (user_id, code, type) VALUES (?, ?, ?)')
-                    .bind(userId, a.code.toLowerCase(), a.type)
-            );
+            console.log(`[Cleanup] Auto-purged D1 data for abandoned asset: ${type} ${code}`);
+            return true;
         }
-
-        await db.batch(statements);
-
-        // 关键：更新成功后立即清理内存缓存，确保下次读取到最新数据
-        memoryCache.delete(ASSETS_CACHE_PREFIX + userId);
-
-        console.log(`[UserRepo] saveUserAssets success for ${userId}, items: ${assets.length}`);
-        return true;
     } catch (e) {
-        console.error(`[UserRepo] saveUserAssets CRITICAL FAILED for ${userId}:`, e.message);
-        console.error(`[UserRepo] SQL Error Details:`, e);
-        throw e;
+        console.error('[Auto Purge] Error:', e.message);
     }
+    return false;
 }
 
 /**
- * 获取去重后的所有用户资产 (用于 Cron 全量同步)
+ * 扫描并清理所有“僵尸”资产 (没有任何用户引用的缓存数据)
+ * D1 下此操作非常高效，不再需要遍历整个命名空间
  * @param {Object} env
  */
-export async function getGlobalUniqueAssets(env = null) {
-    return await queryAll('SELECT DISTINCT code, type FROM user_assets', [], env);
-}
-
-/**
- * 获取所有活跃用户 ID (用于 Cron 任务)
- * @param {Object} env
- */
-export async function getAllUserIds(env = null) {
-    const rows = await queryAll('SELECT id FROM users', [], env);
-    return rows.map(r => r.id);
-}
-
-/**
- * 删除用户及其资产
- * @param {string} userId
- * @param {Object} env
- */
-export async function deleteUser(userId, env = null) {
-    if (!userId) return false;
-    const db = await getRequiredDb(env);
+export async function purgeZombieAssets(env = null) {
+    const db = await getD1Storage(env);
+    if (!db) return { success: false, reason: 'D1 unavailable' };
 
     try {
-        await db.batch([
-            db.prepare('DELETE FROM user_sessions WHERE user_id = ?').bind(userId),
-            db.prepare('DELETE FROM user_assets WHERE user_id = ?').bind(userId),
-            db.prepare('DELETE FROM users WHERE id = ?').bind(userId)
-        ]);
+        const results = {
+            deleted_hist: 0,
+            deleted_names: 0,
+            deleted_quotes: 0,
+            deleted_intra: 0
+        };
 
-        // 联动清理：立刻触发僵尸数据洗消（防止删除用户后行情历史残留）
-        const { purgeZombieAssets } = await import('./maintenanceRepo');
-        await purgeZombieAssets(env);
+        // 1. 清理历史数据记录 (优化算子：避免 NOT EXISTS 对数万行做子查询)
+        const resHist = await db.prepare(`
+            DELETE FROM asset_history 
+            WHERE code NOT IN (SELECT DISTINCT code FROM user_assets)
+        `).run();
+        results.deleted_hist = resHist.meta.changes || 0;
 
-        // 维度 3 优化: 更新计数器
-        const { decrementCounter } = await import('./statsRepo');
-        await decrementCounter('users', 1, env);
+        // 2. 清理资产名称
+        const resNames = await db.prepare(`
+            DELETE FROM asset_names 
+            WHERE code NOT IN (SELECT DISTINCT code FROM user_assets)
+        `).run();
+        results.deleted_names = resNames.meta.changes || 0;
 
-        return true;
+        // 3. 清理分时数据
+        const resIntra = await db.prepare(`
+            DELETE FROM asset_intraday 
+            WHERE code NOT IN (SELECT DISTINCT code FROM user_assets)
+        `).run();
+        results.deleted_intra = resIntra.meta.changes || 0;
+
+        // 4. 清理报价缓存
+        const resQuotes = await db.prepare(`
+            DELETE FROM asset_quotes 
+            WHERE code NOT IN (SELECT DISTINCT code FROM user_assets)
+        `).run();
+        results.deleted_quotes = resQuotes.meta.changes || 0;
+
+        console.log(`[Purge] D1 Zombie Cleanup finished: ${JSON.stringify(results)}`);
+        return { success: true, ...results };
     } catch (e) {
-        console.error(`[UserRepo] deleteUser failed for ${userId}:`, e.message);
-        return false;
+        console.error('[Purge] SQL Cleanup error:', e.message);
+        return { success: false, error: e.message };
     }
 }
 </file>
@@ -5355,6 +5037,327 @@ export async function POST(request) {
             { success: false, error: e.message },
             { status: 500 }
         )
+    }
+}
+</file>
+
+<file path="lib/storage/intradayRepo.js">
+import { queryOne, queryAll, runSql, getD1Storage, getRequiredDb } from './d1Client';
+import { memoryCache } from './memoryCache';
+import { chunkArray, getBeijingDate } from '../utils';
+
+/**
+ * 从 D1 或内存获取分时数据
+ */
+export async function getIntraday(code, date, fallbackToLatest = false, env = null) {
+    const memKey = `intra:${code}:${date}`;
+    const cached = memoryCache.get(memKey);
+    if (cached) return cached;
+
+    try {
+        let row = await queryOne('SELECT data FROM asset_intraday WHERE code = ? AND record_date = ?', [code, date], env);
+
+        if (!row && fallbackToLatest) {
+            // 尝试获取最近 3 天的数据作为兜底
+            row = await queryOne(
+                'SELECT data FROM asset_intraday WHERE code = ? AND record_date < ? ORDER BY record_date DESC LIMIT 1',
+                [code, date],
+                env
+            );
+        }
+
+        if (row && row.data) {
+            const data = JSON.parse(row.data);
+            return data;
+        }
+    } catch (e) {
+        console.error(`[IntradayRepo] getIntraday failed for ${code}:`, e.message);
+    }
+    return null;
+}
+
+/**
+ * 保存分时数据到 D1
+ */
+export async function saveIntraday(code, date, data, forcePersist = false, env = null) {
+    const memKey = `intra:${code}:${date}`;
+
+    try {
+        // 使用统一的 getBeijingDate 获取稳健的北京时间
+        const bjNow = getBeijingDate();
+        const timeValue = bjNow.getHours() * 100 + bjNow.getMinutes();
+        const isMarketClosed = timeValue >= 1515 || timeValue < 900;
+
+        if (isMarketClosed || forcePersist) {
+            await runSql(
+                'INSERT OR REPLACE INTO asset_intraday (code, record_date, data, updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)',
+                [code, date, JSON.stringify(data)],
+                env
+            );
+            memoryCache.delete(memKey);
+        } else {
+            memoryCache.set(memKey, data);
+        }
+    } catch (e) {
+        console.error(`[IntradayRepo] saveIntraday failed for ${code}:`, e.message);
+    }
+}
+
+/**
+ * 批量获取分时数据
+ */
+export async function getBulkIntraday(items, date, env = null) {
+    if (!items || items.length === 0) return {};
+
+    const result = {};
+    const toQuery = [];
+
+    for (const it of items) {
+        const cached = memoryCache.get(`intra:${it.code}:${date}`);
+        if (cached) {
+            result[it.code] = cached;
+        } else {
+            toQuery.push(it.code);
+        }
+    }
+
+    if (toQuery.length > 0) {
+        const groups = chunkArray(toQuery, 30);
+        for (const codes of groups) {
+            try {
+                const placeholders = codes.map(() => '?').join(',');
+                const sql = `SELECT code, data FROM asset_intraday WHERE record_date = ? AND code IN (${placeholders})`;
+                const rows = await queryAll(sql, [date, ...codes], env);
+                for (const row of rows) {
+                    result[row.code] = JSON.parse(row.data);
+                }
+            } catch (e) {
+                console.error('[IntradayRepo] getBulkIntraday group failed:', e.message);
+            }
+        }
+    }
+
+    return result;
+}
+
+/**
+ * 批量保存分时数据到 D1
+ */
+export async function saveIntradayBatch(records, env = null) {
+    if (!records || records.length === 0) return;
+    const db = await getRequiredDb(env);
+
+    try {
+        const statements = records.map(r =>
+            db.prepare('INSERT OR REPLACE INTO asset_intraday (code, record_date, data, updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)')
+                .bind(r.code, r.date, JSON.stringify(r.data))
+        );
+
+        const CHUNK = 50;
+        for (let i = 0; i < statements.length; i += CHUNK) {
+            await db.batch(statements.slice(i, i + CHUNK));
+        }
+
+        for (const r of records) {
+            memoryCache.set(`intra:${r.code}:${r.date}`, r.data);
+        }
+    } catch (e) {
+        console.error(`[IntradayRepo] saveIntradayBatch failed:`, e.message);
+    }
+}
+
+/**
+ * 拼装巨型 SQL 批量插入分时点 (Cron 专用)
+ */
+export async function saveIntradayPointsBulk(points, env = null) {
+    if (!points || points.length === 0) return;
+
+    // 维度 4 优化：循环外提取 DB 绑定，减少重复获取开销
+    const db = await getRequiredDb(env);
+
+    try {
+        const CHUNK = 25; // D1 每个 prepare() 最多绑定 100 个参数。每行 4 个参数，25 * 4 = 100。
+        for (let i = 0; i < points.length; i += CHUNK) {
+            const chunk = points.slice(i, i + CHUNK);
+            const placeholders = chunk.map(() => '(?, ?, ?, ?)').join(',');
+
+            // 使用 flatMap 使代码更简洁
+            const flatParams = chunk.flatMap(p => [p.code, p.time, p.price, p.vol || 0]);
+
+            await db.prepare(`INSERT OR REPLACE INTO asset_intraday_points (code, time, price, vol) VALUES ${placeholders}`)
+                .bind(...flatParams)
+                .run();
+        }
+    } catch (e) {
+        console.error(`[IntradayRepo] saveIntradayPointsBulk failed:`, e.message);
+    }
+}
+
+/**
+ * 清理分时数据
+ */
+export async function pruneIntradayPoints(env = null) {
+    try {
+        const codes = await queryAll('SELECT DISTINCT code FROM asset_intraday_points', [], env);
+        const db = await getRequiredDb(env);
+
+        const statements = codes.map(c =>
+            db.prepare(`
+                DELETE FROM asset_intraday_points 
+                WHERE code = ? AND ROWID NOT IN (
+                    SELECT ROWID FROM asset_intraday_points 
+                    WHERE code = ? 
+                    ORDER BY ROWID DESC LIMIT 480
+                )
+            `).bind(c.code, c.code)
+        );
+
+        for (let i = 0; i < statements.length; i += 50) {
+            await db.batch(statements.slice(i, i + 50));
+        }
+    } catch (e) {
+        console.error(`[IntradayRepo] pruneIntradayPoints failed:`, e.message);
+    }
+}
+</file>
+
+<file path="lib/storage/userRepo.js">
+import { queryOne, queryAll, getRequiredDb } from './d1Client';
+import { memoryCache } from './memoryCache';
+
+const ASSETS_CACHE_PREFIX = 'user:assets:';
+const CACHE_TTL = 300000; // 5 分钟缓存
+
+/**
+ * 获取用户的资产列表
+ * @param {string} userId
+ * @param {Object} env
+ */
+export async function getUserAssets(userId, env = null) {
+    if (!userId) return [];
+
+    // 1. 优先查内存缓存
+    const cacheKey = ASSETS_CACHE_PREFIX + userId;
+    const cached = memoryCache.get(cacheKey);
+    if (cached) {
+        return cached;
+    }
+
+    const sql = 'SELECT code, type FROM user_assets WHERE user_id = ? ORDER BY added_at ASC';
+    const assets = await queryAll(sql, [userId], env);
+
+    // 2. 回填内存，直接利用 memoryCache 内置 TTL
+    memoryCache.set(cacheKey, assets, CACHE_TTL);
+
+    return assets;
+}
+
+/**
+ * 检查用户是否在 D1 中存在
+ * @param {string} userId
+ * @param {Object} env
+ */
+export async function checkUserExists(userId, env = null) {
+    if (!userId) return false;
+    try {
+        const row = await queryOne('SELECT 1 FROM users WHERE id = ? LIMIT 1', [userId], env);
+        return !!row;
+    } catch (e) {
+        console.error(`[UserRepo] checkUserExists failed for ${userId}:`, e.message);
+        return false;
+    }
+}
+
+/**
+ * 更新用户的资产列表 (全量覆盖模式，对齐原有 D1 行为)
+ * @param {string} userId
+ * @param {Array} assets
+ * @param {Object} env
+ */
+export async function saveUserAssets(userId, assets, env = null) {
+    if (!userId) return false;
+
+    const db = await getRequiredDb(env);
+
+    try {
+        // 使用事务确保更新原子性
+        const statements = [
+            // 1. 记录最后活动时间（不再隐式创建用户，若用户不存在此 UPDATE 会静默失败而不产生无效记录）
+            db.prepare('UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = ?').bind(userId),
+            // 2. 删除旧资产
+            db.prepare('DELETE FROM user_assets WHERE user_id = ?').bind(userId)
+        ];
+
+        // 3. 插入新资产 (分片执行以防超出 D1 Batch 100 语句限制)
+        for (const a of assets) {
+            statements.push(
+                db.prepare('INSERT INTO user_assets (user_id, code, type) VALUES (?, ?, ?)')
+                    .bind(userId, a.code.toLowerCase(), a.type)
+            );
+        }
+
+        const BATCH_CHUNK = 50;
+        for (let i = 0; i < statements.length; i += BATCH_CHUNK) {
+            await db.batch(statements.slice(i, i + BATCH_CHUNK));
+        }
+
+        // 关键：更新成功后立即清理内存缓存，确保下次读取到最新数据
+        memoryCache.delete(ASSETS_CACHE_PREFIX + userId);
+
+        console.log(`[UserRepo] saveUserAssets success for ${userId}, items: ${assets.length}`);
+        return true;
+    } catch (e) {
+        console.error(`[UserRepo] saveUserAssets CRITICAL FAILED for ${userId}:`, e.message);
+        console.error(`[UserRepo] SQL Error Details:`, e);
+        throw e;
+    }
+}
+
+/**
+ * 获取去重后的所有用户资产 (用于 Cron 全量同步)
+ * @param {Object} env
+ */
+export async function getGlobalUniqueAssets(env = null) {
+    return await queryAll('SELECT DISTINCT code, type FROM user_assets', [], env);
+}
+
+/**
+ * 获取所有活跃用户 ID (用于 Cron 任务)
+ * @param {Object} env
+ */
+export async function getAllUserIds(env = null) {
+    const rows = await queryAll('SELECT id FROM users', [], env);
+    return rows.map(r => r.id);
+}
+
+/**
+ * 删除用户及其资产
+ * @param {string} userId
+ * @param {Object} env
+ */
+export async function deleteUser(userId, env = null) {
+    if (!userId) return false;
+    const db = await getRequiredDb(env);
+
+    try {
+        await db.batch([
+            db.prepare('DELETE FROM user_sessions WHERE user_id = ?').bind(userId),
+            db.prepare('DELETE FROM user_assets WHERE user_id = ?').bind(userId),
+            db.prepare('DELETE FROM users WHERE id = ?').bind(userId)
+        ]);
+
+        // 联动清理：立刻触发僵尸数据洗消（防止删除用户后行情历史残留）
+        const { purgeZombieAssets } = await import('./maintenanceRepo');
+        await purgeZombieAssets(env);
+
+        // 维度 3 优化: 更新计数器
+        const { decrementCounter } = await import('./statsRepo');
+        await decrementCounter('users', 1, env);
+
+        return true;
+    } catch (e) {
+        console.error(`[UserRepo] deleteUser failed for ${userId}:`, e.message);
+        return false;
     }
 }
 </file>
@@ -6240,130 +6243,6 @@ export async function syncNamesBulk(items, allowExternal = false) {
 }
 </file>
 
-<file path="lib/storage/d1Client.js">
-// 模块级单例缓存，消除高频动态导入开销
-let _cfContext = null;
-
-async function _getCtx() {
-    if (_cfContext) return _cfContext;
-    try {
-        const { getCloudflareContext } = await import("@opennextjs/cloudflare");
-        _cfContext = await getCloudflareContext();
-        return _cfContext;
-    } catch (e) {
-        return null;
-    }
-}
-
-/**
- * 统合获取 Cloudflare 上下文 (用于访问 env.API_KEY 或 ctx.waitUntil)
- */
-export async function getCloudflareCtx() {
-    return await _getCtx();
-}
-
-/**
- * 获取 D1 绑定，优先使用显式注入的 env，其次尝试环境上下文单例
- */
-export async function getD1Storage(env = null) {
-    if (env?.DB) return env.DB;
-    // 回退：尝试从多个潜在注入点获取 D1 绑定 (OpenNext / Next.js 本地开发模式适配)
-    const ctx = await getCloudflareCtx();
-    const db = ctx?.env?.DB ||
-        process.env.DB ||
-        globalThis.DB ||
-        (process.env.__NEXT_D1_BINDING ? JSON.parse(process.env.__NEXT_D1_BINDING) : null);
-    return db || null;
-}
-
-/**
- * 获取 KV 绑定，逻辑与 D1 类似
- */
-export async function getKvStorage(kvName, env = null) {
-    if (env?.[kvName]) return env[kvName];
-    const ctx = await getCloudflareCtx();
-    const kv = ctx?.env?.[kvName] ||
-        process.env[kvName] ||
-        globalThis[kvName];
-    return kv || null;
-}
-
-/**
- * 确保 DB 绑定存在
- */
-export async function getRequiredDb(env = null) {
-    const db = await getD1Storage(env);
-    if (!db) {
-        throw new Error('D1_BINDING_MISSING: Database binding "DB" is not available.');
-    }
-    return db;
-}
-
-/**
- * 执行简单 SQL (用于 INSERT/UPDATE/DELETE)
- */
-export async function runSql(sql, params = [], env = null) {
-    const db = await getRequiredDb(env);
-    try {
-        return await db.prepare(sql).bind(...params).run();
-    } catch (e) {
-        e.d1Source = 'runSql'; // 溯源标记
-        console.error(`[D1Client] runSql failed: ${e.message}`, { sql, params });
-        throw e;
-    }
-}
-
-/**
- * 查询单行
- */
-export async function queryOne(sql, params = [], env = null) {
-    const db = await getRequiredDb(env);
-    try {
-        return await db.prepare(sql).bind(...params).first();
-    } catch (e) {
-        e.d1Source = 'queryOne'; // 溯源标记
-        console.error(`[D1Client] queryOne failed: ${e.message}`, { sql, params });
-        throw e;
-    }
-}
-
-/**
- * 查询多行
- */
-export async function queryAll(sql, params = [], env = null) {
-    const db = await getRequiredDb(env);
-    try {
-        const { results } = await db.prepare(sql).bind(...params).all();
-        return results || [];
-    } catch (e) {
-        e.d1Source = 'queryAll'; // 溯源标记
-        console.error(`[D1Client] queryAll failed: ${e.message}`, { sql, params });
-        throw e;
-    }
-}
-
-/**
- * 批量执行 SQLs
- */
-export async function batchSql(statements, env = null) {
-    const db = await getRequiredDb(env);
-    const CHUNK = 100;
-    const allResults = [];
-    try {
-        for (let i = 0; i < statements.length; i += CHUNK) {
-            const chunk = statements.slice(i, i + CHUNK);
-            const batchResult = await db.batch(chunk);
-            allResults.push(...batchResult);
-        }
-        return allResults;
-    } catch (e) {
-        e.d1Source = 'batchSql'; // 溯源标记
-        console.error(`[D1Client] batchSql failed: ${e.message}`);
-        throw e;
-    }
-}
-</file>
-
 <file path="lib/storage/healthRepo.js">
 import { queryAll, runSql, queryOne, getRequiredDb } from './d1Client';
 import { addSystemLog } from './logRepo';
@@ -6814,6 +6693,130 @@ export default memo(AssetCardComponent, (prev, next) => {
         prev.asset.intraday?.price === next.asset.intraday?.price
     );
 });
+</file>
+
+<file path="lib/storage/d1Client.js">
+// 模块级单例缓存，使用 Promise 锁消除高频动态导入开销及并发竞态
+let _ctxPromise = null;
+
+async function _getCtx() {
+    if (!_ctxPromise) {
+        _ctxPromise = (async () => {
+            try {
+                const { getCloudflareContext } = await import("@opennextjs/cloudflare");
+                return await getCloudflareContext();
+            } catch (e) {
+                _ctxPromise = null; // 失败允许重试
+                return null;
+            }
+        })();
+    }
+    return _ctxPromise;
+}
+
+/**
+ * 统合获取 Cloudflare 上下文 (用于访问 env.API_KEY 或 ctx.waitUntil)
+ */
+export async function getCloudflareCtx() {
+    return await _getCtx();
+}
+
+/**
+ * 获取 D1 绑定，优先使用显式注入的 env，其次尝试环境上下文单例
+ */
+export async function getD1Storage(env = null) {
+    if (env?.DB) return env.DB;
+    // 回退：尝试从集成上下文获取 D1 绑定 (OpenNext / Cloudflare 托管环境)
+    const ctx = await getCloudflareCtx();
+    const db = ctx?.env?.DB ||
+        (process.env.__NEXT_D1_BINDING ? JSON.parse(process.env.__NEXT_D1_BINDING) : null);
+    return db || null;
+}
+
+/**
+ * 获取 KV 绑定，逻辑与 D1 类似
+ */
+export async function getKvStorage(kvName, env = null) {
+    if (env?.[kvName]) return env[kvName];
+    const ctx = await getCloudflareCtx();
+    const kv = ctx?.env?.[kvName];
+    return kv || null;
+}
+
+/**
+ * 确保 DB 绑定存在
+ */
+export async function getRequiredDb(env = null) {
+    const db = await getD1Storage(env);
+    if (!db) {
+        throw new Error('D1_BINDING_MISSING: Database binding "DB" is not available.');
+    }
+    return db;
+}
+
+/**
+ * 执行简单 SQL (用于 INSERT/UPDATE/DELETE)
+ */
+export async function runSql(sql, params = [], env = null) {
+    const db = await getRequiredDb(env);
+    try {
+        return await db.prepare(sql).bind(...params).run();
+    } catch (e) {
+        e.d1Source = 'runSql'; // 溯源标记
+        console.error(`[D1Client] runSql failed: ${e.message}`, { sql, params });
+        throw e;
+    }
+}
+
+/**
+ * 查询单行
+ */
+export async function queryOne(sql, params = [], env = null) {
+    const db = await getRequiredDb(env);
+    try {
+        return await db.prepare(sql).bind(...params).first();
+    } catch (e) {
+        e.d1Source = 'queryOne'; // 溯源标记
+        console.error(`[D1Client] queryOne failed: ${e.message}`, { sql, params });
+        throw e;
+    }
+}
+
+/**
+ * 查询多行
+ */
+export async function queryAll(sql, params = [], env = null) {
+    const db = await getRequiredDb(env);
+    try {
+        const { results } = await db.prepare(sql).bind(...params).all();
+        return results || [];
+    } catch (e) {
+        e.d1Source = 'queryAll'; // 溯源标记
+        console.error(`[D1Client] queryAll failed: ${e.message}`, { sql, params });
+        throw e;
+    }
+}
+
+/**
+ * 批量执行 SQLs
+ */
+export async function batchSql(statements, env = null) {
+    const db = await getRequiredDb(env);
+    const CHUNK = 100;
+    const allResults = [];
+    try {
+        for (let i = 0; i < statements.length; i += CHUNK) {
+            const chunk = statements.slice(i, i + CHUNK);
+            const batchResult = await db.batch(chunk);
+            allResults.push(...batchResult);
+        }
+        return allResults;
+    } catch (e) {
+        e.d1Source = 'batchSql'; // 溯源标记
+        console.error(`[D1Client] batchSql failed: ${e.message}`);
+        throw e;
+    }
+}
 </file>
 
 <file path=".github/workflows/deploy.yml">
@@ -7598,74 +7601,6 @@ export function useAdminData(secretKey, showToast, onAuthFailure) {
 }
 </file>
 
-<file path="app/api/cron/sync/route.js">
-/**
- * src/app/api/cron/sync/route.js
- *
- * 手动触发盘中实时行情同步的 HTTP 调试入口。
- * 正式生产由 wrangler.toml cron + scheduled handler 驱动，本文件仅供调试。
- *
- * 调用方式：
- *   GET /api/cron/sync?task=realtime&key=YOUR_SECRET
- *   GET /api/cron/sync?task=history&key=YOUR_SECRET
- *
- * 鉴权：
- *   统一通过 isAdminAuthorized 进行校验（支持 Session Token 或 ?key=xxx）
- */
-
-import { NextResponse } from 'next/server';
-import { runHistorySync } from '@/lib/cron/historySync';
-import { runRealtimeSync } from '@/lib/cron/realtimeSync';
-import { runSentinel } from '@/lib/cron/sentinel';
-import { isAdminAuthorized } from '@/lib/storage/authRepo';
-
-export const dynamic = 'force-dynamic';
-
-const TASK_MAP = {
-    history: runHistorySync,
-    realtime: runRealtimeSync,
-    sentinel: runSentinel,
-};
-
-export async function GET(request) {
-    const { searchParams } = new URL(request.url);
-
-    // ── 鉴权：统一使用管理员校验 ───────────────────────────────────────
-    if (!(await isAdminAuthorized(request))) {
-        return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
-    }
-
-    // ── 路由 ────────────────────────────────────────────────────────────────
-    const task = searchParams.get('task') ?? 'realtime';
-    const runner = TASK_MAP[task];
-
-    if (!runner) {
-        return NextResponse.json(
-            { success: false, error: `Unknown task "${task}". Valid: ${Object.keys(TASK_MAP).join(', ')}` },
-            { status: 400 }
-        );
-    }
-
-    // ── 执行 ────────────────────────────────────────────────────────────────
-    // 统合规范：直接使用 getD1Storage() 获取绑定，支持 context 与 global 注入
-    const { getD1Storage } = await import('@/lib/storage/d1Client');
-    const db = await getD1Storage();
-    const env = { DB: db };
-
-    try {
-        const t0 = Date.now();
-        const force = searchParams.get('force') === '1';
-        const type = searchParams.get('type');
-        await runner(env, { force, type });
-        const elapsed = Date.now() - t0;
-        return NextResponse.json({ success: true, task, force, type, elapsed_ms: elapsed });
-    } catch (e) {
-        console.error(`[CronRoute] task=${task} failed:`, e.message);
-        return NextResponse.json({ success: false, task, error: e.message }, { status: 500 });
-    }
-}
-</file>
-
 <file path="lib/services/historyFetcher.js">
 import { fetchWithRetry, getBeijingTodayStr, isMarketClosedBeijing, formatDateInTimezone } from '@/lib/utils';
 import { addSystemLog } from '@/lib/storage/logRepo';
@@ -7848,6 +7783,74 @@ export async function fetchFundHistory(code, days, signal = null) {
     } catch (e) {
         console.error(`[Fetcher] Fund ${code} failed:`, e.message);
         return null;
+    }
+}
+</file>
+
+<file path="app/api/cron/sync/route.js">
+/**
+ * src/app/api/cron/sync/route.js
+ *
+ * 手动触发盘中实时行情同步的 HTTP 调试入口。
+ * 正式生产由 wrangler.toml cron + scheduled handler 驱动，本文件仅供调试。
+ *
+ * 调用方式：
+ *   GET /api/cron/sync?task=realtime&key=YOUR_SECRET
+ *   GET /api/cron/sync?task=history&key=YOUR_SECRET
+ *
+ * 鉴权：
+ *   统一通过 isAdminAuthorized 进行校验（支持 Session Token 或 ?key=xxx）
+ */
+
+import { NextResponse } from 'next/server';
+import { runHistorySync } from '@/lib/cron/historySync';
+import { runRealtimeSync } from '@/lib/cron/realtimeSync';
+import { runSentinel } from '@/lib/cron/sentinel';
+import { isAdminAuthorized } from '@/lib/storage/authRepo';
+
+export const dynamic = 'force-dynamic';
+
+const TASK_MAP = {
+    history: runHistorySync,
+    realtime: runRealtimeSync,
+    sentinel: runSentinel,
+};
+
+export async function GET(request) {
+    const { searchParams } = new URL(request.url);
+
+    // ── 鉴权：统一使用管理员校验 ───────────────────────────────────────
+    if (!(await isAdminAuthorized(request))) {
+        return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+    }
+
+    // ── 路由 ────────────────────────────────────────────────────────────────
+    const task = searchParams.get('task') ?? 'realtime';
+    const runner = TASK_MAP[task];
+
+    if (!runner) {
+        return NextResponse.json(
+            { success: false, error: `Unknown task "${task}". Valid: ${Object.keys(TASK_MAP).join(', ')}` },
+            { status: 400 }
+        );
+    }
+
+    // ── 执行 ────────────────────────────────────────────────────────────────
+    // 统合规范：直接使用 getD1Storage() 获取绑定，支持 context 与 global 注入
+    const { getD1Storage } = await import('@/lib/storage/d1Client');
+    const db = await getD1Storage();
+    const env = { DB: db };
+
+    try {
+        const t0 = Date.now();
+        const force = searchParams.get('force') === '1';
+        const type = searchParams.get('type');
+        await runner(env, { force, type });
+        const elapsed = Date.now() - t0;
+        return NextResponse.json({ success: true, task, force, type, elapsed_ms: elapsed });
+    } catch (e) {
+        console.error(`[CronRoute] task=${task} failed:`, e.message);
+        return NextResponse.json({ success: false, task, error: e.message }, { status: 500 });
     }
 }
 </file>

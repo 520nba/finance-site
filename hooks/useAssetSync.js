@@ -133,6 +133,45 @@ export function useAssetSync({ userId, isLogged }) {
     }, [userId, refreshAssets]);
 
 
+    // [Feature: Client-side Offloading] 
+    // 前端主动拨调：发现数据空洞（缺失名称或历史）时，分片同步至 D1
+    useEffect(() => {
+        if (!isSessionReady || isSyncing) return;
+
+        const pending = assets.filter(a =>
+            a.name === '加载中...' ||
+            !a.history || a.history.length === 0
+        );
+
+        if (pending.length === 0) return;
+
+        // 设置并发限制，避免瞬间冲垮 Worker 或触发频率限制
+        const CONCURRENCY = 2;
+        const toSync = pending.slice(0, CONCURRENCY);
+
+        const runSync = async () => {
+            await Promise.all(toSync.map(async (item) => {
+                try {
+                    const res = await fetch('/api/user/sync-asset', {
+                        method: 'POST',
+                        body: JSON.stringify({ code: item.code, type: item.type })
+                    });
+                    if (res.ok) {
+                        // 同步成功后，重新局部刷新该资产的数据
+                        // 这样 D1 中已经有了数据，fetchBulkHistory 会直接命中数据库
+                        await refreshAssets(assetsRef.current);
+                    }
+                } catch (e) {
+                    console.warn(`[ClientSync] Failed for ${item.code}:`, e.message);
+                }
+            }));
+        };
+
+        const timer = setTimeout(runSync, 1000);
+        return () => clearTimeout(timer);
+    }, [assets, isSessionReady, isSyncing, refreshAssets]);
+
+
     const assetsRef = useRef(assets);
     useEffect(() => {
         assetsRef.current = assets;
