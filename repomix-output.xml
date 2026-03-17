@@ -3770,160 +3770,6 @@ export function useAsset() {
 }
 </file>
 
-<file path="worker-entry.js">
-/**
- * worker-entry.js
- *
- * Cloudflare Workers 统一入口。
- *
- * fetch handler     → 透传给 open-next，处理所有 Next.js HTTP 请求
- * scheduled handler → 按 event.cron 字符串精确分流到对应任务
- *
- * 重要：open-next 生成的 worker.js 只导出 fetch handler，
- * scheduled event 无法被其捕获，必须在本文件单独声明。
- * wrangler.toml 的 main 字段须指向本文件。
- */
-
-import openNextWorker from './.open-next/worker.js';
-import { runHistorySync } from './lib/cron/historySync.js';
-import { runRealtimeSync } from './lib/cron/realtimeSync.js';
-import { runSentinel } from './lib/cron/sentinel.js';
-import { fetchFundHistory } from './lib/services/historyFetcher.js';
-import { insertDailyPricesBatch } from './lib/storage/historyRepo.js';
-
-export default {
-    // ── HTTP：全部交给 open-next ──────────────────────────────────────────────
-    fetch(request, env, ctx) {
-        return openNextWorker.fetch(request, env, ctx);
-    },
-
-    // ── Cron：按表达式字符串精确路由 ─────────────────────────────────────────
-    //
-    // event.cron 值与 wrangler.toml [triggers].crons 里的字符串完全一致，
-    // 可直接用 switch/case 匹配，无需正则解析。
-    async scheduled(event, env, ctx) {
-        switch (event.cron) {
-
-            // 历史数据增量同步：每个交易日收盘后 21:00，次日凌晨 03:00 补跑
-            case '0 13 * * 1-5':
-            case '0 19 * * 1-6':
-                ctx.waitUntil(runHistorySync(env));
-                break;
-
-            // 盘中实时行情抓取：周一到周五 09:00-15:55（北京时间），每 5 分钟
-            case '*/5 1-7 * * 1-5':
-                ctx.waitUntil(runRealtimeSync(env));
-                break;
-
-            // 外部接口健康巡检：每 15 分钟全天候运行
-            case '*/15 * * * *':
-                ctx.waitUntil(runSentinel(env));
-                break;
-
-            // 基金异步重刷队列处理器：每分钟运行
-            case '*/1 * * * *':
-                ctx.waitUntil(processFundQueue(env));
-                break;
-
-            default:
-                console.warn(`[Scheduled] Unknown cron: "${event.cron}"`);
-        }
-    },
-};
-
-/**
- * 基金异步重刷队列处理器
- * 职责：分批从 KV 抓取 Pending 任务，执行抓取并写入 D1
- */
-async function processFundQueue(env) {
-    const BATCH_SIZE = 5; // 每次处理 5 个，防止超时和配额溢出
-    const QUEUE = env.FUND_QUEUE;
-    const DB = env.DB;
-
-    if (!QUEUE) {
-        console.error('[Queue] FUND_QUEUE KV not bound');
-        return;
-    }
-
-    // 1. 获取所有基金任务
-    const list = await QUEUE.list({ prefix: 'fund:' });
-    if (!list.keys.length) return;
-
-    // 2. 取前 N 个任务
-    const tasks = list.keys.slice(0, BATCH_SIZE);
-
-    for (const keyObj of tasks) {
-        const keyName = keyObj.name;
-        const raw = await QUEUE.get(keyName);
-        if (!raw) continue;
-
-        const job = JSON.parse(raw);
-        const code = keyName.split(':')[1];
-
-        // 防死锁：如果处于 processing 状态且更新时间在 5 分钟内，跳过
-        if (job.status === 'processing' && (Date.now() - job.updatedAt < 300000)) {
-            continue;
-        }
-
-        try {
-            // 标记为正在处理
-            await QUEUE.put(keyName, JSON.stringify({
-                ...job,
-                status: 'processing',
-                updatedAt: Date.now()
-            }));
-
-            console.log(`[Queue] Processing ${code} (force=${job.force})`);
-
-            // 抓取历史 (250天)
-            const history = await fetchFundHistory(code, 250);
-            if (!history?.length) {
-                // 如果抓取失败且重试次数未超限，标记为 pending 等待下次
-                if ((job.retry || 0) < 3) {
-                    await QUEUE.put(keyName, JSON.stringify({
-                        ...job,
-                        status: 'pending',
-                        retry: (job.retry || 0) + 1,
-                        updatedAt: Date.now()
-                    }));
-                } else {
-                    // 超限则放弃
-                    await QUEUE.delete(keyName);
-                    console.error(`[Queue] Max retries reached for ${code}, dropped.`);
-                }
-                continue;
-            }
-
-            // 写入 D1
-            if (job.force) {
-                // 强制模式：先删后写
-                await DB.prepare('DELETE FROM asset_history WHERE code = ? AND type = ?').bind(code.toLowerCase(), 'fund').run();
-            }
-
-            // 执行分片写入 (historyRepo.js 的 insertDailyPricesBatch 逻辑)
-            await insertDailyPricesBatch(
-                history.map(r => ({ code, type: 'fund', price: r.value, date: r.date })),
-                env
-            );
-
-            // 成功后从队列移除
-            await QUEUE.delete(keyName);
-            console.log(`[Queue] Successfully completed ${code}`);
-
-        } catch (e) {
-            console.error(`[Queue] Error processing ${code}:`, e.message);
-            // 发生异常，回退到 pending
-            await QUEUE.put(keyName, JSON.stringify({
-                ...job,
-                status: 'pending',
-                retry: (job.retry || 0) + 1,
-                updatedAt: Date.now()
-            }));
-        }
-    }
-}
-</file>
-
 <file path="app/admin/_components/Sections.js">
 'use client';
 
@@ -5329,106 +5175,157 @@ CREATE INDEX IF NOT EXISTS idx_logs_timestamp ON system_logs(timestamp);
 CREATE INDEX IF NOT EXISTS idx_asset_history_created_at ON asset_history (created_at);
 </file>
 
-<file path="app/api/admin/queue/route.js">
-import { NextResponse } from 'next/server';
-import { isAdminAuthorized } from '@/lib/storage/authRepo';
-
-export const dynamic = 'force-dynamic';
-export const revalidate = 0;
-
-export async function GET(request) {
-    console.log(`[AdminQueue] Incoming request: ${request.url}`);
-    if (!(await isAdminAuthorized(request))) {
-        return NextResponse.json({ error: 'Unauthorized' }, { status: 403 });
-    }
-
-    // 目前系统暂未实现持久化队列，仅返回空结构以维持 UI 稳定
-    return NextResponse.json({
-        queue: [],
-        count: 0,
-        status: 'idle'
-    });
-}
-</file>
-
-<file path="app/api/admin/refetch-fund-history/route.js">
+<file path="worker-entry.js">
 /**
- * src/app/api/admin/refetch-fund-history/route.js
- * 
- * 专用基金重刷接口，采用 Streaming (NDJSON) 响应以防止超时及提供实时进度。
+ * worker-entry.js
+ *
+ * Cloudflare Workers 统一入口。
+ *
+ * fetch handler     → 透传给 open-next，处理所有 Next.js HTTP 请求
+ * scheduled handler → 按 event.cron 字符串精确分流到对应任务
+ *
+ * 重要：open-next 生成的 worker.js 只导出 fetch handler，
+ * scheduled event 无法被其捕获，必须在本文件单独声明。
+ * wrangler.toml 的 main 字段须指向本文件。
  */
 
-import { NextResponse } from 'next/server';
-import { isAdminAuthorized } from '@/lib/storage/authRepo';
-import { fetchFundHistory } from '@/lib/services/historyFetcher';
-import { insertDailyPricesBatch, deleteAssetHistory } from '@/lib/storage/historyRepo';
-import { getD1Storage } from '@/lib/storage/d1Client';
+import openNextWorker from './.open-next/worker.js';
+import { runHistorySync } from './lib/cron/historySync.js';
+import { runRealtimeSync } from './lib/cron/realtimeSync.js';
+import { runSentinel } from './lib/cron/sentinel.js';
+import { fetchFundHistory } from './lib/services/historyFetcher.js';
+import { insertDailyPricesBatch } from './lib/storage/historyRepo.js';
 
-export const dynamic = 'force-dynamic';
-export const maxDuration = 300; // 5分钟限时
+export default {
+    // ── HTTP：全部交给 open-next ──────────────────────────────────────────────
+    fetch(request, env, ctx) {
+        return openNextWorker.fetch(request, env, ctx);
+    },
 
-const HISTORY_DAYS = 250;
+    // ── Cron：按表达式字符串精确路由 ─────────────────────────────────────────
+    //
+    // event.cron 值与 wrangler.toml [triggers].crons 里的字符串完全一致，
+    // 可直接用 switch/case 匹配，无需正则解析。
+    async scheduled(event, env, ctx) {
+        switch (event.cron) {
 
-export async function GET(request) {
-    // 1. 鉴权
-    if (!(await isAdminAuthorized(request))) {
-        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+            // 历史数据增量同步：每个交易日收盘后 21:00，次日凌晨 03:00 补跑
+            case '0 13 * * 1-5':
+            case '0 19 * * 1-6':
+                ctx.waitUntil(runHistorySync(env));
+                break;
+
+            // 盘中实时行情抓取：周一到周五 09:00-15:55（北京时间），每 5 分钟
+            case '*/5 1-7 * * 1-5':
+                ctx.waitUntil(runRealtimeSync(env));
+                break;
+
+            // 外部接口健康巡检：每 15 分钟全天候运行
+            case '*/15 * * * *':
+                ctx.waitUntil(runSentinel(env));
+                break;
+
+            // 基金异步重刷队列处理器：每分钟运行
+            case '*/1 * * * *':
+                ctx.waitUntil(processFundQueue(env));
+                break;
+
+            default:
+                console.warn(`[Scheduled] Unknown cron: "${event.cron}"`);
+        }
+    },
+};
+
+/**
+ * 基金异步重刷队列处理器
+ * 职责：分批从 KV 抓取 Pending 任务，执行抓取并写入 D1
+ */
+async function processFundQueue(env) {
+    const BATCH_SIZE = 5; // 每次处理 5 个，防止超时和配额溢出
+    const QUEUE = env.STOCK_DATA;
+    const DB = env.DB;
+
+    if (!QUEUE) {
+        console.error('[Queue] STOCK_DATA KV not bound');
+        return;
     }
 
-    const { searchParams } = new URL(request.url);
-    const force = searchParams.get('force') === '1';
+    // 1. 获取所有基金任务
+    const list = await QUEUE.list({ prefix: 'fund:' });
+    if (!list.keys.length) return;
 
-    // 2. 准备数据库
-    const db = await getD1Storage();
-    if (!db) return NextResponse.json({ error: 'DB unavailable' }, { status: 500 });
+    // 2. 取前 N 个任务
+    const tasks = list.keys.slice(0, BATCH_SIZE);
 
-    // 3. 获取 KV 绑定 (由 Cloudflare 提供)
-    // 注意：在 Next.js Edge Runtime 中，env 绑定通常通过 process.env 或 requestContext 获取
-    // 这里我们假设通过全局注入或 env 参数获取，实际由 Worker 环境确保 FUND_QUEUE 可用
-    const FUND_QUEUE = process.env.FUND_QUEUE;
-    if (!FUND_QUEUE) {
-        return NextResponse.json({ error: 'FUND_QUEUE KV 未绑定，请检查 Cloudflare 配置' }, { status: 500 });
-    }
+    for (const keyObj of tasks) {
+        const keyName = keyObj.name;
+        const raw = await QUEUE.get(keyName);
+        if (!raw) continue;
 
-    // 4. 获取所有待重刷基金列表
-    const { results: funds } = await db
-        .prepare("SELECT DISTINCT code FROM user_assets WHERE type = 'fund'")
-        .all();
+        const job = JSON.parse(raw);
+        const code = keyName.split(':')[1];
 
-    if (!funds?.length) return NextResponse.json({ ok: true, message: 'No funds found' });
+        // 防死锁：如果处于 processing 状态且更新时间在 5 分钟内，跳过
+        if (job.status === 'processing' && (Date.now() - job.updatedAt < 300000)) {
+            continue;
+        }
 
-    // 5. 任务投递：将重刷需求写入 KV 队列
-    const t0 = Date.now();
-    let submittedCount = 0;
-    const errors = [];
-
-    // 分批次投递以防 API 超时
-    const writes = funds.map(async (f) => {
         try {
-            const key = `fund:${f.code.toLowerCase()}`;
-            await FUND_QUEUE.put(key, JSON.stringify({
-                status: 'pending',
-                retry: 0,
-                force: force,
+            // 标记为正在处理
+            await QUEUE.put(keyName, JSON.stringify({
+                ...job,
+                status: 'processing',
                 updatedAt: Date.now()
             }));
-            submittedCount++;
+
+            console.log(`[Queue] Processing ${code} (force=${job.force})`);
+
+            // 抓取历史 (250天)
+            const history = await fetchFundHistory(code, 250);
+            if (!history?.length) {
+                // 如果抓取失败且重试次数未超限，标记为 pending 等待下次
+                if ((job.retry || 0) < 3) {
+                    await QUEUE.put(keyName, JSON.stringify({
+                        ...job,
+                        status: 'pending',
+                        retry: (job.retry || 0) + 1,
+                        updatedAt: Date.now()
+                    }));
+                } else {
+                    // 超限则放弃
+                    await QUEUE.delete(keyName);
+                    console.error(`[Queue] Max retries reached for ${code}, dropped.`);
+                }
+                continue;
+            }
+
+            // 写入 D1
+            if (job.force) {
+                // 强制模式：先删后写
+                await DB.prepare('DELETE FROM asset_history WHERE code = ? AND type = ?').bind(code.toLowerCase(), 'fund').run();
+            }
+
+            // 执行分片写入 (historyRepo.js 的 insertDailyPricesBatch 逻辑)
+            await insertDailyPricesBatch(
+                history.map(r => ({ code, type: 'fund', price: r.value, date: r.date })),
+                env
+            );
+
+            // 成功后从队列移除
+            await QUEUE.delete(keyName);
+            console.log(`[Queue] Successfully completed ${code}`);
+
         } catch (e) {
-            errors.push(`${f.code}: ${e.message}`);
+            console.error(`[Queue] Error processing ${code}:`, e.message);
+            // 发生异常，回退到 pending
+            await QUEUE.put(keyName, JSON.stringify({
+                ...job,
+                status: 'pending',
+                retry: (job.retry || 0) + 1,
+                updatedAt: Date.now()
+            }));
         }
-    });
-
-    await Promise.all(writes);
-
-    const elapsed = Date.now() - t0;
-    return NextResponse.json({
-        ok: true,
-        message: `已将 ${submittedCount} 只基金投递至后端异步队列`,
-        total: funds.length,
-        submitted: submittedCount,
-        errors: errors.length ? errors : undefined,
-        elapsed_ms: elapsed
-    });
+    }
 }
 </file>
 
@@ -5462,321 +5359,60 @@ export async function POST(request) {
 }
 </file>
 
-<file path="lib/cron/sentinel.js">
-/**
- * src/lib/cron/sentinel.js
- *
- * 外部财经接口健康巡检
- */
+<file path="app/api/admin/queue/route.js">
+import { NextResponse } from 'next/server';
+import { isAdminAuthorized } from '@/lib/storage/authRepo';
 
-import {
-    fetchStockEastmoney,
-    fetchStockTencent,
-    fetchStockSina,
-    fetchFundHistory,
-} from '@/lib/services/historyFetcher';
-import { queryAll, runSql, getD1Storage } from '@/lib/storage/d1Client';
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
 
-// ── 常量 ────────────────────────────────────────────────────────────────────
+import { getKvStorage } from '@/lib/storage/d1Client';
 
-const STOCK_TEST = 'sh600036';
-const FUND_TEST = '110020';
-const TIMEOUT_MS = 4500;
-
-import { EASTMONEY_HEADERS } from '@/lib/constants/headers';
-
-// ── 探针定义 ─────────────────────────────────────────────────────────────────
-
-const HEALTH_TASKS = [
-    {
-        name: 'Hist: EastMoney (Stock)',
-        fn: async (signal) => {
-            const d = await fetchStockEastmoney(STOCK_TEST, 1, signal);
-            return !!(d?.length > 0 && typeof d[0].value === 'number');
-        },
-    },
-    {
-        name: 'Hist: Tencent (Stock)',
-        fn: async (signal) => {
-            const d = await fetchStockTencent(STOCK_TEST, 1, signal);
-            return !!(d?.length > 0 && typeof d[0].value === 'number');
-        },
-    },
-    {
-        name: 'Hist: Sina (Stock)',
-        fn: async (signal) => {
-            const d = await fetchStockSina(STOCK_TEST, 1, signal);
-            return !!(d?.length > 0 && typeof d[0].value === 'number');
-        },
-    },
-    {
-        name: 'Hist: EastMoney (Fund)',
-        fn: async (signal) => {
-            const d = await fetchFundHistory(FUND_TEST, 1, signal);
-            return !!(d?.length > 0 && typeof d[0].value === 'number');
-        },
-    },
-    {
-        name: 'Quote: Tencent (Realtime)',
-        fn: async (signal) => {
-            const res = await fetch(`https://qt.gtimg.cn/q=${STOCK_TEST}`, {
-                headers: { Referer: 'https://gu.qq.com/' }, signal,
-            });
-            const text = await res.text();
-            return res.ok && text.includes('600036') && text.split('~').length > 10;
-        },
-    },
-    {
-        name: 'Intra: EastMoney (Trends)',
-        fn: async (signal) => {
-            const res = await fetch(
-                `https://push2.eastmoney.com/api/qt/stock/trends2/get?secid=1.600036&fields1=f1&fields2=f51`,
-                { headers: { Referer: 'https://quote.eastmoney.com/' }, signal }
-            );
-            const d = await res.json();
-            return !!(res.ok && d?.data?.trends?.length > 0);
-        },
-    },
-    {
-        name: 'Name: EastMoney (Query)',
-        fn: async (signal) => {
-            const res = await fetch(
-                `https://push2.eastmoney.com/api/qt/stock/get?secid=1.600036&fields=f58`,
-                { headers: { Referer: 'https://quote.eastmoney.com/' }, signal }
-            );
-            const d = await res.json();
-            return !!(res.ok && d?.data?.f58 === '招商银行');
-        },
-    },
-    {
-        name: 'Name: Tencent (Fund Spec)',
-        fn: async (signal) => {
-            const res = await fetch(`https://qt.gtimg.cn/q=s_jj${FUND_TEST}`, {
-                headers: BASE_HEADERS, signal,
-            });
-            const text = await res.text();
-            return res.ok && text.includes(FUND_TEST);
-        },
-    },
-    {
-        name: 'Name: EastMoney (Fund HTML)',
-        fn: async (signal) => {
-            const res = await fetch(`https://fund.eastmoney.com/${FUND_TEST}.html`, {
-                headers: { ...BASE_HEADERS, Accept: 'text/html' }, signal,
-            });
-            const text = await res.text();
-            return res.ok && text.includes(FUND_TEST);
-        },
-    },
-];
-
-// ── 主入口 ──────────────────────────────────────────────────────────────────
-
-export async function runSentinel(env) {
-    const db = await getD1Storage(env);
-    if (!db) {
-        console.error('[Sentinel] DB unreachable, skipping');
-        return;
+export async function GET(request) {
+    if (!(await isAdminAuthorized(request))) {
+        return NextResponse.json({ error: 'Unauthorized' }, { status: 403 });
     }
 
-    const results = await Promise.all(HEALTH_TASKS.map(_probeOne));
-
-    await _batchWriteHealth(db, results);
-
-    const available = results.filter(r => r.status !== 'down').length;
-    const slaOk = results.filter(r => ['healthy', 'wary'].includes(r.status)).length;
-    const failures = results.filter(r => r.status === 'down');
-
-    let msg = `Sentinel done — Availability: ${available}/${results.length}, SLA OK: ${slaOk}/${results.length}`;
-    if (failures.length > 0) {
-        msg += `. Down: ${failures.map(f => f.name).join(', ')}`;
+    const QUEUE = await getKvStorage('STOCK_DATA');
+    if (!QUEUE) {
+        return NextResponse.json({ queue: [], count: 0, status: 'error', message: 'STOCK_DATA KV not bound' });
     }
-
-    console.log(`[Sentinel] ${msg}`);
-    await _log(db, slaOk < results.length ? 'WARN' : 'INFO', 'Sentinel', msg);
-}
-
-// ── 单探针执行 ───────────────────────────────────────────────────────────────
-
-async function _probeOne(task) {
-    const ctrl = new AbortController();
-    const tid = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
-
-    const t0 = Date.now();
-    let success = false;
-    let errorMsg = '';
 
     try {
-        success = await task.fn(ctrl.signal);
-        if (!success) errorMsg = 'Empty or invalid response';
+        const list = await QUEUE.list({ prefix: 'fund:' });
+        const items = await Promise.all(list.keys.map(async (key) => {
+            const val = await QUEUE.get(key.name);
+            return {
+                id: key.name.split(':')[1],
+                ...(val ? JSON.parse(val) : { status: 'unknown' })
+            };
+        }));
+
+        return NextResponse.json({
+            queue: items,
+            count: items.length,
+            status: items.some(i => i.status === 'processing') ? 'running' : (items.length > 0 ? 'pending' : 'idle')
+        });
     } catch (e) {
-        errorMsg = e.name === 'AbortError'
-            ? `Timeout (>${TIMEOUT_MS}ms)`
-            : e.message;
-    } finally {
-        clearTimeout(tid);
-    }
-
-    const latency = Date.now() - t0;
-    return {
-        name: task.name,
-        status: _computeStatus(success, latency),
-        latency,
-        errorMsg: success ? '' : errorMsg,
-    };
-}
-
-// ── D1 写入 ──────────────────────────────────────────────────────────────────
-
-async function _batchWriteHealth(db, results) {
-    const now = new Date().toISOString();
-    const stmts = results.map(r =>
-        db.prepare(`
-            INSERT INTO api_health (api_name, status, latency, error_msg, last_check)
-            VALUES (?, ?, ?, ?, ?)
-            ON CONFLICT(api_name) DO UPDATE SET
-                status     = excluded.status,
-                latency    = excluded.latency,
-                error_msg  = excluded.error_msg,
-                last_check = excluded.last_check
-        `).bind(r.name, r.status, r.latency, r.errorMsg, now)
-    );
-    await db.batch(stmts);
-}
-
-// ── 状态判别 ─────────────────────────────────────────────────────────────────
-
-function _computeStatus(success, latency) {
-    if (!success) return 'down';
-    if (latency < 1200) return 'healthy';
-    if (latency < 2200) return 'wary';
-    if (latency < 3500) return 'slow';
-    return 'critical';
-}
-
-// ── 工具 ─────────────────────────────────────────────────────────────────────
-
-async function _log(db, level, source, message) {
-    try {
-        await db
-            .prepare('INSERT INTO system_logs (level, module, message) VALUES (?, ?, ?)')
-            .bind(level, source, message)
-            .run();
-    } catch (e) {
-        console.error('[Sentinel] log write failed:', e.message);
-    }
-}
-</file>
-
-<file path="lib/storage/d1Client.js">
-// 模块级单例缓存，消除高频动态导入开销
-let _cfContext = null;
-
-async function _getCtx() {
-    if (_cfContext) return _cfContext;
-    try {
-        const { getCloudflareContext } = await import("@opennextjs/cloudflare");
-        _cfContext = await getCloudflareContext();
-        return _cfContext;
-    } catch (e) {
-        return null;
+        return NextResponse.json({ error: e.message, status: 'error' }, { status: 500 });
     }
 }
 
 /**
- * 统合获取 Cloudflare 上下文 (用于访问 env.API_KEY 或 ctx.waitUntil)
+ * 允许手动重置/清理队列（危险操作，仅限管理员）
  */
-export async function getCloudflareCtx() {
-    return await _getCtx();
-}
-
-/**
- * 获取 D1 绑定，优先使用显式注入的 env，其次尝试环境上下文单例
- */
-export async function getD1Storage(env = null) {
-    if (env?.DB) return env.DB;
-    // 回退：尝试从多个潜在注入点获取 D1 绑定 (OpenNext / Next.js 本地开发模式适配)
-    const ctx = await getCloudflareCtx();
-    const db = ctx?.env?.DB ||
-        process.env.DB ||
-        globalThis.DB ||
-        (process.env.__NEXT_D1_BINDING ? JSON.parse(process.env.__NEXT_D1_BINDING) : null);
-    return db || null;
-}
-
-/**
- * 确保 DB 绑定存在
- */
-export async function getRequiredDb(env = null) {
-    const db = await getD1Storage(env);
-    if (!db) {
-        throw new Error('D1_BINDING_MISSING: Database binding "DB" is not available.');
+export async function DELETE(request) {
+    if (!(await isAdminAuthorized(request))) {
+        return NextResponse.json({ error: 'Unauthorized' }, { status: 403 });
     }
-    return db;
-}
 
-/**
- * 执行简单 SQL (用于 INSERT/UPDATE/DELETE)
- */
-export async function runSql(sql, params = [], env = null) {
-    const db = await getRequiredDb(env);
-    try {
-        return await db.prepare(sql).bind(...params).run();
-    } catch (e) {
-        e.d1Source = 'runSql'; // 溯源标记
-        console.error(`[D1Client] runSql failed: ${e.message}`, { sql, params });
-        throw e;
-    }
-}
+    const QUEUE = await getKvStorage('STOCK_DATA');
+    if (!QUEUE) return NextResponse.json({ error: 'KV not found' }, { status: 500 });
 
-/**
- * 查询单行
- */
-export async function queryOne(sql, params = [], env = null) {
-    const db = await getRequiredDb(env);
-    try {
-        return await db.prepare(sql).bind(...params).first();
-    } catch (e) {
-        e.d1Source = 'queryOne'; // 溯源标记
-        console.error(`[D1Client] queryOne failed: ${e.message}`, { sql, params });
-        throw e;
-    }
-}
+    const list = await QUEUE.list({ prefix: 'fund:' });
+    await Promise.all(list.keys.map(k => QUEUE.delete(k.name)));
 
-/**
- * 查询多行
- */
-export async function queryAll(sql, params = [], env = null) {
-    const db = await getRequiredDb(env);
-    try {
-        const { results } = await db.prepare(sql).bind(...params).all();
-        return results || [];
-    } catch (e) {
-        e.d1Source = 'queryAll'; // 溯源标记
-        console.error(`[D1Client] queryAll failed: ${e.message}`, { sql, params });
-        throw e;
-    }
-}
-
-/**
- * 批量执行 SQLs
- */
-export async function batchSql(statements, env = null) {
-    const db = await getRequiredDb(env);
-    const CHUNK = 100;
-    const allResults = [];
-    try {
-        for (let i = 0; i < statements.length; i += CHUNK) {
-            const chunk = statements.slice(i, i + CHUNK);
-            const batchResult = await db.batch(chunk);
-            allResults.push(...batchResult);
-        }
-        return allResults;
-    } catch (e) {
-        e.d1Source = 'batchSql'; // 溯源标记
-        console.error(`[D1Client] batchSql failed: ${e.message}`);
-        throw e;
-    }
+    return NextResponse.json({ ok: true, cleared: list.keys.length });
 }
 </file>
 
@@ -6026,6 +5662,216 @@ async function _log(env, level, module, message) {
 }
 
 const _sleep = ms => new Promise(r => setTimeout(r, ms));
+</file>
+
+<file path="lib/cron/sentinel.js">
+/**
+ * src/lib/cron/sentinel.js
+ *
+ * 外部财经接口健康巡检
+ */
+
+import {
+    fetchStockEastmoney,
+    fetchStockTencent,
+    fetchStockSina,
+    fetchFundHistory,
+} from '@/lib/services/historyFetcher';
+import { queryAll, runSql, getD1Storage } from '@/lib/storage/d1Client';
+
+// ── 常量 ────────────────────────────────────────────────────────────────────
+
+// ── 探针定义 (修改为接收采样资产的动态函数) ─────────────────────────────────
+
+const CREATE_HEALTH_TASKS = (stockCode, fundCode) => [
+    {
+        name: 'Hist: EastMoney (Stock)',
+        fn: async (signal) => {
+            const d = await fetchStockEastmoney(stockCode, 1, signal);
+            return !!(d?.length > 0 && typeof d[0].value === 'number');
+        },
+    },
+    {
+        name: 'Hist: Tencent (Stock)',
+        fn: async (signal) => {
+            const d = await fetchStockTencent(stockCode, 1, signal);
+            return !!(d?.length > 0 && typeof d[0].value === 'number');
+        },
+    },
+    {
+        name: 'Hist: Sina (Stock)',
+        fn: async (signal) => {
+            const d = await fetchStockSina(stockCode, 1, signal);
+            return !!(d?.length > 0 && typeof d[0].value === 'number');
+        },
+    },
+    {
+        name: 'Hist: EastMoney (Fund)',
+        fn: async (signal) => {
+            const d = await fetchFundHistory(fundCode, 1, signal);
+            return !!(d?.length > 0 && typeof d[0].value === 'number');
+        },
+    },
+    {
+        name: 'Quote: Tencent (Realtime)',
+        fn: async (signal) => {
+            const res = await fetch(`https://qt.gtimg.cn/q=${stockCode}`, {
+                headers: { Referer: 'https://gu.qq.com/' }, signal,
+            });
+            const text = await res.text();
+            return res.ok && text.includes(stockCode.replace(/[a-z]/g, '')) && text.split('~').length > 10;
+        },
+    },
+    {
+        name: 'Intra: EastMoney (Trends)',
+        fn: async (signal) => {
+            const secid = stockCode.startsWith('sh') ? `1.${stockCode.slice(2)}` : `0.${stockCode.slice(2)}`;
+            const res = await fetch(
+                `https://push2.eastmoney.com/api/qt/stock/trends2/get?secid=${secid}&fields1=f1&fields2=f51`,
+                { headers: { Referer: 'https://quote.eastmoney.com/' }, signal }
+            );
+            const d = await res.json();
+            return !!(res.ok && d?.data?.trends?.length > 0);
+        },
+    },
+    {
+        name: 'Name: EastMoney (Query)',
+        fn: async (signal) => {
+            const secid = stockCode.startsWith('sh') ? `1.${stockCode.slice(2)}` : `0.${stockCode.slice(2)}`;
+            const res = await fetch(
+                `https://push2.eastmoney.com/api/qt/stock/get?secid=${secid}&fields=f58`,
+                { headers: { Referer: 'https://quote.eastmoney.com/' }, signal }
+            );
+            const d = await res.json();
+            return !!(res.ok && d?.data?.f58);
+        },
+    },
+    {
+        name: 'Name: Tencent (Fund Spec)',
+        fn: async (signal) => {
+            const res = await fetch(`https://qt.gtimg.cn/q=s_jj${fundCode}`, {
+                headers: { Referer: 'https://gu.qq.com/' }, signal,
+            });
+            const text = await res.text();
+            return res.ok && text.includes(fundCode);
+        },
+    },
+    {
+        name: 'Name: EastMoney (Fund HTML)',
+        fn: async (signal) => {
+            const res = await fetch(`https://fund.eastmoney.com/${fundCode}.html`, {
+                headers: { Referer: 'https://fund.eastmoney.com/', Accept: 'text/html' }, signal,
+            });
+            const text = await res.text();
+            return res.ok && text.includes(fundCode);
+        },
+    },
+];
+
+// ── 主入口 ──────────────────────────────────────────────────────────────────
+
+export async function runSentinel(env) {
+    const db = await getD1Storage(env);
+    if (!db) {
+        console.error('[Sentinel] DB unreachable, skipping');
+        return;
+    }
+
+    // 动态采样逻辑：从用户资产库随机选取一个股票和一个基金作为拨测标的
+    const sampleStock = await db.prepare("SELECT code FROM user_assets WHERE type = 'stock' ORDER BY RANDOM() LIMIT 1").first();
+    const sampleFund = await db.prepare("SELECT code FROM user_assets WHERE type = 'fund' ORDER BY RANDOM() LIMIT 1").first();
+
+    const stockCode = sampleStock?.code || 'sh600036'; // 兜底招行
+    const fundCode = sampleFund?.code || '110020';   // 兜底易方达沪深300
+
+    const tasks = CREATE_HEALTH_TASKS(stockCode, fundCode);
+    const results = await Promise.all(tasks.map(_probeOne));
+
+    await _batchWriteHealth(db, results);
+
+    const available = results.filter(r => r.status !== 'down').length;
+    const slaOk = results.filter(r => ['healthy', 'wary'].includes(r.status)).length;
+    const failures = results.filter(r => r.status === 'down');
+
+    let msg = `Sentinel done — Availability: ${available}/${results.length}, SLA OK: ${slaOk}/${results.length}`;
+    if (failures.length > 0) {
+        msg += `. Down: ${failures.map(f => f.name).join(', ')}`;
+    }
+
+    console.log(`[Sentinel] ${msg}`);
+    await _log(db, slaOk < results.length ? 'WARN' : 'INFO', 'Sentinel', msg);
+}
+
+// ── 单探针执行 ───────────────────────────────────────────────────────────────
+
+async function _probeOne(task) {
+    const ctrl = new AbortController();
+    const tid = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
+
+    const t0 = Date.now();
+    let success = false;
+    let errorMsg = '';
+
+    try {
+        success = await task.fn(ctrl.signal);
+        if (!success) errorMsg = 'Empty or invalid response';
+    } catch (e) {
+        errorMsg = e.name === 'AbortError'
+            ? `Timeout (>${TIMEOUT_MS}ms)`
+            : e.message;
+    } finally {
+        clearTimeout(tid);
+    }
+
+    const latency = Date.now() - t0;
+    return {
+        name: task.name,
+        status: _computeStatus(success, latency),
+        latency,
+        errorMsg: success ? '' : errorMsg,
+    };
+}
+
+// ── D1 写入 ──────────────────────────────────────────────────────────────────
+
+async function _batchWriteHealth(db, results) {
+    const now = new Date().toISOString();
+    const stmts = results.map(r =>
+        db.prepare(`
+            INSERT INTO api_health (api_name, status, latency, error_msg, last_check)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(api_name) DO UPDATE SET
+                status     = excluded.status,
+                latency    = excluded.latency,
+                error_msg  = excluded.error_msg,
+                last_check = excluded.last_check
+        `).bind(r.name, r.status, r.latency, r.errorMsg, now)
+    );
+    await db.batch(stmts);
+}
+
+// ── 状态判别 ─────────────────────────────────────────────────────────────────
+
+function _computeStatus(success, latency) {
+    if (!success) return 'down';
+    if (latency < 1200) return 'healthy';
+    if (latency < 2200) return 'wary';
+    if (latency < 3500) return 'slow';
+    return 'critical';
+}
+
+// ── 工具 ─────────────────────────────────────────────────────────────────────
+
+async function _log(db, level, source, message) {
+    try {
+        await db
+            .prepare('INSERT INTO system_logs (level, module, message) VALUES (?, ?, ?)')
+            .bind(level, source, message)
+            .run();
+    } catch (e) {
+        console.error('[Sentinel] log write failed:', e.message);
+    }
+}
 </file>
 
 <file path="lib/services/assetSyncService.js">
@@ -6391,6 +6237,130 @@ export async function syncNamesBulk(items, allowExternal = false) {
     }
 
     return result;
+}
+</file>
+
+<file path="lib/storage/d1Client.js">
+// 模块级单例缓存，消除高频动态导入开销
+let _cfContext = null;
+
+async function _getCtx() {
+    if (_cfContext) return _cfContext;
+    try {
+        const { getCloudflareContext } = await import("@opennextjs/cloudflare");
+        _cfContext = await getCloudflareContext();
+        return _cfContext;
+    } catch (e) {
+        return null;
+    }
+}
+
+/**
+ * 统合获取 Cloudflare 上下文 (用于访问 env.API_KEY 或 ctx.waitUntil)
+ */
+export async function getCloudflareCtx() {
+    return await _getCtx();
+}
+
+/**
+ * 获取 D1 绑定，优先使用显式注入的 env，其次尝试环境上下文单例
+ */
+export async function getD1Storage(env = null) {
+    if (env?.DB) return env.DB;
+    // 回退：尝试从多个潜在注入点获取 D1 绑定 (OpenNext / Next.js 本地开发模式适配)
+    const ctx = await getCloudflareCtx();
+    const db = ctx?.env?.DB ||
+        process.env.DB ||
+        globalThis.DB ||
+        (process.env.__NEXT_D1_BINDING ? JSON.parse(process.env.__NEXT_D1_BINDING) : null);
+    return db || null;
+}
+
+/**
+ * 获取 KV 绑定，逻辑与 D1 类似
+ */
+export async function getKvStorage(kvName, env = null) {
+    if (env?.[kvName]) return env[kvName];
+    const ctx = await getCloudflareCtx();
+    const kv = ctx?.env?.[kvName] ||
+        process.env[kvName] ||
+        globalThis[kvName];
+    return kv || null;
+}
+
+/**
+ * 确保 DB 绑定存在
+ */
+export async function getRequiredDb(env = null) {
+    const db = await getD1Storage(env);
+    if (!db) {
+        throw new Error('D1_BINDING_MISSING: Database binding "DB" is not available.');
+    }
+    return db;
+}
+
+/**
+ * 执行简单 SQL (用于 INSERT/UPDATE/DELETE)
+ */
+export async function runSql(sql, params = [], env = null) {
+    const db = await getRequiredDb(env);
+    try {
+        return await db.prepare(sql).bind(...params).run();
+    } catch (e) {
+        e.d1Source = 'runSql'; // 溯源标记
+        console.error(`[D1Client] runSql failed: ${e.message}`, { sql, params });
+        throw e;
+    }
+}
+
+/**
+ * 查询单行
+ */
+export async function queryOne(sql, params = [], env = null) {
+    const db = await getRequiredDb(env);
+    try {
+        return await db.prepare(sql).bind(...params).first();
+    } catch (e) {
+        e.d1Source = 'queryOne'; // 溯源标记
+        console.error(`[D1Client] queryOne failed: ${e.message}`, { sql, params });
+        throw e;
+    }
+}
+
+/**
+ * 查询多行
+ */
+export async function queryAll(sql, params = [], env = null) {
+    const db = await getRequiredDb(env);
+    try {
+        const { results } = await db.prepare(sql).bind(...params).all();
+        return results || [];
+    } catch (e) {
+        e.d1Source = 'queryAll'; // 溯源标记
+        console.error(`[D1Client] queryAll failed: ${e.message}`, { sql, params });
+        throw e;
+    }
+}
+
+/**
+ * 批量执行 SQLs
+ */
+export async function batchSql(statements, env = null) {
+    const db = await getRequiredDb(env);
+    const CHUNK = 100;
+    const allResults = [];
+    try {
+        for (let i = 0; i < statements.length; i += CHUNK) {
+            const chunk = statements.slice(i, i + CHUNK);
+            const batchResult = await db.batch(chunk);
+            allResults.push(...batchResult);
+        }
+        return allResults;
+    } catch (e) {
+        e.d1Source = 'batchSql'; // 溯源标记
+        console.error(`[D1Client] batchSql failed: ${e.message}`);
+        throw e;
+    }
 }
 </file>
 
@@ -6893,6 +6863,104 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+</file>
+
+<file path="app/api/admin/refetch-fund-history/route.js">
+/**
+ * src/app/api/admin/refetch-fund-history/route.js
+ * 
+ * 专用基金重刷接口，采用 Streaming (NDJSON) 响应以防止超时及提供实时进度。
+ */
+
+import { NextResponse } from 'next/server';
+import { isAdminAuthorized } from '@/lib/storage/authRepo';
+import { fetchFundHistory } from '@/lib/services/historyFetcher';
+import { insertDailyPricesBatch, deleteAssetHistory } from '@/lib/storage/historyRepo';
+import { getKvStorage, getD1Storage } from '@/lib/storage/d1Client';
+
+export const dynamic = 'force-dynamic';
+export const maxDuration = 300; // 5分钟限时
+
+const HISTORY_DAYS = 250;
+
+export async function GET(request) {
+    // 1. 鉴权
+    if (!(await isAdminAuthorized(request))) {
+        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const { searchParams } = new URL(request.url);
+    const force = searchParams.get('force') === '1';
+
+    // 2. 准备数据库
+    const db = await getD1Storage();
+    if (!db) return NextResponse.json({ error: 'DB unavailable' }, { status: 500 });
+
+    // 3. 获取 KV 绑定 (由 Cloudflare 提供)
+    let FUND_QUEUE = await getKvStorage('STOCK_DATA');
+
+    // ── [DEBUG] 生产环境环境变量探测 ──────────────────────────────────────────
+    if (!FUND_QUEUE) {
+        try {
+            const ctx = await getCloudflareCtx();
+            const debugInfo = {
+                envKeys: Object.keys(process.env || {}),
+                ctxEnvKeys: Object.keys(ctx?.env || {}),
+                globalKeys: Object.keys(globalThis || {}).filter(k => k.match(/^[A-Z_]+$/)),
+                runtime: 'EdgeRuntime'
+            };
+            await db.prepare("INSERT INTO system_logs (level, module, message) VALUES (?, ?, ?)")
+                .bind('ERROR', 'KV_DEBUG', `Missing STOCK_DATA. Available keys: ${JSON.stringify(debugInfo)}`)
+                .run();
+        } catch (e) {
+            console.error('Debug log failed', e);
+        }
+        return NextResponse.json({
+            error: 'STOCK_DATA KV 未绑定，请检查 Cloudflare 配置。调试日志已记录至 system_logs 表',
+            tips: '请确认是否已在 Cloudflare 控制台将 KV Namespace 绑定到名为 STOCK_DATA 的变量上'
+        }, { status: 500 });
+    }
+
+    // 4. 获取所有待重刷基金列表
+    const { results: funds } = await db
+        .prepare("SELECT DISTINCT code FROM user_assets WHERE type = 'fund'")
+        .all();
+
+    if (!funds?.length) return NextResponse.json({ ok: true, message: 'No funds found' });
+
+    // 5. 任务投递：将重刷需求写入 KV 队列
+    const t0 = Date.now();
+    let submittedCount = 0;
+    const errors = [];
+
+    // 分批次投递以防 API 超时
+    const writes = funds.map(async (f) => {
+        try {
+            const key = `fund:${f.code.toLowerCase()}`;
+            await FUND_QUEUE.put(key, JSON.stringify({
+                status: 'pending',
+                retry: 0,
+                force: force,
+                updatedAt: Date.now()
+            }));
+            submittedCount++;
+        } catch (e) {
+            errors.push(`${f.code}: ${e.message}`);
+        }
+    });
+
+    await Promise.all(writes);
+
+    const elapsed = Date.now() - t0;
+    return NextResponse.json({
+        ok: true,
+        message: `已将 ${submittedCount} 只基金投递至后端异步队列`,
+        total: funds.length,
+        submitted: submittedCount,
+        errors: errors.length ? errors : undefined,
+        elapsed_ms: elapsed
+    });
+}
 </file>
 
 <file path="components/DashboardClient.js">
@@ -7530,6 +7598,74 @@ export function useAdminData(secretKey, showToast, onAuthFailure) {
 }
 </file>
 
+<file path="app/api/cron/sync/route.js">
+/**
+ * src/app/api/cron/sync/route.js
+ *
+ * 手动触发盘中实时行情同步的 HTTP 调试入口。
+ * 正式生产由 wrangler.toml cron + scheduled handler 驱动，本文件仅供调试。
+ *
+ * 调用方式：
+ *   GET /api/cron/sync?task=realtime&key=YOUR_SECRET
+ *   GET /api/cron/sync?task=history&key=YOUR_SECRET
+ *
+ * 鉴权：
+ *   统一通过 isAdminAuthorized 进行校验（支持 Session Token 或 ?key=xxx）
+ */
+
+import { NextResponse } from 'next/server';
+import { runHistorySync } from '@/lib/cron/historySync';
+import { runRealtimeSync } from '@/lib/cron/realtimeSync';
+import { runSentinel } from '@/lib/cron/sentinel';
+import { isAdminAuthorized } from '@/lib/storage/authRepo';
+
+export const dynamic = 'force-dynamic';
+
+const TASK_MAP = {
+    history: runHistorySync,
+    realtime: runRealtimeSync,
+    sentinel: runSentinel,
+};
+
+export async function GET(request) {
+    const { searchParams } = new URL(request.url);
+
+    // ── 鉴权：统一使用管理员校验 ───────────────────────────────────────
+    if (!(await isAdminAuthorized(request))) {
+        return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+    }
+
+    // ── 路由 ────────────────────────────────────────────────────────────────
+    const task = searchParams.get('task') ?? 'realtime';
+    const runner = TASK_MAP[task];
+
+    if (!runner) {
+        return NextResponse.json(
+            { success: false, error: `Unknown task "${task}". Valid: ${Object.keys(TASK_MAP).join(', ')}` },
+            { status: 400 }
+        );
+    }
+
+    // ── 执行 ────────────────────────────────────────────────────────────────
+    // 统合规范：直接使用 getD1Storage() 获取绑定，支持 context 与 global 注入
+    const { getD1Storage } = await import('@/lib/storage/d1Client');
+    const db = await getD1Storage();
+    const env = { DB: db };
+
+    try {
+        const t0 = Date.now();
+        const force = searchParams.get('force') === '1';
+        const type = searchParams.get('type');
+        await runner(env, { force, type });
+        const elapsed = Date.now() - t0;
+        return NextResponse.json({ success: true, task, force, type, elapsed_ms: elapsed });
+    } catch (e) {
+        console.error(`[CronRoute] task=${task} failed:`, e.message);
+        return NextResponse.json({ success: false, task, error: e.message }, { status: 500 });
+    }
+}
+</file>
+
 <file path="lib/services/historyFetcher.js">
 import { fetchWithRetry, getBeijingTodayStr, isMarketClosedBeijing, formatDateInTimezone } from '@/lib/utils';
 import { addSystemLog } from '@/lib/storage/logRepo';
@@ -7712,74 +7848,6 @@ export async function fetchFundHistory(code, days, signal = null) {
     } catch (e) {
         console.error(`[Fetcher] Fund ${code} failed:`, e.message);
         return null;
-    }
-}
-</file>
-
-<file path="app/api/cron/sync/route.js">
-/**
- * src/app/api/cron/sync/route.js
- *
- * 手动触发盘中实时行情同步的 HTTP 调试入口。
- * 正式生产由 wrangler.toml cron + scheduled handler 驱动，本文件仅供调试。
- *
- * 调用方式：
- *   GET /api/cron/sync?task=realtime&key=YOUR_SECRET
- *   GET /api/cron/sync?task=history&key=YOUR_SECRET
- *
- * 鉴权：
- *   统一通过 isAdminAuthorized 进行校验（支持 Session Token 或 ?key=xxx）
- */
-
-import { NextResponse } from 'next/server';
-import { runHistorySync } from '@/lib/cron/historySync';
-import { runRealtimeSync } from '@/lib/cron/realtimeSync';
-import { runSentinel } from '@/lib/cron/sentinel';
-import { isAdminAuthorized } from '@/lib/storage/authRepo';
-
-export const dynamic = 'force-dynamic';
-
-const TASK_MAP = {
-    history: runHistorySync,
-    realtime: runRealtimeSync,
-    sentinel: runSentinel,
-};
-
-export async function GET(request) {
-    const { searchParams } = new URL(request.url);
-
-    // ── 鉴权：统一使用管理员校验 ───────────────────────────────────────
-    if (!(await isAdminAuthorized(request))) {
-        return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
-    }
-
-    // ── 路由 ────────────────────────────────────────────────────────────────
-    const task = searchParams.get('task') ?? 'realtime';
-    const runner = TASK_MAP[task];
-
-    if (!runner) {
-        return NextResponse.json(
-            { success: false, error: `Unknown task "${task}". Valid: ${Object.keys(TASK_MAP).join(', ')}` },
-            { status: 400 }
-        );
-    }
-
-    // ── 执行 ────────────────────────────────────────────────────────────────
-    // 统合规范：直接使用 getD1Storage() 获取绑定，支持 context 与 global 注入
-    const { getD1Storage } = await import('@/lib/storage/d1Client');
-    const db = await getD1Storage();
-    const env = { DB: db };
-
-    try {
-        const t0 = Date.now();
-        const force = searchParams.get('force') === '1';
-        const type = searchParams.get('type');
-        await runner(env, { force, type });
-        const elapsed = Date.now() - t0;
-        return NextResponse.json({ success: true, task, force, type, elapsed_ms: elapsed });
-    } catch (e) {
-        console.error(`[CronRoute] task=${task} failed:`, e.message);
-        return NextResponse.json({ success: false, task, error: e.message }, { status: 500 });
     }
 }
 </file>
