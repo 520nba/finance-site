@@ -6,8 +6,6 @@
 
 import { NextResponse } from 'next/server';
 import { isAdminAuthorized } from '@/lib/storage/authRepo';
-import { fetchFundHistory } from '@/lib/services/historyFetcher';
-import { insertDailyPricesBatch, deleteAssetHistory } from '@/lib/storage/historyRepo';
 import { getD1Storage } from '@/lib/storage/d1Client';
 
 export const dynamic = 'force-dynamic';

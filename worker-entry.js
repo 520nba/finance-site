@@ -44,6 +44,14 @@ async function processSyncJobs(env) {
     const DB = env.DB;
     if (!DB) return;
 
+    // 0. 预检：若无处于活跃状态的任务，直接退出以保护 D1 写入配额
+    try {
+        const activeCount = await DB.prepare("SELECT count(*) as count FROM sync_jobs WHERE status IN ('pending', 'processing')").first('count');
+        if (activeCount === 0) return;
+    } catch (countErr) {
+        console.error('[Queue:PreCheck] Failed to count active jobs:', countErr.message);
+    }
+
     // 1. 先把卡死超过 10 分钟的 processing 任务重置回 pending
     try {
         await DB.prepare(`
