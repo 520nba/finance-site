@@ -97,16 +97,20 @@ async function processSyncJobs(env) {
 
         for (const job of jobs) {
             try {
-                if (job.type === 'fund_history') {
+                if (job.type === 'fund_history' || job.type === 'asset_history_sync') {
                     const { syncHistoryBulk } = await import('./lib/services/assetSyncService');
                     let force = false;
+                    let assetType = job.type === 'fund_history' ? 'fund' : 'stock';
+
                     try {
                         const payload = JSON.parse(job.payload || '{}');
                         force = !!payload.force;
+                        if (payload.type) assetType = payload.type;
                     } catch (e) { /* ignore */ }
 
-                    // 传入 env 确保 service 内部获取正确的 DB 绑定，并透传 force 标志
-                    await syncHistoryBulk([{ code: job.code, type: 'fund' }], 250, true, env, force);
+                    // 调用核心同步 Service (days=250, allowExternal=true)
+                    // 该 Service 内部会自动处理多源级联拉取与 D1 写入
+                    await syncHistoryBulk([{ code: job.code, type: assetType }], 250, true, env, force);
 
                     await DB.prepare("UPDATE sync_jobs SET status = 'completed', updated_at = CURRENT_TIMESTAMP WHERE id = ?")
                         .bind(job.id)

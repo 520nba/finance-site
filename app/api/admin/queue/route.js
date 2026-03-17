@@ -15,20 +15,31 @@ export async function GET(request) {
     if (!db) return NextResponse.json({ error: 'DB unavailable' }, { status: 500 });
 
     try {
-        // 读取最近 100 条任务状态用于前端显示
+        // 读取最近 300 条任务状态，并尝试关联资产名称库
         const items = await queryAll(`
-            SELECT id, code, status, type, updated_at 
-            FROM sync_jobs 
-            ORDER BY updated_at DESC LIMIT 100
+            SELECT 
+                j.id, 
+                j.code, 
+                j.status, 
+                j.type, 
+                j.created_at, 
+                j.updated_at,
+                n.name as asset_name
+            FROM sync_jobs j
+            LEFT JOIN asset_names n ON j.code = n.code
+            GROUP BY j.id -- 防止一个 code 对应多个 type 时产生重复行
+            ORDER BY j.updated_at DESC LIMIT 300
         `);
 
         return NextResponse.json({
             queue: items.map(i => ({
                 id: i.id,
                 code: i.code,
+                name: i.asset_name || '未知资产',
                 status: i.status,
                 type: i.type,
-                updatedAt: i.updated_at
+                created_at: i.created_at,
+                updated_at: i.updated_at
             })),
             count: items.length,
             status: items.some(i => i.status === 'processing') ? 'running' : (items.some(i => i.status === 'pending') ? 'pending' : 'idle')

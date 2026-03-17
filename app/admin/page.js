@@ -104,7 +104,11 @@ function AdminCommandCenter() {
                         <LogsSection logs={data.logs} />
                     )}
                     {activeSection === 'queue' && (
-                        <QueueSection queueData={data.queueData} />
+                        <QueueSection
+                            queueData={data.queueData}
+                            onRefresh={data.fetchQueue}
+                            loading={data.queueLoading}
+                        />
                     )}
                     {activeSection === 'assets' && (
                         <AssetStatusSection
