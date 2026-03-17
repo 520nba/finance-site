@@ -44,16 +44,28 @@ async function processSyncJobs(env) {
     const DB = env.DB;
     if (!DB) return;
 
-    // 1. 自动清理机制：将积压在 processing 超过 1 小时的任务重置为 pending
+    // 1. 先把卡死超过 10 分钟的 processing 任务重置回 pending
     try {
         await DB.prepare(`
             UPDATE sync_jobs 
-            SET status = 'pending', updated_at = CURRENT_TIMESTAMP, retry_count = retry_count + 1
+            SET status = 'pending', updated_at = CURRENT_TIMESTAMP
             WHERE status = 'processing' 
-            AND updated_at < datetime('now', '-1 hour')
+            AND updated_at < datetime('now', '-10 minutes')
         `).run();
     } catch (cleanupErr) {
         console.error('[Queue:Cleanup] Reset stuck jobs failed:', cleanupErr.message);
+    }
+
+    // 2. 超过最大重试次数的直接标记 failed，不再阻塞队列
+    try {
+        await DB.prepare(`
+            UPDATE sync_jobs
+            SET status = 'failed', error_msg = 'max retries exceeded', updated_at = CURRENT_TIMESTAMP
+            WHERE status = 'pending'
+            AND retry_count >= 3
+        `).run();
+    } catch (retryLimitErr) {
+        console.error('[Queue:RetryLimit] Mark max retries failed:', retryLimitErr.message);
     }
 
     const BATCH_SIZE = 5;
