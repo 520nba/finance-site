@@ -150,6 +150,12 @@ export function useAdminData(secretKey, showToast, onAuthFailure) {
                                         const data = JSON.parse(line);
                                         if (data.status === 'ok') {
                                             if (data.index % 5 === 0) showToast(`重刷中: ${data.index} 只完成`, 'info');
+                                        } else if (data.status === 'skipped') {
+                                            console.warn(`[Admin] Skipped ${data.code}: ${data.reason}`);
+                                            // 如果大量跳过，也给个提示
+                                            if (data.index % 10 === 0) showToast(`同步中: ${data.index} 只已跳过`, 'info');
+                                        } else if (data.status === 'error') {
+                                            console.error(`[Admin] Error ${data.code}: ${data.error}`);
                                         } else if (data.status === 'done') {
                                             showToast(`[成功] 基金全量重刷完成，共处理 ${data.total} 只`, 'success');
                                             await fetchAllData(secretKey, true);
