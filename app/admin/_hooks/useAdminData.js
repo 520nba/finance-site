@@ -124,22 +124,59 @@ export function useAdminData(secretKey, showToast, onAuthFailure) {
     const triggerForceSync = useCallback((type) => {
         const typeZh = type === 'fund' ? '基金' : '股票';
         setConfirmAction({
-            message: `!! 协议强制覆盖 !!\n\n系统将调用同步内核全量重新抓取所有 ${typeZh} 的历史 K 线，并使用最新的“时区修复逻辑”覆盖数据库记录。\n\n执行指令？`,
+            message: `!! 协议强制覆盖 !!\n\n系统将针对 ${typeZh} 执行特定刷新逻辑：\n${type === 'fund' ? '• 基金：先清空历史，再抓取最新 250 天数据 (流式进度)' : '• 股票：沿用旧版强制重写逻辑'}\n\n执行指令？`,
             onConfirm: async () => {
                 setLoading(true);
                 try {
-                    // 全量历史重刷使用 task=history&force=1
-                    const url = `/api/cron/sync?task=history&force=1&secret=${secretKey}`;
-                    const res = await fetch(url);
-                    const data = await res.json();
-                    if (res.ok && data.success) {
-                        showToast(`[成功] 全量刷新任务已启动\n日期偏移已修正`, 'success');
-                        await fetchAllData(secretKey, true);
+                    if (type === 'fund') {
+                        // ── 基金：调用专门的 Streaming 接口 ──────────────────────
+                        const res = await fetch(`/api/admin/refetch-fund-history?force=1`, {
+                            headers: { 'x-admin-key': secretKey }
+                        });
+
+                        if (!res.ok) throw new Error('接口响应异常');
+
+                        const reader = res.body.getReader();
+                        const decoder = new TextDecoder();
+                        let done = false;
+
+                        while (!done) {
+                            const { value, done: d } = await reader.read();
+                            done = d;
+                            if (value) {
+                                const chunk = decoder.decode(value, { stream: !done });
+                                const lines = chunk.split('\n').filter(Boolean);
+                                for (const line of lines) {
+                                    try {
+                                        const data = JSON.parse(line);
+                                        if (data.status === 'ok') {
+                                            // 可以在此处收集 ok 数量做更精细的显示，此处先简单提示进度
+                                            if (data.index % 5 === 0) showToast(`重刷中: ${data.index} 只完成`, 'info');
+                                        } else if (data.status === 'done') {
+                                            showToast(`[成功] 基金全量重刷完成，共处理 ${data.total} 只`, 'success');
+                                            await fetchAllData(secretKey, true);
+                                        }
+                                    } catch (e) {
+                                        console.warn('[Admin] Stream parse error:', e);
+                                    }
+                                }
+                            }
+                        }
                     } else {
-                        showToast(data.error || '指令被拒绝');
+                        // ── 股票：改用 Header 传参，移除 URL 中的密钥 ──────────────
+                        const url = `/api/cron/sync?task=history&force=1`;
+                        const res = await fetch(url, { headers });
+                        const data = await res.json();
+                        if (res.ok && data.success) {
+                            showToast(`[成功] 股票刷新任务已启动`, 'success');
+                            await fetchAllData(secretKey, true);
+                        } else {
+                            showToast(data.error || '指令被拒绝');
+                        }
                     }
-                } catch {
-                    showToast('API 链路中断');
+                } catch (e) {
+                    console.error('[Admin] ForceSync error:', e);
+                    showToast(`API 链路中断: ${e.message}`);
                 } finally {
                     setLoading(false);
                     setConfirmAction(null);

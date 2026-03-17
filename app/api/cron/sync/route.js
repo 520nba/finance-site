@@ -28,6 +28,8 @@ const TASK_MAP = {
 };
 
 export async function GET(request) {
+    const { searchParams } = new URL(request.url);
+
     // ── 鉴权：统一使用管理员校验 ───────────────────────────────────────
     if (!(await isAdminAuthorized(request))) {
         return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });

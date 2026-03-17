@@ -106,6 +106,15 @@ export function AssetProvider({ children }) {
     return (
         <AssetContext.Provider value={value}>
             {children}
+            {toast && (
+                <div className={`fixed bottom-8 left-1/2 -translate-x-1/2 
+                    ${toast.type === 'error' ? 'bg-red-500/90' : (toast.type === 'info' ? 'bg-blue-600/90' : 'bg-green-500/90')} 
+                    text-white px-6 py-3 rounded-full shadow-2xl z-[9999] backdrop-blur-md 
+                    animate-in fade-in slide-in-from-bottom-4 duration-300 font-bold text-sm`}
+                >
+                    {toast.msg}
+                </div>
+            )}
         </AssetContext.Provider>
     );
 }
