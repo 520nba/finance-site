@@ -126,6 +126,7 @@ export function useAdminData(secretKey, showToast, onAuthFailure) {
         setConfirmAction({
             message: `!! 协议强制覆盖 !!\n\n系统将针对 ${typeZh} 执行特定刷新逻辑：\n${type === 'fund' ? '• 基金：先拉取 250 天数据，确认成功后清空旧记录并重写 (流式进度)' : '• 股票：沿用旧版强制重写逻辑'}\n\n执行指令？`,
             onConfirm: async () => {
+                setConfirmAction(null);
                 setLoading(true);
                 try {
                     const headers = { 'x-admin-key': secretKey };
