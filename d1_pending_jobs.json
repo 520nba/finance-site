@@ -1,0 +1,96 @@
+﻿[
+  {
+    "results": [
+      {
+        "id": 25,
+        "type": "fund_history",
+        "code": "519066",
+        "status": "processing",
+        "error_msg": null,
+        "retry_count": 0,
+        "updated_at": "2026-03-17 06:41:51"
+      },
+      {
+        "id": 24,
+        "type": "fund_history",
+        "code": "420102",
+        "status": "processing",
+        "error_msg": null,
+        "retry_count": 0,
+        "updated_at": "2026-03-17 06:41:51"
+      },
+      {
+        "id": 23,
+        "type": "fund_history",
+        "code": "240018",
+        "status": "processing",
+        "error_msg": null,
+        "retry_count": 0,
+        "updated_at": "2026-03-17 06:41:51"
+      },
+      {
+        "id": 22,
+        "type": "fund_history",
+        "code": "217022",
+        "status": "processing",
+        "error_msg": null,
+        "retry_count": 0,
+        "updated_at": "2026-03-17 06:41:51"
+      },
+      {
+        "id": 21,
+        "type": "fund_history",
+        "code": "180012",
+        "status": "processing",
+        "error_msg": null,
+        "retry_count": 0,
+        "updated_at": "2026-03-17 06:41:51"
+      },
+      {
+        "id": 20,
+        "type": "fund_history",
+        "code": "161716",
+        "status": "processing",
+        "error_msg": null,
+        "retry_count": 0,
+        "updated_at": "2026-03-17 06:40:51"
+      },
+      {
+        "id": 19,
+        "type": "fund_history",
+        "code": "050027",
+        "status": "processing",
+        "error_msg": null,
+        "retry_count": 0,
+        "updated_at": "2026-03-17 06:40:51"
+      },
+      {
+        "id": 18,
+        "type": "fund_history",
+        "code": "040018",
+        "status": "processing",
+        "error_msg": null,
+        "retry_count": 0,
+        "updated_at": "2026-03-17 06:40:51"
+      }
+    ],
+    "success": true,
+    "meta": {
+      "served_by": "v3-prod",
+      "served_by_region": "APAC",
+      "served_by_colo": "HKG",
+      "served_by_primary": true,
+      "timings": {
+        "sql_duration_ms": 0.1754
+      },
+      "duration": 0.1754,
+      "changes": 0,
+      "last_row_id": 0,
+      "changed_db": false,
+      "size_after": 5435392,
+      "rows_read": 9,
+      "rows_written": 0,
+      "total_attempts": 1
+    }
+  }
+]

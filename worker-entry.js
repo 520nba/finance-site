@@ -44,6 +44,18 @@ async function processSyncJobs(env) {
     const DB = env.DB;
     if (!DB) return;
 
+    // 1. 自动清理机制：将积压在 processing 超过 1 小时的任务重置为 pending
+    try {
+        await DB.prepare(`
+            UPDATE sync_jobs 
+            SET status = 'pending', updated_at = CURRENT_TIMESTAMP, retry_count = retry_count + 1
+            WHERE status = 'processing' 
+            AND updated_at < datetime('now', '-1 hour')
+        `).run();
+    } catch (cleanupErr) {
+        console.error('[Queue:Cleanup] Reset stuck jobs failed:', cleanupErr.message);
+    }
+
     const BATCH_SIZE = 5;
     try {
         const { results: jobs } = await DB.prepare(`
@@ -67,8 +79,14 @@ async function processSyncJobs(env) {
             try {
                 if (job.type === 'fund_history') {
                     const { syncHistoryBulk } = await import('./lib/services/assetSyncService');
-                    // 传入 env 确保 service 内部获取正确的 DB 绑定
-                    await syncHistoryBulk([{ code: job.code, type: 'fund' }], 250, true, env);
+                    let force = false;
+                    try {
+                        const payload = JSON.parse(job.payload || '{}');
+                        force = !!payload.force;
+                    } catch (e) { /* ignore */ }
+
+                    // 传入 env 确保 service 内部获取正确的 DB 绑定，并透传 force 标志
+                    await syncHistoryBulk([{ code: job.code, type: 'fund' }], 250, true, env, force);
                 }
 
                 await DB.prepare("UPDATE sync_jobs SET status = 'completed', updated_at = CURRENT_TIMESTAMP WHERE id = ?")
