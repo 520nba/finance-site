@@ -75,38 +75,54 @@ export function useAdminData(secretKey, showToast, onAuthFailure) {
     }, [secretKey, showToast, onAuthFailure]);
 
     const fetchQueue = useCallback(async () => {
-        if (!secretKey) return;
+        const k = secretKey || sessionStorage.getItem('tracker_admin_secret');
+        if (!k) return;
+
         setQueueLoading(true);
         try {
             const res = await fetch('/api/admin/queue', {
-                headers: { 'x-admin-key': secretKey },
+                headers: { 'x-admin-key': k },
             });
             if (res.ok) {
                 const data = await res.json();
                 setQueueData(data?.queue || []);
+            } else {
+                const error = await res.json().catch(() => ({}));
+                showToast(error.error || `队列获取失败 (${res.status})`);
             }
         } catch (e) {
             console.error('Failed to fetch queue:', e);
-            showToast('获取队列失败');
+            showToast('同步队列无法访问');
         } finally {
             setQueueLoading(false);
         }
     }, [secretKey, showToast]);
 
     const fetchAssetStatus = useCallback(async () => {
-        if (!secretKey) return;
+        // 增加兜底检测：优先使用 state 里的 key，其次回退到 session 存储
+        const k = secretKey || sessionStorage.getItem('tracker_admin_secret');
+        if (!k) {
+            console.warn('[AdminData] Missing secretKey for fetchAssetStatus');
+            showToast('操作被拦截：未检出管理权限密钥');
+            return;
+        }
+
         setAssetStatusLoading(true);
         try {
             const res = await fetch('/api/admin/assets/status', {
-                headers: { 'x-admin-key': secretKey },
+                headers: { 'x-admin-key': k },
             });
             if (res.ok) {
                 const data = await res.json();
                 setAssetStatus(data?.assets || []);
+                showToast('资产同步状态提取成功', 'success');
+            } else {
+                const error = await res.json().catch(() => ({}));
+                showToast(error.error || `鉴权失败 (${res.status})`);
             }
         } catch (e) {
             console.error('Failed to fetch asset status:', e);
-            showToast('获取资产状态失败');
+            showToast('网络链路异常，请检查后端运行状态');
         } finally {
             setAssetStatusLoading(false);
         }
