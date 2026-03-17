@@ -12,6 +12,7 @@ const NAV_ITEMS = [
     { id: 'queue', icon: <RefreshCcw size={20} />, label: '同步队列' },
     { id: 'users', icon: <Users size={20} />, label: '用户审计' },
     { id: 'logs', icon: <FileText size={20} />, label: '系统日志' },
+    { id: 'assets', icon: <TrendingUp size={20} />, label: '资产监控' },
 ];
 
 export function AppShell({ activeSection, onNavigate, onLogout, loading, onRefresh, onForceSync, onCleanup, children }) {

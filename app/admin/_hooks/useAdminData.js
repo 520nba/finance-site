@@ -29,6 +29,8 @@ export function useAdminData(secretKey, showToast, onAuthFailure) {
     const [loading, setLoading] = useState(false);
     const [queueData, setQueueData] = useState([]);
     const [queueLoading, setQueueLoading] = useState(false);
+    const [assetStatus, setAssetStatus] = useState([]);
+    const [assetStatusLoading, setAssetStatusLoading] = useState(false);
     const [confirmAction, setConfirmAction] = useState(null);
 
     // ── 基础请求 ──────────────────────────────────────────────────────────
@@ -88,6 +90,25 @@ export function useAdminData(secretKey, showToast, onAuthFailure) {
             showToast('获取队列失败');
         } finally {
             setQueueLoading(false);
+        }
+    }, [secretKey, showToast]);
+
+    const fetchAssetStatus = useCallback(async () => {
+        if (!secretKey) return;
+        setAssetStatusLoading(true);
+        try {
+            const res = await fetch('/api/admin/assets/status', {
+                headers: { 'x-admin-key': secretKey },
+            });
+            if (res.ok) {
+                const data = await res.json();
+                setAssetStatus(data?.assets || []);
+            }
+        } catch (e) {
+            console.error('Failed to fetch asset status:', e);
+            showToast('获取资产状态失败');
+        } finally {
+            setAssetStatusLoading(false);
         }
     }, [secretKey, showToast]);
 
@@ -205,5 +226,8 @@ export function useAdminData(secretKey, showToast, onAuthFailure) {
         deleteUser,
         triggerForceSync,
         triggerCleanup,
+        assetStatus,
+        assetStatusLoading,
+        fetchAssetStatus,
     };
 }

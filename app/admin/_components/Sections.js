@@ -3,7 +3,7 @@
 import { motion } from 'framer-motion';
 import {
     Users, Wifi, RefreshCcw, FileText, LayoutGrid,
-    Database, Zap, Activity, Clock, Trash2, PieChart,
+    Database, Zap, Activity, Clock, Trash2, PieChart, TrendingUp,
 } from 'lucide-react';
 
 // ── OverviewSection ───────────────────────────────────────────────────────
@@ -282,6 +282,77 @@ export function QueueSection({ queueData }) {
                             </tr>
                         )) : (
                             <tr><td colSpan="3" className="px-10 py-32 text-center text-white/10 italic font-medium uppercase tracking-[0.3em] text-sm">当前核心队列已清空</td></tr>
+                        )}
+                    </tbody>
+                </table>
+            </div>
+        </motion.div>
+    );
+}
+
+// ── AssetStatusSection ───────────────────────────────────────────────────
+
+export function AssetStatusSection({ assets, onRefresh, loading }) {
+    return (
+        <motion.div initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 20 }} key="assets">
+            <div className="flex items-center justify-between mb-8 px-2">
+                <div className="flex items-center gap-4">
+                    <div className="p-3 bg-cyan-500/10 rounded-2xl text-cyan-400"><TrendingUp size={24} /></div>
+                    <div>
+                        <h2 className="text-2xl font-black italic uppercase tracking-tighter text-white">资产数据存量监控</h2>
+                        <p className="text-[10px] text-white/20 font-bold uppercase tracking-[0.2em]">实时扫描 D1 物理存储节点数据对齐状态</p>
+                    </div>
+                </div>
+                <button
+                    onClick={onRefresh}
+                    disabled={loading}
+                    className="flex items-center gap-2 px-6 py-3 bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-white rounded-2xl text-[10px] font-black uppercase tracking-[0.2em] transition-all shadow-xl shadow-cyan-600/20 active:scale-95"
+                >
+                    <RefreshCcw size={14} className={loading ? 'animate-spin' : ''} />
+                    {loading ? '全量检索中...' : '手动同步状态'}
+                </button>
+            </div>
+
+            <div className="bg-white/[0.02] border border-white/5 rounded-[3rem] overflow-hidden backdrop-blur-3xl shadow-2xl">
+                <table className="w-full text-left border-collapse">
+                    <thead>
+                        <tr className="border-b border-white/5 bg-white/[0.01]">
+                            {['代码名称', '历史存量', '状态', '入库时间'].map((h, i) => (
+                                <th key={h} className={`px-10 py-6 text-[10px] font-black uppercase tracking-[0.3em] text-white/30 ${i === 1 ? 'text-center' : i > 1 ? 'text-right' : ''}`}>{h}</th>
+                            ))}
+                        </tr>
+                    </thead>
+                    <tbody className="divide-y divide-white/[0.02]">
+                        {assets.length > 0 ? assets.map(asset => (
+                            <tr key={`${asset.code}-${asset.type}`} className="group hover:bg-white/[0.02] transition-colors font-mono">
+                                <td className="px-10 py-6">
+                                    <div className="flex flex-col">
+                                        <span className="font-bold text-white/80 group-hover:text-cyan-400 transition-colors uppercase tracking-tight truncate max-w-[200px]">{asset.code}</span>
+                                        <span className="text-[10px] text-white/20 uppercase font-black tracking-widest truncate max-w-[200px]">{asset.name || 'Unknown'}</span>
+                                    </div>
+                                </td>
+                                <td className="px-10 py-6 text-center">
+                                    <span className="px-3 py-1 bg-white/5 rounded-full text-[11px] font-black text-white/40 group-hover:text-white/80 transition-colors italic">
+                                        {asset.history_count} <span className="text-[8px] tracking-tighter">PTS</span>
+                                    </span>
+                                </td>
+                                <td className="px-10 py-6 text-right">
+                                    <span className={`px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-widest border
+                                        ${asset.sync_status === 'completed' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' :
+                                            asset.sync_status === 'failed' ? 'bg-red-500/10 text-red-400 border-red-500/20' :
+                                                asset.sync_status === 'processing' ? 'bg-blue-500/10 text-blue-400 border-blue-500/20 animate-pulse' :
+                                                    'bg-white/5 text-white/20 border-white/5'}`}>
+                                        {asset.sync_status || 'idle'}
+                                    </span>
+                                </td>
+                                <td className="px-10 py-6 text-right text-[10px] text-white/20 italic uppercase tracking-tighter">
+                                    {asset.last_sync ? new Date(asset.last_sync + 'Z').toLocaleString('zh-CN', {
+                                        hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit'
+                                    }) : '--:--'}
+                                </td>
+                            </tr>
+                        )) : (
+                            <tr><td colSpan="4" className="px-10 py-48 text-center text-white/10 italic font-medium uppercase tracking-[0.3em] text-sm">点击右上角按钮检索全栈资产对齐状态</td></tr>
                         )}
                     </tbody>
                 </table>

@@ -15,6 +15,7 @@ import {
     UsersSection,
     LogsSection,
     QueueSection,
+    AssetStatusSection,
 } from './_components/Sections';
 
 function AdminCommandCenter() {
@@ -55,7 +56,8 @@ function AdminCommandCenter() {
     // 切换到队列 tab 时自动拉取队列数据
     useEffect(() => {
         if (activeSection === 'queue') data.fetchQueue();
-    }, [activeSection, data.fetchQueue]);
+        if (activeSection === 'assets') data.fetchAssetStatus();
+    }, [activeSection, data.fetchQueue, data.fetchAssetStatus]);
 
     if (!auth.isAuthenticated) {
         return (
@@ -103,6 +105,13 @@ function AdminCommandCenter() {
                     )}
                     {activeSection === 'queue' && (
                         <QueueSection queueData={data.queueData} />
+                    )}
+                    {activeSection === 'assets' && (
+                        <AssetStatusSection
+                            assets={data.assetStatus}
+                            onRefresh={data.fetchAssetStatus}
+                            loading={data.assetStatusLoading}
+                        />
                     )}
                 </AnimatePresence>
             </AppShell>
