@@ -135,7 +135,7 @@ function AssetCardComponent({ asset, onRemove, mode = 'volatility' }) {
                 <div className="flex flex-col items-end gap-1">
                     {mode === 'realtime' && (
                         <div className={`text-2xl font-black italic leading-none font-mono ${isPositiveChange ? 'text-red-400' : 'text-green-400'}`}>
-                            {isPositiveChange ? '+' : ''}{asset.changePercent?.toFixed(2)}%
+                            {isPositiveChange ? '+' : ''}{asset.changePercent?.toFixed(1)}%
                         </div>
                     )}
                     <button

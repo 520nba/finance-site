@@ -368,11 +368,11 @@ export function QueueSection({ queueData, onRefresh, loading }) {
                                             </span>
                                         </td>
                                         <td className="px-8 py-6 text-right font-mono text-xs text-white/30 whitespace-nowrap">
-                                            {item.created_at ? new Date(item.created_at).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) : '--:--'}
+                                            {item.created_at ? new Date(item.created_at + 'Z').toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) : '--:--'}
                                         </td>
                                         <td className="px-8 py-6 text-right font-mono text-xs text-white/50 whitespace-nowrap">
                                             {item.status === 'completed' || item.status === 'failed'
-                                                ? new Date(item.updated_at).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })
+                                                ? new Date(item.updated_at + 'Z').toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })
                                                 : <span className="text-white/5 italic">挂起中...</span>
                                             }
                                         </td>
