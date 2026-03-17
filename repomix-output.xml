@@ -53,6 +53,7 @@ app/admin/_hooks/useAdminData.js
 app/admin/page.js
 app/api/admin/cleanup/route.js
 app/api/admin/logs/route.js
+app/api/admin/queue/route.js
 app/api/admin/refetch-fund-history/route.js
 app/api/admin/stats/route.js
 app/api/auth/login/route.js
@@ -141,128 +142,6 @@ This section contains the contents of the repository's files.
 
 <file path=".npmrc">
 legacy-peer-deps=true
-</file>
-
-<file path="app/api/admin/refetch-fund-history/route.js">
-/**
- * src/app/api/admin/refetch-fund-history/route.js
- * 
- * 专用基金重刷接口，采用 Streaming (NDJSON) 响应以防止超时及提供实时进度。
- */
-
-import { NextResponse } from 'next/server';
-import { isAdminAuthorized } from '@/lib/storage/authRepo';
-import { fetchFundHistory } from '@/lib/services/historyFetcher';
-import { insertDailyPricesBatch, deleteAssetHistory } from '@/lib/storage/historyRepo';
-import { getD1Storage } from '@/lib/storage/d1Client';
-
-export const dynamic = 'force-dynamic';
-export const maxDuration = 300; // 5分钟限时
-
-const HISTORY_DAYS = 250;
-
-export async function GET(request) {
-    // 1. 鉴权
-    if (!(await isAdminAuthorized(request))) {
-        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
-    const { searchParams } = new URL(request.url);
-    const force = searchParams.get('force') === '1';
-
-    // 2. 准备数据库
-    const db = await getD1Storage();
-    if (!db) {
-        return NextResponse.json({ error: 'DB unavailable' }, { status: 500 });
-    }
-
-    // 3. 获取所有基金列表
-    const { results: funds } = await db
-        .prepare("SELECT DISTINCT code FROM user_assets WHERE type = 'fund'")
-        .all();
-
-    if (!funds?.length) {
-        return NextResponse.json({ ok: true, message: 'No funds found' });
-    }
-
-    // 4. 使用 Stream 边处理边输出进度 (NDJSON)
-    const encoder = new TextEncoder();
-    const stream = new ReadableStream({
-        async start(controller) {
-            const send = (data) => {
-                controller.enqueue(encoder.encode(JSON.stringify(data) + '\n'));
-            };
-
-            send({ status: 'started', total: funds.length, force });
-
-            for (let i = 0; i < funds.length; i++) {
-                const { code } = funds[i];
-                try {
-                    // 如果是 force 模式，先清空历史
-                    if (force) {
-                        await deleteAssetHistory(code, 'fund', { DB: db });
-                    }
-
-                    // 查本地最新日期（注意：force 模式下已删除，latestDate 必为 null）
-                    let latestDate = null;
-                    if (!force) {
-                        const row = await db
-                            .prepare("SELECT MAX(record_date) AS latest FROM asset_history WHERE code = ? AND type = 'fund'")
-                            .bind(code.toLowerCase())
-                            .first();
-                        latestDate = row?.latest ?? null;
-                    }
-
-                    // 拉外部数据 (天天基金源)
-                    const history = await fetchFundHistory(code, HISTORY_DAYS);
-
-                    if (!history?.length) {
-                        send({ index: i + 1, code, status: 'skipped', reason: 'empty_response' });
-                        continue;
-                    }
-
-                    // 增量过滤
-                    const toWrite = (latestDate && !force)
-                        ? history.filter(h => h.date > latestDate)
-                        : history;
-
-                    if (!toWrite.length) {
-                        send({ index: i + 1, code, status: 'skipped', reason: 'no_new_data' });
-                        continue;
-                    }
-
-                    // 批量写入 D1
-                    await insertDailyPricesBatch(
-                        toWrite.map(r => ({ code, type: 'fund', price: r.value, date: r.date })),
-                        { DB: db }
-                    );
-
-                    send({
-                        index: i + 1,
-                        code,
-                        status: 'ok',
-                        written: toWrite.length,
-                        is_force: force
-                    });
-                } catch (e) {
-                    console.error(`[RefetchFund] Error for ${code}:`, e.message);
-                    send({ index: i + 1, code, status: 'error', error: e.message });
-                }
-            }
-
-            send({ status: 'done', total: funds.length });
-            controller.close();
-        }
-    });
-
-    return new Response(stream, {
-        headers: {
-            'Content-Type': 'application/x-ndjson',
-            'Cache-Control': 'no-cache, no-transform',
-            'X-Content-Type-Options': 'nosniff'
-        },
-    });
-}
 </file>
 
 <file path="app/api/ping/route.js">
@@ -549,6 +428,94 @@ export default function SearchBar({ onAdd }) {
                     </div>
                 </div>
             )}
+        </div>
+    );
+}
+</file>
+
+<file path="components/VolatilityChart.js">
+'use client';
+
+import { useMemo } from 'react';
+import ReactECharts from 'echarts-for-react';
+
+export default function VolatilityChart({ data, title, color = '#3b82f6', height = 250, compact = false }) {
+    const option = useMemo(() => ({
+        backgroundColor: 'transparent',
+        tooltip: {
+            trigger: 'axis',
+            backgroundColor: 'rgba(10, 14, 20, 0.8)',
+            borderColor: 'rgba(255, 255, 255, 0.1)',
+            textStyle: { color: '#fff' },
+            formatter: (params) => {
+                const item = params[0];
+                return `${item.name}<br/>收益率: <span style="color:${item.color}">${item.value.toFixed(2)}%</span>`;
+            },
+        },
+        grid: {
+            top: compact ? 10 : 20,
+            left: compact ? 15 : 10,  // 留出空间防止日期被裁
+            right: compact ? 15 : 10, // 留出空间防止日期被裁
+            bottom: compact ? 22 : 10,
+            containLabel: !compact,
+        },
+        xAxis: {
+            type: 'category',
+            data: data.map(d => d.date),
+            axisLine: { lineStyle: { color: 'rgba(255, 255, 255, 0.1)' } },
+            axisLabel: {
+                show: true,
+                interval: (index) => index === 0 || index === data.length - 1,
+                formatter: (val) => {
+                    const parts = val.split('-');
+                    return `${parts[1]}-${parts[2]}`;
+                },
+                color: 'rgba(255, 255, 255, 0.2)',
+                fontSize: 9
+            },
+            axisTick: { show: false }
+        },
+        yAxis: {
+            type: 'value',
+            axisLine: { show: false },
+            splitLine: { lineStyle: { color: 'rgba(255, 255, 255, 0.05)' } },
+            axisLabel: {
+                show: !compact,
+                color: 'rgba(255, 255, 255, 0.5)',
+                formatter: '{value}%',
+            },
+        },
+        series: [
+            {
+                name: title,
+                type: 'line',
+                data: data.map(d => d.performance),
+                smooth: true,
+                showSymbol: false,
+                lineStyle: { width: 3, color },
+                areaStyle: {
+                    color: {
+                        type: 'linear',
+                        x: 0, y: 0, x2: 0, y2: 1,
+                        colorStops: [
+                            { offset: 0, color: `${color}44` },
+                            { offset: 1, color: `${color}00` },
+                        ],
+                    },
+                },
+            },
+        ],
+        animationDuration: 1200,
+    }), [data, color, compact, title]);
+
+    return (
+        <div className="w-full" style={{ height: `${height}px` }}>
+            <ReactECharts
+                option={option}
+                style={{ height: '100%', width: '100%' }}
+                notMerge={true}
+                lazyUpdate={true}
+            />
         </div>
     );
 }
@@ -1700,94 +1667,6 @@ export default function IntradayChart({ data, prevClose, height = 300 }) {
 }
 </file>
 
-<file path="components/VolatilityChart.js">
-'use client';
-
-import { useMemo } from 'react';
-import ReactECharts from 'echarts-for-react';
-
-export default function VolatilityChart({ data, title, color = '#3b82f6', height = 250, compact = false }) {
-    const option = useMemo(() => ({
-        backgroundColor: 'transparent',
-        tooltip: {
-            trigger: 'axis',
-            backgroundColor: 'rgba(10, 14, 20, 0.8)',
-            borderColor: 'rgba(255, 255, 255, 0.1)',
-            textStyle: { color: '#fff' },
-            formatter: (params) => {
-                const item = params[0];
-                return `${item.name}<br/>收益率: <span style="color:${item.color}">${item.value.toFixed(2)}%</span>`;
-            },
-        },
-        grid: {
-            top: compact ? 10 : 20,
-            left: compact ? 15 : 10,  // 留出空间防止日期被裁
-            right: compact ? 15 : 10, // 留出空间防止日期被裁
-            bottom: compact ? 22 : 10,
-            containLabel: !compact,
-        },
-        xAxis: {
-            type: 'category',
-            data: data.map(d => d.date),
-            axisLine: { lineStyle: { color: 'rgba(255, 255, 255, 0.1)' } },
-            axisLabel: {
-                show: true,
-                interval: (index) => index === 0 || index === data.length - 1,
-                formatter: (val) => {
-                    const parts = val.split('-');
-                    return `${parts[1]}-${parts[2]}`;
-                },
-                color: 'rgba(255, 255, 255, 0.2)',
-                fontSize: 9
-            },
-            axisTick: { show: false }
-        },
-        yAxis: {
-            type: 'value',
-            axisLine: { show: false },
-            splitLine: { lineStyle: { color: 'rgba(255, 255, 255, 0.05)' } },
-            axisLabel: {
-                show: !compact,
-                color: 'rgba(255, 255, 255, 0.5)',
-                formatter: '{value}%',
-            },
-        },
-        series: [
-            {
-                name: title,
-                type: 'line',
-                data: data.map(d => d.performance),
-                smooth: true,
-                showSymbol: false,
-                lineStyle: { width: 3, color },
-                areaStyle: {
-                    color: {
-                        type: 'linear',
-                        x: 0, y: 0, x2: 0, y2: 1,
-                        colorStops: [
-                            { offset: 0, color: `${color}44` },
-                            { offset: 1, color: `${color}00` },
-                        ],
-                    },
-                },
-            },
-        ],
-        animationDuration: 1200,
-    }), [data, color, compact, title]);
-
-    return (
-        <div className="w-full" style={{ height: `${height}px` }}>
-            <ReactECharts
-                option={option}
-                style={{ height: '100%', width: '100%' }}
-                notMerge={true}
-                lazyUpdate={true}
-            />
-        </div>
-    );
-}
-</file>
-
 <file path="DEPLOYMENT.md">
 # Cloudflare Workers 部署指南
 
@@ -2166,6 +2045,61 @@ export function validateProxyTarget(rawUrl) {
 }
 </file>
 
+<file path="lib/storage/memoryCache.js">
+/**
+ * 请求级内存缓存（L1）
+ *
+ * Cloudflare Workers 生产环境：每个 HTTP 请求独立的 V8 Isolate，
+ * 内存不跨请求共享，TTL 在生产环境中无实际意义，
+ * 主要作用是在同一请求内对相同 key 去重，避免重复 D1 查询。
+ *
+ * 本地开发环境（Node.js）：内存跨请求共享，TTL 在此环境下真正生效。
+ */
+class MemoryCache {
+    constructor(maxSize = 1000) {
+        this.cache = new Map();
+        this.maxSize = maxSize;
+    }
+
+    set(key, value, ttlMs = 0) {
+        // 容量控制：LRU 基础逻辑（删除最旧的）
+        if (this.cache.size >= this.maxSize) {
+            const firstKey = this.cache.keys().next().value;
+            this.cache.delete(firstKey);
+        }
+
+        const entry = {
+            value,
+            expiry: ttlMs > 0 ? Date.now() + ttlMs : null
+        };
+        this.cache.set(key, entry);
+    }
+
+    get(key) {
+        const entry = this.cache.get(key);
+        if (!entry) return null;
+
+        // 过期检查
+        if (entry.expiry && Date.now() > entry.expiry) {
+            this.cache.delete(key);
+            return null;
+        }
+
+        return entry.value;
+    }
+
+    delete(key) {
+        this.cache.delete(key);
+    }
+
+    clear() {
+        this.cache.clear();
+    }
+}
+
+export const memoryCache = new MemoryCache(1500);
+</file>
+
 <file path="lib/utils/stockCode.js">
 /**
  * lib/utils/stockCode.js
@@ -2208,414 +2142,6 @@ export function toSecid(code) {
     const parsed = parseStockCode(code);
     if (!parsed) return null;
     return `${parsed.market}.${parsed.clean}`;
-}
-</file>
-
-<file path="providers/AssetProvider.js">
-'use client';
-
-import React, { createContext, useContext, useState, useCallback, useMemo } from 'react';
-import { useAuthSession } from '@/hooks/useAuthSession';
-import { useAssetSync } from '@/hooks/useAssetSync';
-import { useRealtimeQuotes } from '@/hooks/useRealtimeQuotes';
-import { useAssetActions } from '@/hooks/useAssetActions';
-
-const AssetContext = createContext(null);
-
-export function AssetProvider({ children }) {
-    const [activeTab, setActiveTab] = useState('stock');
-    const [selectedCode, setSelectedCode] = useState(null);
-    const [toast, setToast] = useState(null);
-
-    // Layer 1: 认证状态
-    const auth = useAuthSession();
-    const { userId, isLogged } = auth;
-
-    // Layer 2: 资产同步（加载服务端数据 & KV 写回）
-    const {
-        assets,
-        setAssets,
-        isSyncing,
-        setIsSyncing,
-        assetsRef,
-        refreshAssets,
-        syncAssetsToServer
-    } = useAssetSync({ userId, isLogged });
-
-    // Layer 3: 实时行情轮询（仅在 watchlist tab 下启动）
-    useRealtimeQuotes({
-        activeTab,
-        isLogged,
-        assets,
-        isSyncing,
-        userId,
-        setAssets,
-        assetsRef,
-        refreshAssets
-    });
-
-    const showToast = useCallback((msg, type = 'error') => {
-        setToast({ msg, type });
-        setTimeout(() => setToast(null), 3500);
-    }, []);
-
-    // Layer 4: 用户写操作（添加 / 移除资产）
-    // 业务逻辑已下放至 useAssetActions，Provider 只负责传参和透出结果
-    const { addAsset, removeAsset } = useAssetActions({
-        activeTab,
-        setAssets,
-        setIsSyncing,
-        showToast,
-        selectedCode,
-        setSelectedCode,
-        syncAssetsToServer,
-        assetsRef,
-    });
-
-    const handleAuthAction = useCallback(async (actionFn) => {
-        const result = await actionFn();
-        if (result && !result.ok) {
-            showToast(result.error);
-        }
-        return result;
-    }, [showToast]);
-
-    const value = useMemo(() => ({
-        ...auth,
-        handleLogin: () => handleAuthAction(() => auth.handleLogin()),
-        handleRegister: () => handleAuthAction(() => auth.handleRegister()),
-        assets,
-        isSyncing,
-        activeTab,
-        setActiveTab,
-        selectedCode,
-        setSelectedCode,
-        addAsset,
-        removeAsset,
-        refreshAssets: () => refreshAssets(assets.map(a => ({ code: a.code, type: a.type }))),
-        toast,
-        setToast,
-        showToast
-    }), [
-        auth.userId,
-        auth.isLogged,
-        auth.isPending,
-        auth.loginInput,
-        auth.passwordInput,
-        auth.isRegistering,
-        auth.handleLogin,
-        auth.handleRegister,
-        auth.handleLogout,
-        assets,
-        isSyncing,
-        activeTab,
-        selectedCode,
-        addAsset,
-        removeAsset,
-        refreshAssets,
-        toast,
-        showToast
-    ]);
-
-    return (
-        <AssetContext.Provider value={value}>
-            {children}
-        </AssetContext.Provider>
-    );
-}
-
-export function useAsset() {
-    const context = useContext(AssetContext);
-    if (!context) throw new Error('useAsset must be used within AssetProvider');
-    return context;
-}
-</file>
-
-<file path="worker-entry.js">
-/**
- * worker-entry.js
- *
- * Cloudflare Workers 统一入口。
- *
- * fetch handler     → 透传给 open-next，处理所有 Next.js HTTP 请求
- * scheduled handler → 按 event.cron 字符串精确分流到对应任务
- *
- * 重要：open-next 生成的 worker.js 只导出 fetch handler，
- * scheduled event 无法被其捕获，必须在本文件单独声明。
- * wrangler.toml 的 main 字段须指向本文件。
- */
-
-import openNextWorker from './.open-next/worker.js';
-import { runHistorySync } from './lib/cron/historySync.js';
-import { runRealtimeSync } from './lib/cron/realtimeSync.js';
-import { runSentinel } from './lib/cron/sentinel.js';
-
-export default {
-    // ── HTTP：全部交给 open-next ──────────────────────────────────────────────
-    fetch(request, env, ctx) {
-        return openNextWorker.fetch(request, env, ctx);
-    },
-
-    // ── Cron：按表达式字符串精确路由 ─────────────────────────────────────────
-    //
-    // event.cron 值与 wrangler.toml [triggers].crons 里的字符串完全一致，
-    // 可直接用 switch/case 匹配，无需正则解析。
-    async scheduled(event, env, ctx) {
-        switch (event.cron) {
-
-            // 历史数据增量同步：每个交易日收盘后 21:00，次日凌晨 03:00 补跑
-            case '0 13 * * 1-5':
-            case '0 19 * * 1-6':
-                ctx.waitUntil(runHistorySync(env));
-                break;
-
-            // 盘中实时行情抓取：周一到周五 09:00-15:55（北京时间），每 5 分钟
-            case '*/5 1-7 * * 1-5':
-                ctx.waitUntil(runRealtimeSync(env));
-                break;
-
-            // 外部接口健康巡检：每 15 分钟全天候运行
-            case '*/15 * * * *':
-                ctx.waitUntil(runSentinel(env));
-                break;
-
-            default:
-                console.warn(`[Scheduled] Unknown cron: "${event.cron}"`);
-        }
-    },
-};
-</file>
-
-<file path="app/admin/_hooks/useAdminData.js">
-'use client';
-
-import { useState, useCallback } from 'react';
-
-const EMPTY_STATS = {
-    users: 0,
-    stocks: 0,
-    funds: 0,
-    history_points: 0,
-    intraday_points: 0,
-    quotes_count: 0,
-    recent_growth: 0,
-    queue_count: 0,
-    api_health: [],
-};
-
-/**
- * 管理员数据 hook
- * 职责：所有后端请求、数据状态管理、危险操作触发
- *
- * @param {string} secretKey   — 当前鉴权密钥
- * @param {Function} showToast — (msg, type?) => void
- * @param {Function} onAuthFailure — 鉴权失败时的回调
- */
-export function useAdminData(secretKey, showToast, onAuthFailure) {
-    const [users, setUsers] = useState([]);
-    const [stats, setStats] = useState(EMPTY_STATS);
-    const [logs, setLogs] = useState([]);
-    const [loading, setLoading] = useState(false);
-    const [queueData, setQueueData] = useState([]);
-    const [queueLoading, setQueueLoading] = useState(false);
-    const [confirmAction, setConfirmAction] = useState(null);
-
-    // ── 基础请求 ──────────────────────────────────────────────────────────
-
-    const fetchAllData = useCallback(async (keyToUse, forceSyncStats = false) => {
-        const k = keyToUse || secretKey;
-        if (!k) return;
-        setLoading(true);
-
-        try {
-            const statsUrl = forceSyncStats ? '/api/admin/stats?sync=true' : '/api/admin/stats';
-            const headers = { 'x-admin-key': k };
-
-            const [usersRes, statsRes, logsRes] = await Promise.all([
-                fetch('/api/user/list', { headers }),
-                fetch(statsUrl, { headers }),
-                fetch('/api/admin/logs?hours=72', { headers }),
-            ]);
-
-            if (statsRes.ok) {
-                const data = await statsRes.json();
-                setStats(prev => ({ ...prev, ...data }));
-            }
-            if (usersRes.ok) {
-                setUsers(await usersRes.json());
-            }
-            if (logsRes.ok) {
-                const data = await logsRes.json();
-                setLogs(data.logs?.slice(0, 500) || []);
-            }
-
-            if (!statsRes.ok && !usersRes.ok) {
-                showToast('鉴权失败: 密钥无效或无权限');
-                onAuthFailure?.();
-            }
-        } catch (e) {
-            console.error('[Admin] Fetch failed:', e);
-            showToast('无法连接服务器');
-        } finally {
-            setLoading(false);
-        }
-    }, [secretKey, showToast, onAuthFailure]);
-
-    const fetchQueue = useCallback(async () => {
-        if (!secretKey) return;
-        setQueueLoading(true);
-        try {
-            const res = await fetch('/api/admin/queue', {
-                headers: { 'x-admin-key': secretKey },
-            });
-            if (res.ok) {
-                const data = await res.json();
-                setQueueData(data?.queue || []);
-            }
-        } catch (e) {
-            console.error('Failed to fetch queue:', e);
-            showToast('获取队列失败');
-        } finally {
-            setQueueLoading(false);
-        }
-    }, [secretKey, showToast]);
-
-    // ── 危险操作（统一走 confirmAction 二次确认弹窗）─────────────────────
-
-    const deleteUser = useCallback((targetUserId) => {
-        setConfirmAction({
-            message: `!! 危险警报 !!\n\n你即将对用户 "${targetUserId}" 及其相关的资产记录进行物理抹除。\n\n此操作不可逆。确认执行？`,
-            onConfirm: async () => {
-                setLoading(true);
-                try {
-                    const res = await fetch('/api/user/delete', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json', 'x-admin-key': secretKey },
-                        body: JSON.stringify({ targetUserId }),
-                    });
-                    const data = await res.json();
-                    if (res.ok) {
-                        showToast(`主体 [${targetUserId}] 已被终止`, 'success');
-                        fetchAllData(secretKey);
-                    } else {
-                        showToast(data.error || '抹除失败');
-                    }
-                } catch {
-                    showToast('通信错误');
-                } finally {
-                    setLoading(false);
-                    setConfirmAction(null);
-                }
-            },
-        });
-    }, [secretKey, fetchAllData, showToast]);
-
-    const triggerForceSync = useCallback((type) => {
-        const typeZh = type === 'fund' ? '基金' : '股票';
-        setConfirmAction({
-            message: `!! 协议强制覆盖 !!\n\n系统将针对 ${typeZh} 执行特定刷新逻辑：\n${type === 'fund' ? '• 基金：先清空历史，再抓取最新 250 天数据 (流式进度)' : '• 股票：沿用旧版强制重写逻辑'}\n\n执行指令？`,
-            onConfirm: async () => {
-                setLoading(true);
-                try {
-                    if (type === 'fund') {
-                        // ── 基金：调用专门的 Streaming 接口 ──────────────────────
-                        const res = await fetch(`/api/admin/refetch-fund-history?force=1`, {
-                            headers: { 'x-admin-key': secretKey }
-                        });
-
-                        if (!res.ok) throw new Error('接口响应异常');
-
-                        const reader = res.body.getReader();
-                        const decoder = new TextDecoder();
-                        let done = false;
-
-                        while (!done) {
-                            const { value, done: d } = await reader.read();
-                            done = d;
-                            if (value) {
-                                const chunk = decoder.decode(value, { stream: !done });
-                                const lines = chunk.split('\n').filter(Boolean);
-                                for (const line of lines) {
-                                    try {
-                                        const data = JSON.parse(line);
-                                        if (data.status === 'ok') {
-                                            // 可以在此处收集 ok 数量做更精细的显示，此处先简单提示进度
-                                            if (data.index % 5 === 0) showToast(`重刷中: ${data.index} 只完成`, 'info');
-                                        } else if (data.status === 'done') {
-                                            showToast(`[成功] 基金全量重刷完成，共处理 ${data.total} 只`, 'success');
-                                            await fetchAllData(secretKey, true);
-                                        }
-                                    } catch (e) {
-                                        console.warn('[Admin] Stream parse error:', e);
-                                    }
-                                }
-                            }
-                        }
-                    } else {
-                        // ── 股票：维持旧版 API 并发限制调用 ──────────────────────
-                        const url = `/api/cron/sync?task=history&force=1&secret=${secretKey}`;
-                        const res = await fetch(url);
-                        const data = await res.json();
-                        if (res.ok && data.success) {
-                            showToast(`[成功] 股票刷新任务已启动`, 'success');
-                            await fetchAllData(secretKey, true);
-                        } else {
-                            showToast(data.error || '指令被拒绝');
-                        }
-                    }
-                } catch (e) {
-                    console.error('[Admin] ForceSync error:', e);
-                    showToast(`API 链路中断: ${e.message}`);
-                } finally {
-                    setLoading(false);
-                    setConfirmAction(null);
-                }
-            },
-        });
-    }, [secretKey, fetchAllData, showToast]);
-
-    const triggerCleanup = useCallback(() => {
-        setConfirmAction({
-            message: `!! 环境全量洗消 !!\n\n系统将扫描并清理 D1 数据库中所有失效的无主行情数据，以优化背板性能。\n\n继续执行？`,
-            onConfirm: async () => {
-                setLoading(true);
-                try {
-                    const res = await fetch('/api/admin/cleanup', {
-                        method: 'POST',
-                        headers: { 'x-admin-key': secretKey },
-                    });
-                    const data = await res.json();
-                    if (res.ok) {
-                        showToast(`区域清理完成！\n历史: -${data.deleted_hist}, 名称: -${data.deleted_names}`, 'success');
-                        fetchAllData(secretKey);
-                    } else {
-                        showToast(data.error || '洗消任务失败');
-                    }
-                } catch {
-                    showToast('链路请求超时');
-                } finally {
-                    setLoading(false);
-                    setConfirmAction(null);
-                }
-            },
-        });
-    }, [secretKey, fetchAllData, showToast]);
-
-    return {
-        users,
-        stats,
-        logs,
-        loading,
-        queueData,
-        queueLoading,
-        confirmAction,
-        setConfirmAction,
-        fetchAllData,
-        fetchQueue,
-        deleteUser,
-        triggerForceSync,
-        triggerCleanup,
-    };
 }
 </file>
 
@@ -2997,6 +2523,236 @@ export default function LogsModal({ isOpen, onClose }) {
 }
 </file>
 
+<file path="components/WatchlistSidebar.js">
+'use client';
+
+import { useState, useMemo, useEffect } from 'react';
+import { ChevronDown, ChevronUp, ChevronsUpDown } from 'lucide-react';
+import { calculatePerformance } from '@/lib/utils';
+import { fetchBulkHistory } from '@/services/api/historyService';
+
+// 从历史数据计算最终涨跌幅（单个数字）
+function lastPerf(history, days) {
+    if (!history || history.length === 0) return null;
+    const curve = calculatePerformance(history, days);
+    if (curve.length === 0) return null;
+    return curve[curve.length - 1].performance;
+}
+
+function PerfCell({ value }) {
+    if (value === null) return <span className="text-white/20 font-mono text-sm w-16 text-right">--</span>;
+    const isPos = value >= 0;
+    return (
+        <span className={`font-mono text-sm font-bold tabular-nums w-16 text-right ${isPos ? 'text-red-400' : 'text-green-400'}`}>
+            {isPos ? '+' : ''}{value.toFixed(1)}%
+        </span>
+    );
+}
+
+const COLS = [
+    { key: 'd5', label: '5日' },
+    { key: 'd22', label: '22日' },
+    { key: 'd250', label: '250日' },
+];
+
+function SortIcon({ colKey, sortKey, sortDesc }) {
+    if (sortKey !== colKey) return <ChevronsUpDown size={10} className="opacity-30" />;
+    return sortDesc
+        ? <ChevronDown size={10} className="text-cyan-400" />
+        : <ChevronUp size={10} className="text-cyan-400" />;
+}
+
+export default function WatchlistSidebar({ assets, mode = 'volatility', selectedCode, onSelect }) {
+    const [sortKey, setSortKey] = useState('d5');
+    const [sortDesc, setSortDesc] = useState(true);
+    const [statsData, setStatsData] = useState({});
+
+    // ── 1. 稳定性优化：生成稳定的依赖 Key (High Prio Fix) ──────────────────
+    const assetKeys = useMemo(() =>
+        assets.map(a => `${a.type}:${a.code}`).sort().join(','),
+        [assets]);
+
+    // 每次 assets 变化或进入 volatility 模式时，批量拉取缓存
+    useEffect(() => {
+        if (mode !== 'volatility' || assets.length === 0) return;
+        const itemsToFetch = assets.map(a => ({ code: a.code, type: a.type }));
+        fetchBulkHistory(itemsToFetch, false).then(res => {
+            const newStats = {};
+            for (const key in res) {
+                if (res[key]?.summary) {
+                    newStats[key] = res[key].summary;
+                }
+            }
+            // 使用完全替换而非增量合并，防止内存泄漏 (Mid Prio Fix)
+            setStatsData(newStats);
+        }).catch(e => console.error("Sidebar bulk fetch failed:", e));
+    }, [assetKeys, mode]);
+
+    const handleSort = (key) => {
+        if (sortKey === key) {
+            setSortDesc(v => !v);
+        } else {
+            setSortKey(key);
+            setSortDesc(true);
+        }
+    };
+
+    // 预计算每个资产的涨跌幅，并进行字段归一化 (High Prio Fix)
+    const rows = useMemo(() => assets.map(asset => {
+        const key = `${asset.type}:${asset.code}`;
+        const summary = statsData[key] || asset.summary;
+        const h = (statsData[key]?.history) || asset.history || [];
+        return {
+            ...asset,
+            d5: summary?.perf5d ?? lastPerf(h, 5),
+            d22: summary?.perf22d ?? lastPerf(h, 22),
+            d250: summary?.perf250d ?? lastPerf(h, 250),
+            changePercent: asset.changePercent ?? null // 归一化以支持排序
+        };
+    }), [assets, statsData]);
+
+    // ── 3. 性能优化：缓存日期计算 (Mid Prio Fix) ──────────────────────────
+    const latestDateStr = useMemo(() => {
+        let latest = '';
+        assets.forEach(a => {
+            const key = `${a.type}:${a.code}`;
+            const h = (statsData[key]?.history) || a.history || [];
+            if (h.length > 0) {
+                const d = h[h.length - 1].date;
+                if (d > latest) latest = d;
+            }
+        });
+        if (!latest) return '';
+        const [y, m, d] = latest.split('-');
+        return `(更新至${parseInt(m)}月${parseInt(d)}日)`;
+    }, [assets, statsData]);
+
+    // 排序：null 值排最后
+    const sorted = useMemo(() => {
+        return [...rows].sort((a, b) => {
+            const av = a[sortKey] ?? null;
+            const bv = b[sortKey] ?? null;
+            if (av === null && bv === null) return 0;
+            if (av === null) return 1;
+            if (bv === null) return -1;
+            return sortDesc ? bv - av : av - bv;
+        });
+    }, [rows, sortKey, sortDesc]);
+
+    const scrollToAsset = (code) => {
+        if (typeof window === 'undefined' || typeof document === 'undefined') return;
+
+        if (mode === 'realtime') {
+            if (onSelect) onSelect(code);
+        }
+
+        const el = document.getElementById(`asset-${code}`);
+        if (el) {
+            const offset = 20; // 顶部预留一点距离
+            const bodyRect = document.body.getBoundingClientRect().top;
+            const elementRect = el.getBoundingClientRect().top;
+            const elementPosition = elementRect - bodyRect;
+            const offsetPosition = elementPosition - offset;
+
+            window.scrollTo({
+                top: offsetPosition,
+                behavior: 'smooth'
+            });
+        }
+    };
+
+    if (!assets || assets.length === 0) return null;
+
+    return (
+        <aside className="w-full lg:w-[380px] lg:flex-shrink-0 lg:sticky lg:top-4 lg:self-start">
+            <div className="glass-effect border-white/10 overflow-hidden">
+                {/* Header */}
+                <div className="px-4 py-2.5 border-b border-white/5 flex items-center gap-2">
+                    <div className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
+                    <span className="text-xs font-bold uppercase tracking-widest opacity-40">
+                        {mode === 'realtime' ? '实时监控' : '自选清单'}
+                    </span>
+                    {mode !== 'realtime' && (
+                        <span className="text-[10px] font-bold text-cyan-400/60 uppercase tracking-tighter ml-1">
+                            {latestDateStr}
+                        </span>
+                    )}
+                    <span className="ml-auto text-xs font-mono opacity-20">{assets.length}</span>
+                </div>
+
+                {/* Column headers (only in volatility mode) */}
+                {mode === 'volatility' && (
+                    <div className="flex items-center px-4 py-1.5 border-b border-white/5 gap-3">
+                        <span className="flex-1 text-[10px] font-bold uppercase tracking-widest opacity-25">名称</span>
+                        {COLS.map(col => (
+                            <button
+                                key={col.key}
+                                onClick={() => handleSort(col.key)}
+                                className="w-16 flex items-center justify-end gap-0.5 text-[10px] font-bold uppercase tracking-widest opacity-40 hover:opacity-80 transition-opacity cursor-pointer"
+                            >
+                                {col.label}
+                                <SortIcon colKey={col.key} sortKey={sortKey} sortDesc={sortDesc} />
+                            </button>
+                        ))}
+                    </div>
+                )}
+
+                {/* Row Header for realtime mode */}
+                {mode === 'realtime' && (
+                    <div className="flex items-center px-4 py-1.5 border-b border-white/5 gap-3">
+                        <span className="flex-1 text-[10px] font-bold uppercase tracking-widest opacity-25">名称</span>
+                        <span className="w-20 text-right text-[10px] font-bold uppercase tracking-widest opacity-25">现价</span>
+                        <button
+                            onClick={() => handleSort('changePercent')}
+                            className="w-16 flex items-center justify-end gap-0.5 text-right text-[10px] font-bold uppercase tracking-widest opacity-40 hover:opacity-80 transition-opacity cursor-pointer"
+                        >
+                            涨跌幅
+                            <SortIcon colKey="changePercent" sortKey={sortKey} sortDesc={sortDesc} />
+                        </button>
+                    </div>
+                )}
+
+                {/* Asset rows */}
+                <div className="max-h-[300px] lg:max-h-[75vh] overflow-y-auto custom-scrollbar">
+                    {sorted.map(row => {
+                        const isSelected = mode === 'realtime' && row.code === selectedCode;
+                        return (
+                            <button
+                                key={row.code}
+                                onClick={() => scrollToAsset(row.code)}
+                                className={`w-full flex items-center gap-3 px-4 py-2 border-b border-white/5 last:border-0 hover:bg-white/5 active:bg-white/10 transition-all text-left ${isSelected ? 'bg-blue-600/20 border-l-2 border-l-blue-500' : ''}`}
+                            >
+                                <div className="flex-1 min-w-0">
+                                    <p className="text-sm font-bold leading-tight truncate">{row.name}</p>
+                                </div>
+                                {mode === 'volatility' ? (
+                                    <>
+                                        <PerfCell value={row.d5} />
+                                        <PerfCell value={row.d22} />
+                                        <PerfCell value={row.d250} />
+                                    </>
+                                ) : (
+                                    <>
+                                        <div className="w-20 text-right">
+                                            <p className="text-sm font-mono font-bold leading-tight">
+                                                {row.price?.toFixed(row.type === 'fund' ? 4 : 2)}
+                                            </p>
+                                        </div>
+                                        <div className="w-16 text-right">
+                                            <PerfCell value={row.changePercent ?? null} />
+                                        </div>
+                                    </>
+                                )}
+                            </button>
+                        );
+                    })}
+                </div>
+            </div>
+        </aside>
+    );
+}
+</file>
+
 <file path="hooks/useAssetSync.js">
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { fetchBulkStockQuotes } from '@/services/api/quotesService';
@@ -3340,213 +3096,6 @@ export function generateToken() {
 }
 </file>
 
-<file path="lib/storage/authRepo.js">
-import { queryOne, getRequiredDb, getCloudflareCtx } from './d1Client';
-import { memoryCache } from './memoryCache';
-import { hashPassword, verifyPassword, generateToken } from '@/lib/auth';
-
-// ── 常量 ─────────────────────────────────────────────────────────────
-const SESSION_TTL_MS = 7 * 24 * 3600 * 1000   // 7 天
-const SESSION_TTL_S = 7 * 24 * 3600           // cookie maxAge 单位秒
-const SESS_CACHE_TTL = 5 * 60 * 1000           // L1 缓存 5 分钟
-
-// timing-safe 验证时使用的占位哈希，格式与真实哈希完全一致
-const DUMMY_HASH = 'pbkdf2:00000000000000000000000000000000:0000000000000000000000000000000000000000000000000000000000000000';
-
-/**
- * 常量时间比较（防 timing attack）
- */
-function safeCompare(a, b) {
-    if (!a || !b || a.length !== b.length) return false;
-
-    let result = 0;
-    for (let i = 0; i < a.length; i++) {
-        result |= a.charCodeAt(i) ^ b.charCodeAt(i);
-    }
-    return result === 0;
-}
-
-/**
- * 校验管理员权限
- * @param {Request} request 
- * @param {Object} env Cloudflare environment
- */
-export async function isAdminAuthorized(request, env = null) {
-    const url = new URL(request.url);
-    const searchParams = url.searchParams;
-
-    /**
-     * 1. Session Token 验证 (优先)
-     */
-    const sessionToken =
-        request.headers.get('x-admin-session') ||
-        searchParams.get('sess');
-
-    if (sessionToken && sessionToken.length < 128) {
-        try {
-            const session = await queryOne(
-                `SELECT 1
-                 FROM admin_sessions
-                 WHERE token = ?
-                 AND expires_at > CURRENT_TIMESTAMP
-                 LIMIT 1`,
-                [sessionToken],
-                env
-            );
-
-            if (session) {
-                return true;
-            }
-        } catch (err) {
-            console.error('[AdminAuth] session lookup failed', err);
-        }
-    }
-
-    /**
-     * 2. 后备方案：PSK 密钥
-     */
-    const adminKey = request.headers.get('x-admin-key');
-    const queryKey =
-        searchParams.get('token') ||
-        searchParams.get('adminKey') ||
-        searchParams.get('key');
-
-    const inputKey = adminKey || queryKey;
-
-    if (!inputKey) {
-        return false;
-    }
-
-    /**
-     * 3. 获取 Worker 环境变量
-     */
-    let envKey = env?.ADMIN_API_KEY || process.env.ADMIN_API_KEY;
-
-    if (!envKey) {
-        try {
-            const ctx = await getCloudflareCtx(env);
-            envKey = ctx?.env?.ADMIN_API_KEY;
-        } catch (err) {
-            console.error('[AdminAuth] env read failed', err);
-        }
-    }
-
-    if (!envKey) {
-        console.error('[AdminAuth] ADMIN_API_KEY not configured');
-        return false;
-    }
-
-    /**
-     * 4. 常量时间比较
-     */
-    return safeCompare(inputKey.trim(), envKey.trim());
-}
-
-// ── 用户查询 ──────────────────────────────────────────────────────────
-
-/**
- * 按用户名查找用户（登录用）
- * @returns {{ id: string, password_hash: string } | null}
- */
-export async function findUserById(userId) {
-    return await queryOne(
-        'SELECT id, password_hash FROM users WHERE id = ? LIMIT 1',
-        [userId.toLowerCase()]
-    );
-}
-
-/**
- * 检查用户名是否已被占用（注册用）
- */
-export async function isUsernameTaken(userId) {
-    const row = await queryOne(
-        'SELECT 1 FROM users WHERE id = ? LIMIT 1',
-        [userId.toLowerCase()]
-    );
-    return !!row;
-}
-
-// ── 注册 ──────────────────────────────────────────────────────────────
-
-/**
- * 创建新用户并同时创建初始会话（原子操作）
- * @returns {{ userId: string, token: string }}
- */
-export async function registerUser(username, password) {
-    const userId = username.toLowerCase();
-    const hash = await hashPassword(password);
-    const token = generateToken();
-    const expiresAt = new Date(Date.now() + SESSION_TTL_MS).toISOString();
-
-    const db = await getRequiredDb();
-    await db.batch([
-        db.prepare('INSERT INTO users (id, password_hash) VALUES (?, ?)')
-            .bind(userId, hash),
-        db.prepare('INSERT INTO user_sessions (token, user_id, expires_at) VALUES (?, ?, ?)')
-            .bind(token, userId, expiresAt),
-    ]);
-
-    return { userId, token };
-}
-
-// ── 登录 ──────────────────────────────────────────────────────────────
-
-/**
- * Timing-safe 密码验证。
- * @returns {{ userId: string, token: string } | null}
- */
-export async function loginUser(username, password) {
-    const user = await findUserById(username);
-
-    // 无论 user 是否存在都跑一次 verifyPassword，耗时一致 (防时序探测)
-    const isValid = user
-        ? await verifyPassword(password, user.password_hash)
-        : (await verifyPassword(password, DUMMY_HASH) && false);
-
-    if (!isValid) return null;
-
-    const token = generateToken();
-    const expiresAt = new Date(Date.now() + SESSION_TTL_MS).toISOString();
-
-    const db = await getRequiredDb();
-    await db.prepare(
-        'INSERT INTO user_sessions (token, user_id, expires_at) VALUES (?, ?, ?)'
-    ).bind(token, user.id, expiresAt).run();
-
-    // 预填 L1 缓存，提升后续业务请求性能
-    memoryCache.set(`sess:${token}`, user.id, SESS_CACHE_TTL);
-
-    return { userId: user.id, token };
-}
-
-// ── 登出 ──────────────────────────────────────────────────────────────
-
-/**
- * 撤销会话：删除 D1 记录 + 清除 L1 缓存
- */
-export async function revokeSession(token) {
-    if (!token) return;
-    try {
-        const db = await getRequiredDb();
-        await db.prepare('DELETE FROM user_sessions WHERE token = ?')
-            .bind(token).run();
-    } catch (e) {
-        console.error('[AuthRepo:revokeSession] DB error:', e.message);
-    }
-    memoryCache.delete(`sess:${token}`);
-}
-
-// ── Cookie 配置（集中管理，route 直接引用） ───────────────────────────
-
-export const SESSION_COOKIE_OPTIONS = {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: 'strict',
-    maxAge: SESSION_TTL_S,
-    path: '/',
-};
-</file>
-
 <file path="lib/storage/kvClient.js">
 import { memoryCache } from './memoryCache';
 
@@ -3609,6 +3158,64 @@ export async function deleteDoc(key) {
     }
     memoryCache.delete(key);
     return true;
+}
+</file>
+
+<file path="lib/storage/logRepo.js">
+import { runSql, queryAll } from './d1Client';
+
+/**
+ * 系统日志存储仓库
+ * 用于记录关键业务逻辑，如外部接口抓取记录。
+ */
+
+/**
+ * 添加系统日志
+ * 将日志保存到 D1 数据库 system_logs 表。
+ * @param {string} level
+ * @param {string} module
+ * @param {string} message
+ * @param {Object} env
+ */
+export async function addSystemLog(level, module, message, env = null) {
+    // 智能写策略：WARN/ERROR 必写；核心调度模块(Cron/Sentinel)的 INFO 也写，方便追踪执行记录
+    const levelUp = level?.toUpperCase();
+    const isCoreModule = ['SyncCron', 'DailyCron', 'Sentinel', 'HealthCron'].includes(module);
+    const shouldPersist = ['WARN', 'ERROR'].includes(levelUp) || (levelUp === 'INFO' && isCoreModule);
+
+    try {
+        if (shouldPersist) {
+            await runSql(
+                'INSERT INTO system_logs (level, module, message) VALUES (?, ?, ?)',
+                [levelUp, module, message],
+                env
+            );
+        }
+        console.log(`[LOG][${level}][${module}] ${message}${shouldPersist ? ' (PERSISTED)' : ''}`);
+    } catch (e) {
+        console.warn('[LogRepo] Failed to save log to D1:', e.message);
+        // Fallback to console only
+        console.log(`[LOG-FALLBACK][${level}][${module}] ${message}`);
+    }
+}
+
+/**
+ * 获取系统日志
+ * 从 D1 读取最近 N 小时的日志。
+ * @param {number} hours
+ * @param {Object} env
+ */
+export async function getSystemLogs(hours = 72, env = null) {
+    try {
+        return await queryAll(
+            'SELECT * FROM system_logs WHERE timestamp >= datetime("now", "-" || ? || " hours") ORDER BY timestamp DESC',
+            [hours],
+            env
+        );
+    } catch (e) {
+        console.error('[LogRepo] getSystemLogs failed:', e.message);
+        return [];
+    }
 }
 </file>
 
@@ -3706,61 +3313,6 @@ export async function purgeZombieAssets(env = null) {
         return { success: false, error: e.message };
     }
 }
-</file>
-
-<file path="lib/storage/memoryCache.js">
-/**
- * 请求级内存缓存（L1）
- *
- * Cloudflare Workers 生产环境：每个 HTTP 请求独立的 V8 Isolate，
- * 内存不跨请求共享，TTL 在生产环境中无实际意义，
- * 主要作用是在同一请求内对相同 key 去重，避免重复 D1 查询。
- *
- * 本地开发环境（Node.js）：内存跨请求共享，TTL 在此环境下真正生效。
- */
-class MemoryCache {
-    constructor(maxSize = 1000) {
-        this.cache = new Map();
-        this.maxSize = maxSize;
-    }
-
-    set(key, value, ttlMs = 0) {
-        // 容量控制：LRU 基础逻辑（删除最旧的）
-        if (this.cache.size >= this.maxSize) {
-            const firstKey = this.cache.keys().next().value;
-            this.cache.delete(firstKey);
-        }
-
-        const entry = {
-            value,
-            expiry: ttlMs > 0 ? Date.now() + ttlMs : null
-        };
-        this.cache.set(key, entry);
-    }
-
-    get(key) {
-        const entry = this.cache.get(key);
-        if (!entry) return null;
-
-        // 过期检查
-        if (entry.expiry && Date.now() > entry.expiry) {
-            this.cache.delete(key);
-            return null;
-        }
-
-        return entry.value;
-    }
-
-    delete(key) {
-        this.cache.delete(key);
-    }
-
-    clear() {
-        this.cache.clear();
-    }
-}
-
-export const memoryCache = new MemoryCache(1500);
 </file>
 
 <file path="lib/storage/nameRepo.js">
@@ -3880,6 +3432,494 @@ export async function deleteAssetName(type, code, env = null) {
         memoryCache.delete(NAMES_KEY_PREFIX + key);
     } catch (e) {
         console.error(`[NameRepo] Failed to delete name for ${key}:`, e.message);
+    }
+}
+</file>
+
+<file path="lib/storage/quoteRepo.js">
+import { queryAll, runSql, getD1Storage, batchSql } from './d1Client';
+import { memoryCache } from './memoryCache';
+
+/**
+ * 将批量报价写入 D1 和内存缓存
+ * @param {Object} quotesMap
+ * @param {Object} env
+ */
+export async function saveQuotes(quotesMap, env = null) {
+    const timeStr = new Date().toISOString();
+    const db = await getD1Storage(env);
+
+    const entries = Object.entries(quotesMap);
+    if (entries.length === 0) return;
+
+    const now = Date.now();
+
+    // 2. 无条件更新内存缓存 (确保 L1 永远是最新的)
+    for (const [code, q] of entries) {
+        const lowerCode = code.toLowerCase();
+        memoryCache.set(`quote:${lowerCode}`, { ...q, updated_at: timeStr, code: lowerCode });
+    }
+
+    // 3. 持久化到 D1 (实施写限流保护)
+    if (db) {
+        const WRITE_INTERVAL_MS = 30 * 60 * 1000; // 30 分钟写一次 D1
+
+        try {
+            const statements = [];
+            for (const [code, q] of entries) {
+                const lowerCode = code.toLowerCase();
+
+                // 读内存里记录的上次 D1 物理写入时间（独立 key）
+                const lastD1Write = memoryCache.get(`quote:wts:${lowerCode}`) ?? 0;
+
+                // 写入条件：1. 内存中无记录 (重启/冷启动) 2. 距离上次写入超过 30 分钟
+                if (now - lastD1Write >= WRITE_INTERVAL_MS) {
+                    statements.push(
+                        db.prepare(`
+                            INSERT OR REPLACE INTO asset_quotes 
+                            (code, name, price, change, changePercent, prevClose, updated_at) 
+                            VALUES (?, ?, ?, ?, ?, ?, ?)
+                        `).bind(
+                            lowerCode,
+                            q.name,
+                            q.price,
+                            q.change,
+                            q.changePercent,
+                            q.prevClose,
+                            timeStr
+                        )
+                    );
+                    // 更新 D1 写入时间戳锁
+                    memoryCache.set(`quote:wts:${lowerCode}`, now);
+                }
+            }
+
+            if (statements.length > 0) {
+                // 分片执行批量任务
+                const CHUNK_SIZE = 50;
+                for (let i = 0; i < statements.length; i += CHUNK_SIZE) {
+                    const chunk = statements.slice(i, i + CHUNK_SIZE);
+                    await db.batch(chunk);
+                }
+                console.log(`[QuoteRepo] D1 physical write: ${statements.length}/${entries.length} (30m throttled)`);
+            }
+        } catch (e) {
+            console.warn(`[QuoteRepo] D1 batch insert failed:`, e?.message);
+        }
+    }
+}
+
+/**
+ * 批量从 D1 或内存获取报价
+ * @param {Array} codes
+ * @param {Object} env
+ */
+export async function getBulkQuotes(codes, env = null) {
+    if (!codes || codes.length === 0) return {};
+
+    const result = {};
+    const toQuery = [];
+
+    // 1. 先查内存缓存
+    for (const code of codes) {
+        const lowerCode = code.toLowerCase();
+        const cached = memoryCache.get(`quote:${lowerCode}`);
+        if (cached) {
+            result[lowerCode] = cached;
+        } else {
+            toQuery.push(lowerCode);
+        }
+    }
+
+    if (toQuery.length === 0) return result;
+
+    // 2. 查 D1 数据库
+    try {
+        const sql = `SELECT * FROM asset_quotes WHERE code IN (${toQuery.map(() => '?').join(',')})`;
+        const rows = await queryAll(sql, toQuery, env);
+        for (const row of rows) {
+            result[row.code] = row;
+            // 回填内存缓存
+            memoryCache.set(`quote:${row.code}`, row);
+        }
+    } catch (e) {
+        console.error('[QuoteRepo] getBulkQuotes failed:', e.message);
+    }
+
+    return result;
+}
+</file>
+
+<file path="lib/storage/statsRepo.js">
+import { runSql, queryOne, queryAll } from './d1Client';
+
+/**
+ * 维度 3 优化: 计数器模式 (Counter Pattern)
+ * 用于将 O(N) 的 COUNT(*) 统计降为 O(1) 的点查询
+ */
+
+/**
+ * 增加计数
+ */
+export async function incrementCounter(key, delta = 1, env = null) {
+    try {
+        await runSql(
+            `INSERT INTO system_stats (key, value) VALUES (?, ?) 
+             ON CONFLICT(key) DO UPDATE SET value = value + ?, updated_at = CURRENT_TIMESTAMP`,
+            [key, delta, delta],
+            env
+        );
+    } catch (e) {
+        console.error(`[StatsRepo] Failed to increment ${key}:`, e.message);
+    }
+}
+
+/**
+ * 减少计数
+ */
+export async function decrementCounter(key, delta = 1, env = null) {
+    try {
+        await runSql(
+            `UPDATE system_stats SET value = MAX(0, value - ?), updated_at = CURRENT_TIMESTAMP WHERE key = ?`,
+            [delta, key],
+            env
+        );
+    } catch (e) {
+        console.error(`[StatsRepo] Failed to decrement ${key}:`, e.message);
+    }
+}
+
+/**
+ * 获取计数
+ */
+export async function getCounter(key, env = null) {
+    try {
+        const row = await queryOne('SELECT value FROM system_stats WHERE key = ?', [key], env);
+        return row?.value || 0;
+    } catch (e) {
+        return 0;
+    }
+}
+
+/**
+ * 批量获取计数 (维度 3 优化: 单次 IN 查询)
+ */
+export async function getCounters(keys, env = null) {
+    if (!keys || keys.length === 0) return {};
+    try {
+        const placeholders = keys.map(() => '?').join(',');
+        const rows = await queryAll(
+            `SELECT key, value FROM system_stats WHERE key IN (${placeholders})`,
+            keys,
+            env
+        );
+        return Object.fromEntries(rows.map(r => [r.key, r.value]));
+    } catch (e) {
+        console.error('[StatsRepo] getCounters failed:', e.message);
+        return {};
+    }
+}
+
+/**
+ * 全量修正计数 (昂贵操作，仅在初始化或检测到偏差时运行)
+ */
+export async function syncCounterFromTable(key, table, where = '', env = null) {
+    try {
+        const sql = `SELECT COUNT(*) as count FROM ${table} ${where ? 'WHERE ' + where : ''}`;
+        const row = await queryOne(sql, [], env);
+        const count = row?.count || 0;
+        await runSql(
+            `INSERT OR REPLACE INTO system_stats (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)`,
+            [key, count],
+            env
+        );
+        return count;
+    } catch (e) {
+        console.error(`[StatsRepo] Sync failed for ${key}:`, e.message);
+        return 0;
+    }
+}
+</file>
+
+<file path="providers/AssetProvider.js">
+'use client';
+
+import React, { createContext, useContext, useState, useCallback, useMemo } from 'react';
+import { useAuthSession } from '@/hooks/useAuthSession';
+import { useAssetSync } from '@/hooks/useAssetSync';
+import { useRealtimeQuotes } from '@/hooks/useRealtimeQuotes';
+import { useAssetActions } from '@/hooks/useAssetActions';
+
+const AssetContext = createContext(null);
+
+export function AssetProvider({ children }) {
+    const [activeTab, setActiveTab] = useState('stock');
+    const [selectedCode, setSelectedCode] = useState(null);
+    const [toast, setToast] = useState(null);
+
+    // Layer 1: 认证状态
+    const auth = useAuthSession();
+    const { userId, isLogged } = auth;
+
+    // Layer 2: 资产同步（加载服务端数据 & KV 写回）
+    const {
+        assets,
+        setAssets,
+        isSyncing,
+        setIsSyncing,
+        assetsRef,
+        refreshAssets,
+        syncAssetsToServer
+    } = useAssetSync({ userId, isLogged });
+
+    // Layer 3: 实时行情轮询（仅在 watchlist tab 下启动）
+    useRealtimeQuotes({
+        activeTab,
+        isLogged,
+        assets,
+        isSyncing,
+        userId,
+        setAssets,
+        assetsRef,
+        refreshAssets
+    });
+
+    const showToast = useCallback((msg, type = 'error') => {
+        setToast({ msg, type });
+        setTimeout(() => setToast(null), 3500);
+    }, []);
+
+    // Layer 4: 用户写操作（添加 / 移除资产）
+    // 业务逻辑已下放至 useAssetActions，Provider 只负责传参和透出结果
+    const { addAsset, removeAsset } = useAssetActions({
+        activeTab,
+        setAssets,
+        setIsSyncing,
+        showToast,
+        selectedCode,
+        setSelectedCode,
+        syncAssetsToServer,
+        assetsRef,
+    });
+
+    const handleAuthAction = useCallback(async (actionFn) => {
+        const result = await actionFn();
+        if (result && !result.ok) {
+            showToast(result.error);
+        }
+        return result;
+    }, [showToast]);
+
+    const value = useMemo(() => ({
+        ...auth,
+        handleLogin: () => handleAuthAction(() => auth.handleLogin()),
+        handleRegister: () => handleAuthAction(() => auth.handleRegister()),
+        assets,
+        isSyncing,
+        activeTab,
+        setActiveTab,
+        selectedCode,
+        setSelectedCode,
+        addAsset,
+        removeAsset,
+        refreshAssets: () => refreshAssets(assets.map(a => ({ code: a.code, type: a.type }))),
+        toast,
+        setToast,
+        showToast
+    }), [
+        auth.userId,
+        auth.isLogged,
+        auth.isPending,
+        auth.loginInput,
+        auth.passwordInput,
+        auth.isRegistering,
+        auth.handleLogin,
+        auth.handleRegister,
+        auth.handleLogout,
+        assets,
+        isSyncing,
+        activeTab,
+        selectedCode,
+        addAsset,
+        removeAsset,
+        refreshAssets,
+        toast,
+        showToast
+    ]);
+
+    return (
+        <AssetContext.Provider value={value}>
+            {children}
+            {toast && (
+                <div className={`fixed bottom-8 left-1/2 -translate-x-1/2 
+                    ${toast.type === 'error' ? 'bg-red-500/90' : (toast.type === 'info' ? 'bg-blue-600/90' : 'bg-green-500/90')} 
+                    text-white px-6 py-3 rounded-full shadow-2xl z-[9999] backdrop-blur-md 
+                    animate-in fade-in slide-in-from-bottom-4 duration-300 font-bold text-sm`}
+                >
+                    {toast.msg}
+                </div>
+            )}
+        </AssetContext.Provider>
+    );
+}
+
+export function useAsset() {
+    const context = useContext(AssetContext);
+    if (!context) throw new Error('useAsset must be used within AssetProvider');
+    return context;
+}
+</file>
+
+<file path="worker-entry.js">
+/**
+ * worker-entry.js
+ *
+ * Cloudflare Workers 统一入口。
+ *
+ * fetch handler     → 透传给 open-next，处理所有 Next.js HTTP 请求
+ * scheduled handler → 按 event.cron 字符串精确分流到对应任务
+ *
+ * 重要：open-next 生成的 worker.js 只导出 fetch handler，
+ * scheduled event 无法被其捕获，必须在本文件单独声明。
+ * wrangler.toml 的 main 字段须指向本文件。
+ */
+
+import openNextWorker from './.open-next/worker.js';
+import { runHistorySync } from './lib/cron/historySync.js';
+import { runRealtimeSync } from './lib/cron/realtimeSync.js';
+import { runSentinel } from './lib/cron/sentinel.js';
+import { fetchFundHistory } from './lib/services/historyFetcher.js';
+import { insertDailyPricesBatch } from './lib/storage/historyRepo.js';
+
+export default {
+    // ── HTTP：全部交给 open-next ──────────────────────────────────────────────
+    fetch(request, env, ctx) {
+        return openNextWorker.fetch(request, env, ctx);
+    },
+
+    // ── Cron：按表达式字符串精确路由 ─────────────────────────────────────────
+    //
+    // event.cron 值与 wrangler.toml [triggers].crons 里的字符串完全一致，
+    // 可直接用 switch/case 匹配，无需正则解析。
+    async scheduled(event, env, ctx) {
+        switch (event.cron) {
+
+            // 历史数据增量同步：每个交易日收盘后 21:00，次日凌晨 03:00 补跑
+            case '0 13 * * 1-5':
+            case '0 19 * * 1-6':
+                ctx.waitUntil(runHistorySync(env));
+                break;
+
+            // 盘中实时行情抓取：周一到周五 09:00-15:55（北京时间），每 5 分钟
+            case '*/5 1-7 * * 1-5':
+                ctx.waitUntil(runRealtimeSync(env));
+                break;
+
+            // 外部接口健康巡检：每 15 分钟全天候运行
+            case '*/15 * * * *':
+                ctx.waitUntil(runSentinel(env));
+                break;
+
+            // 基金异步重刷队列处理器：每分钟运行
+            case '*/1 * * * *':
+                ctx.waitUntil(processFundQueue(env));
+                break;
+
+            default:
+                console.warn(`[Scheduled] Unknown cron: "${event.cron}"`);
+        }
+    },
+};
+
+/**
+ * 基金异步重刷队列处理器
+ * 职责：分批从 KV 抓取 Pending 任务，执行抓取并写入 D1
+ */
+async function processFundQueue(env) {
+    const BATCH_SIZE = 5; // 每次处理 5 个，防止超时和配额溢出
+    const QUEUE = env.FUND_QUEUE;
+    const DB = env.DB;
+
+    if (!QUEUE) {
+        console.error('[Queue] FUND_QUEUE KV not bound');
+        return;
+    }
+
+    // 1. 获取所有基金任务
+    const list = await QUEUE.list({ prefix: 'fund:' });
+    if (!list.keys.length) return;
+
+    // 2. 取前 N 个任务
+    const tasks = list.keys.slice(0, BATCH_SIZE);
+
+    for (const keyObj of tasks) {
+        const keyName = keyObj.name;
+        const raw = await QUEUE.get(keyName);
+        if (!raw) continue;
+
+        const job = JSON.parse(raw);
+        const code = keyName.split(':')[1];
+
+        // 防死锁：如果处于 processing 状态且更新时间在 5 分钟内，跳过
+        if (job.status === 'processing' && (Date.now() - job.updatedAt < 300000)) {
+            continue;
+        }
+
+        try {
+            // 标记为正在处理
+            await QUEUE.put(keyName, JSON.stringify({
+                ...job,
+                status: 'processing',
+                updatedAt: Date.now()
+            }));
+
+            console.log(`[Queue] Processing ${code} (force=${job.force})`);
+
+            // 抓取历史 (250天)
+            const history = await fetchFundHistory(code, 250);
+            if (!history?.length) {
+                // 如果抓取失败且重试次数未超限，标记为 pending 等待下次
+                if ((job.retry || 0) < 3) {
+                    await QUEUE.put(keyName, JSON.stringify({
+                        ...job,
+                        status: 'pending',
+                        retry: (job.retry || 0) + 1,
+                        updatedAt: Date.now()
+                    }));
+                } else {
+                    // 超限则放弃
+                    await QUEUE.delete(keyName);
+                    console.error(`[Queue] Max retries reached for ${code}, dropped.`);
+                }
+                continue;
+            }
+
+            // 写入 D1
+            if (job.force) {
+                // 强制模式：先删后写
+                await DB.prepare('DELETE FROM asset_history WHERE code = ? AND type = ?').bind(code.toLowerCase(), 'fund').run();
+            }
+
+            // 执行分片写入 (historyRepo.js 的 insertDailyPricesBatch 逻辑)
+            await insertDailyPricesBatch(
+                history.map(r => ({ code, type: 'fund', price: r.value, date: r.date })),
+                env
+            );
+
+            // 成功后从队列移除
+            await QUEUE.delete(keyName);
+            console.log(`[Queue] Successfully completed ${code}`);
+
+        } catch (e) {
+            console.error(`[Queue] Error processing ${code}:`, e.message);
+            // 发生异常，回退到 pending
+            await QUEUE.put(keyName, JSON.stringify({
+                ...job,
+                status: 'pending',
+                retry: (job.retry || 0) + 1,
+                updatedAt: Date.now()
+            }));
+        }
     }
 }
 </file>
@@ -4218,233 +4258,95 @@ export async function POST(request) {
 }
 </file>
 
-<file path="components/WatchlistSidebar.js">
-'use client';
+<file path="app/api/history/route.js">
+import { NextResponse } from 'next/server';
+import { getHistory, insertDailyPricesBatch } from '@/lib/storage/historyRepo';
+import { fetchStockHistory, fetchFundHistory } from '@/lib/services/historyFetcher'
+import { calculateStats } from '@/lib/utils'
 
-import { useState, useMemo, useEffect } from 'react';
-import { ChevronDown, ChevronUp, ChevronsUpDown } from 'lucide-react';
-import { calculatePerformance } from '@/lib/utils';
-import { fetchBulkHistory } from '@/services/api/historyService';
-
-// 从历史数据计算最终涨跌幅（单个数字）
-function lastPerf(history, days) {
-    if (!history || history.length === 0) return null;
-    const curve = calculatePerformance(history, days);
-    if (curve.length === 0) return null;
-    return curve[curve.length - 1].performance;
+function todayStr(date = new Date()) {
+    return date.toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' });
 }
 
-function PerfCell({ value }) {
-    if (value === null) return <span className="text-white/20 font-mono text-sm w-16 text-right">--</span>;
-    const isPos = value >= 0;
-    return (
-        <span className={`font-mono text-sm font-bold tabular-nums w-16 text-right ${isPos ? 'text-red-400' : 'text-green-400'}`}>
-            {isPos ? '+' : ''}{value.toFixed(1)}%
-        </span>
-    );
+import { EASTMONEY_HEADERS } from '@/lib/constants/headers';
+
+
+
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = 8000) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+        const res = await fetch(url, { ...options, signal: controller.signal });
+        return res;
+    } finally {
+        clearTimeout(timeout);
+    }
 }
 
-const COLS = [
-    { key: 'd5', label: '5日' },
-    { key: 'd22', label: '22日' },
-    { key: 'd250', label: '250日' },
-];
+export async function GET(request) {
+    const { searchParams } = new URL(request.url);
+    const code = searchParams.get('code');
+    const type = searchParams.get('type');
+    const days = parseInt(searchParams.get('days') || '250', 10);
+    const noCache = searchParams.get('no_cache') === '1';
 
-function SortIcon({ colKey, sortKey, sortDesc }) {
-    if (sortKey !== colKey) return <ChevronsUpDown size={10} className="opacity-30" />;
-    return sortDesc
-        ? <ChevronDown size={10} className="text-cyan-400" />
-        : <ChevronUp size={10} className="text-cyan-400" />;
-}
+    if (!code || !type) {
+        return NextResponse.json({ error: 'Missing code or type' }, { status: 400 });
+    }
 
-export default function WatchlistSidebar({ assets, mode = 'volatility', selectedCode, onSelect }) {
-    const [sortKey, setSortKey] = useState('d5');
-    const [sortDesc, setSortDesc] = useState(true);
-    const [statsData, setStatsData] = useState({});
+    try {
+        const today = todayStr();
 
-    // ── 1. 稳定性优化：生成稳定的依赖 Key (High Prio Fix) ──────────────────
-    const assetKeys = useMemo(() =>
-        assets.map(a => `${a.type}:${a.code}`).sort().join(','),
-        [assets]);
+        // 1. 优先从 D1 读取
+        if (!noCache) {
+            const kvHistory = await getHistory(code, type, days);
+            const hasEnough = kvHistory && kvHistory.length >= days * 0.7;
 
-    // 每次 assets 变化或进入 volatility 模式时，批量拉取缓存
-    useEffect(() => {
-        if (mode !== 'volatility' || assets.length === 0) return;
-        const itemsToFetch = assets.map(a => ({ code: a.code, type: a.type }));
-        fetchBulkHistory(itemsToFetch, false).then(res => {
-            const newStats = {};
-            for (const key in res) {
-                if (res[key]?.summary) {
-                    newStats[key] = res[key].summary;
-                }
+            // 如果数据量够，或者最新的一条数据就是今天/昨天，说明已经同步过了
+            const lastDate = kvHistory.length > 0 ? kvHistory[kvHistory.length - 1].date : null;
+            const yesterday = todayStr(new Date(Date.now() - 86400000));
+            const isFresh = lastDate && (lastDate === today || lastDate === yesterday);
+
+            if (hasEnough || isFresh) {
+                console.log(`[History] D1 hit ${isFresh ? '(Fresh)' : '(Enough)'}: ${code}`);
+                return NextResponse.json({
+                    history: kvHistory,
+                    summary: calculateStats(kvHistory),
+                    source: 'd1_storage'
+                });
             }
-            // 使用完全替换而非增量合并，防止内存泄漏 (Mid Prio Fix)
-            setStatsData(newStats);
-        }).catch(e => console.error("Sidebar bulk fetch failed:", e));
-    }, [assetKeys, mode]);
-
-    const handleSort = (key) => {
-        if (sortKey === key) {
-            setSortDesc(v => !v);
-        } else {
-            setSortKey(key);
-            setSortDesc(true);
         }
-    };
 
-    // 预计算每个资产的涨跌幅，并进行字段归一化 (High Prio Fix)
-    const rows = useMemo(() => assets.map(asset => {
-        const key = `${asset.type}:${asset.code}`;
-        const summary = statsData[key] || asset.summary;
-        const h = (statsData[key]?.history) || asset.history || [];
-        return {
-            ...asset,
-            d5: summary?.perf5d ?? lastPerf(h, 5),
-            d22: summary?.perf22d ?? lastPerf(h, 22),
-            d250: summary?.perf250d ?? lastPerf(h, 250),
-            changePercent: asset.changePercent ?? null // 归一化以支持排序
-        };
-    }), [assets, statsData]);
+        // 3. 外部 API 获取
+        let history = null;
+        if (type === 'stock') {
+            history = await fetchStockHistory(code, days);
+        } else if (type === 'fund') {
+            history = await fetchFundHistory(code, days);
+        }
 
-    // ── 3. 性能优化：缓存日期计算 (Mid Prio Fix) ──────────────────────────
-    const latestDateStr = useMemo(() => {
-        let latest = '';
-        assets.forEach(a => {
-            const key = `${a.type}:${a.code}`;
-            const h = (statsData[key]?.history) || a.history || [];
-            if (h.length > 0) {
-                const d = h[h.length - 1].date;
-                if (d > latest) latest = d;
-            }
+        if (!history || history.length === 0) {
+            console.warn(`[History] No data from any source for ${code} (${type})`);
+            return NextResponse.json({ history: [], summary: { perf5d: 0, perf22d: 0, perf250d: 0 }, source: 'empty' });
+        }
+
+        // 4. 写回 D1 缓存 (只用 insertDailyPricesBatch，避免 writeDoc 双重写入)
+        const records = history.map(h => ({ code, type, price: h.value, date: h.date }));
+        await insertDailyPricesBatch(records);
+
+        return NextResponse.json({
+            history,
+            summary: calculateStats(history),
+            source: 'external_api'
         });
-        if (!latest) return '';
-        const [y, m, d] = latest.split('-');
-        return `(更新至${parseInt(m)}月${parseInt(d)}日)`;
-    }, [assets, statsData]);
-
-    // 排序：null 值排最后
-    const sorted = useMemo(() => {
-        return [...rows].sort((a, b) => {
-            const av = a[sortKey] ?? null;
-            const bv = b[sortKey] ?? null;
-            if (av === null && bv === null) return 0;
-            if (av === null) return 1;
-            if (bv === null) return -1;
-            return sortDesc ? bv - av : av - bv;
-        });
-    }, [rows, sortKey, sortDesc]);
-
-    const scrollToAsset = (code) => {
-        if (typeof window === 'undefined' || typeof document === 'undefined') return;
-
-        if (mode === 'realtime') {
-            if (onSelect) onSelect(code);
-        }
-
-        const el = document.getElementById(`asset-${code}`);
-        if (el) {
-            const offset = 20; // 顶部预留一点距离
-            const bodyRect = document.body.getBoundingClientRect().top;
-            const elementRect = el.getBoundingClientRect().top;
-            const elementPosition = elementRect - bodyRect;
-            const offsetPosition = elementPosition - offset;
-
-            window.scrollTo({
-                top: offsetPosition,
-                behavior: 'smooth'
-            });
-        }
-    };
-
-    if (!assets || assets.length === 0) return null;
-
-    return (
-        <aside className="w-full lg:w-[380px] lg:flex-shrink-0 lg:sticky lg:top-4 lg:self-start">
-            <div className="glass-effect border-white/10 overflow-hidden">
-                {/* Header */}
-                <div className="px-4 py-2.5 border-b border-white/5 flex items-center gap-2">
-                    <div className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
-                    <span className="text-xs font-bold uppercase tracking-widest opacity-40">
-                        {mode === 'realtime' ? '实时监控' : '自选清单'}
-                    </span>
-                    {mode !== 'realtime' && (
-                        <span className="text-[10px] font-bold text-cyan-400/60 uppercase tracking-tighter ml-1">
-                            {latestDateStr}
-                        </span>
-                    )}
-                    <span className="ml-auto text-xs font-mono opacity-20">{assets.length}</span>
-                </div>
-
-                {/* Column headers (only in volatility mode) */}
-                {mode === 'volatility' && (
-                    <div className="flex items-center px-4 py-1.5 border-b border-white/5 gap-3">
-                        <span className="flex-1 text-[10px] font-bold uppercase tracking-widest opacity-25">名称</span>
-                        {COLS.map(col => (
-                            <button
-                                key={col.key}
-                                onClick={() => handleSort(col.key)}
-                                className="w-16 flex items-center justify-end gap-0.5 text-[10px] font-bold uppercase tracking-widest opacity-40 hover:opacity-80 transition-opacity cursor-pointer"
-                            >
-                                {col.label}
-                                <SortIcon colKey={col.key} sortKey={sortKey} sortDesc={sortDesc} />
-                            </button>
-                        ))}
-                    </div>
-                )}
-
-                {/* Row Header for realtime mode */}
-                {mode === 'realtime' && (
-                    <div className="flex items-center px-4 py-1.5 border-b border-white/5 gap-3">
-                        <span className="flex-1 text-[10px] font-bold uppercase tracking-widest opacity-25">名称</span>
-                        <span className="w-20 text-right text-[10px] font-bold uppercase tracking-widest opacity-25">现价</span>
-                        <button
-                            onClick={() => handleSort('changePercent')}
-                            className="w-16 flex items-center justify-end gap-0.5 text-right text-[10px] font-bold uppercase tracking-widest opacity-40 hover:opacity-80 transition-opacity cursor-pointer"
-                        >
-                            涨跌幅
-                            <SortIcon colKey="changePercent" sortKey={sortKey} sortDesc={sortDesc} />
-                        </button>
-                    </div>
-                )}
-
-                {/* Asset rows */}
-                <div className="max-h-[300px] lg:max-h-[75vh] overflow-y-auto custom-scrollbar">
-                    {sorted.map(row => {
-                        const isSelected = mode === 'realtime' && row.code === selectedCode;
-                        return (
-                            <button
-                                key={row.code}
-                                onClick={() => scrollToAsset(row.code)}
-                                className={`w-full flex items-center gap-3 px-4 py-2 border-b border-white/5 last:border-0 hover:bg-white/5 active:bg-white/10 transition-all text-left ${isSelected ? 'bg-blue-600/20 border-l-2 border-l-blue-500' : ''}`}
-                            >
-                                <div className="flex-1 min-w-0">
-                                    <p className="text-sm font-bold leading-tight truncate">{row.name}</p>
-                                </div>
-                                {mode === 'volatility' ? (
-                                    <>
-                                        <PerfCell value={row.d5} />
-                                        <PerfCell value={row.d22} />
-                                        <PerfCell value={row.d250} />
-                                    </>
-                                ) : (
-                                    <>
-                                        <div className="w-20 text-right">
-                                            <p className="text-sm font-mono font-bold leading-tight">
-                                                {row.price?.toFixed(row.type === 'fund' ? 4 : 2)}
-                                            </p>
-                                        </div>
-                                        <div className="w-16 text-right">
-                                            <PerfCell value={row.changePercent ?? null} />
-                                        </div>
-                                    </>
-                                )}
-                            </button>
-                        );
-                    })}
-                </div>
-            </div>
-        </aside>
-    );
+    } catch (e) {
+        console.error(`[History] Crash for ${code}: ${e.message}`);
+        return NextResponse.json({
+            error: e.message,
+            stack: process.env.NODE_ENV !== 'production' ? e.stack : undefined
+        }, { status: 500 });
+    }
 }
 </file>
 
@@ -4589,111 +4491,212 @@ function currentBjHHMM() {
 }
 </file>
 
-<file path="lib/storage/d1Client.js">
-// 模块级单例缓存，消除高频动态导入开销
-let _cfContext = null;
+<file path="lib/storage/authRepo.js">
+import { queryOne, getRequiredDb, getCloudflareCtx } from './d1Client';
+import { memoryCache } from './memoryCache';
+import { hashPassword, verifyPassword, generateToken } from '@/lib/auth';
 
-async function _getCtx() {
-    if (_cfContext) return _cfContext;
-    try {
-        const { getCloudflareContext } = await import("@opennextjs/cloudflare");
-        _cfContext = await getCloudflareContext();
-        return _cfContext;
-    } catch (e) {
-        return null;
+// ── 常量 ─────────────────────────────────────────────────────────────
+const SESSION_TTL_MS = 7 * 24 * 3600 * 1000   // 7 天
+const SESSION_TTL_S = 7 * 24 * 3600           // cookie maxAge 单位秒
+const SESS_CACHE_TTL = 5 * 60 * 1000           // L1 缓存 5 分钟
+
+// timing-safe 验证时使用的占位哈希，格式与真实哈希完全一致
+const DUMMY_HASH = 'pbkdf2:00000000000000000000000000000000:0000000000000000000000000000000000000000000000000000000000000000';
+
+/**
+ * 常量时间比较（防 timing attack）
+ */
+function safeCompare(a, b) {
+    if (!a || !b || a.length !== b.length) return false;
+
+    let result = 0;
+    for (let i = 0; i < a.length; i++) {
+        result |= a.charCodeAt(i) ^ b.charCodeAt(i);
     }
+    return result === 0;
 }
 
 /**
- * 统合获取 Cloudflare 上下文 (用于访问 env.API_KEY 或 ctx.waitUntil)
+ * 校验管理员权限
+ * @param {Request} request 
+ * @param {Object} env Cloudflare environment
  */
-export async function getCloudflareCtx() {
-    return await _getCtx();
-}
+export async function isAdminAuthorized(request, env = null) {
+    const url = new URL(request.url);
+    const searchParams = url.searchParams;
 
-/**
- * 获取 D1 绑定，优先使用显式注入的 env，其次尝试环境上下文单例
- */
-export async function getD1Storage(env = null) {
-    if (env?.DB) return env.DB;
-    const ctx = await getCloudflareCtx();
-    return ctx?.env?.DB || null;
-}
+    /**
+     * 1. Session Token 验证 (优先)
+     */
+    const sessionToken =
+        request.headers.get('x-admin-session') ||
+        searchParams.get('sess');
 
-/**
- * 确保 DB 绑定存在
- */
-export async function getRequiredDb(env = null) {
-    const db = await getD1Storage(env);
-    if (!db) {
-        throw new Error('D1_BINDING_MISSING: Database binding "DB" is not available.');
-    }
-    return db;
-}
+    if (sessionToken && sessionToken.length < 128) {
+        try {
+            const session = await queryOne(
+                `SELECT 1
+                 FROM admin_sessions
+                 WHERE token = ?
+                 AND expires_at > CURRENT_TIMESTAMP
+                 LIMIT 1`,
+                [sessionToken],
+                env
+            );
 
-/**
- * 执行简单 SQL (用于 INSERT/UPDATE/DELETE)
- */
-export async function runSql(sql, params = [], env = null) {
-    const db = await getRequiredDb(env);
-    try {
-        return await db.prepare(sql).bind(...params).run();
-    } catch (e) {
-        e.d1Source = 'runSql'; // 溯源标记
-        console.error(`[D1Client] runSql failed: ${e.message}`, { sql, params });
-        throw e;
-    }
-}
-
-/**
- * 查询单行
- */
-export async function queryOne(sql, params = [], env = null) {
-    const db = await getRequiredDb(env);
-    try {
-        return await db.prepare(sql).bind(...params).first();
-    } catch (e) {
-        e.d1Source = 'queryOne'; // 溯源标记
-        console.error(`[D1Client] queryOne failed: ${e.message}`, { sql, params });
-        throw e;
-    }
-}
-
-/**
- * 查询多行
- */
-export async function queryAll(sql, params = [], env = null) {
-    const db = await getRequiredDb(env);
-    try {
-        const { results } = await db.prepare(sql).bind(...params).all();
-        return results || [];
-    } catch (e) {
-        e.d1Source = 'queryAll'; // 溯源标记
-        console.error(`[D1Client] queryAll failed: ${e.message}`, { sql, params });
-        throw e;
-    }
-}
-
-/**
- * 批量执行 SQLs
- */
-export async function batchSql(statements, env = null) {
-    const db = await getRequiredDb(env);
-    const CHUNK = 100;
-    const allResults = [];
-    try {
-        for (let i = 0; i < statements.length; i += CHUNK) {
-            const chunk = statements.slice(i, i + CHUNK);
-            const batchResult = await db.batch(chunk);
-            allResults.push(...batchResult);
+            if (session) {
+                return true;
+            }
+        } catch (err) {
+            console.error('[AdminAuth] session lookup failed', err);
         }
-        return allResults;
-    } catch (e) {
-        e.d1Source = 'batchSql'; // 溯源标记
-        console.error(`[D1Client] batchSql failed: ${e.message}`);
-        throw e;
     }
+
+    /**
+     * 2. 后备方案：PSK 密钥
+     */
+    const adminKey = request.headers.get('x-admin-key');
+    const queryKey =
+        searchParams.get('token') ||
+        searchParams.get('adminKey') ||
+        searchParams.get('key') ||
+        searchParams.get('secret');
+
+    const inputKey = adminKey || queryKey;
+
+    if (!inputKey) {
+        return false;
+    }
+
+    /**
+     * 3. 获取 Worker 环境变量
+     */
+    let envKey = env?.ADMIN_API_KEY || process.env.ADMIN_API_KEY;
+
+    if (!envKey) {
+        try {
+            const ctx = await getCloudflareCtx(env);
+            envKey = ctx?.env?.ADMIN_API_KEY;
+        } catch (err) {
+            console.error('[AdminAuth] env read failed', err);
+        }
+    }
+
+    if (!envKey) {
+        console.error('[AdminAuth] ADMIN_API_KEY not configured');
+        return false;
+    }
+
+    /**
+     * 4. 常量时间比较
+     */
+    return safeCompare(inputKey.trim(), envKey.trim());
 }
+
+// ── 用户查询 ──────────────────────────────────────────────────────────
+
+/**
+ * 按用户名查找用户（登录用）
+ * @returns {{ id: string, password_hash: string } | null}
+ */
+export async function findUserById(userId) {
+    return await queryOne(
+        'SELECT id, password_hash FROM users WHERE id = ? LIMIT 1',
+        [userId.toLowerCase()]
+    );
+}
+
+/**
+ * 检查用户名是否已被占用（注册用）
+ */
+export async function isUsernameTaken(userId) {
+    const row = await queryOne(
+        'SELECT 1 FROM users WHERE id = ? LIMIT 1',
+        [userId.toLowerCase()]
+    );
+    return !!row;
+}
+
+// ── 注册 ──────────────────────────────────────────────────────────────
+
+/**
+ * 创建新用户并同时创建初始会话（原子操作）
+ * @returns {{ userId: string, token: string }}
+ */
+export async function registerUser(username, password) {
+    const userId = username.toLowerCase();
+    const hash = await hashPassword(password);
+    const token = generateToken();
+    const expiresAt = new Date(Date.now() + SESSION_TTL_MS).toISOString();
+
+    const db = await getRequiredDb();
+    await db.batch([
+        db.prepare('INSERT INTO users (id, password_hash) VALUES (?, ?)')
+            .bind(userId, hash),
+        db.prepare('INSERT INTO user_sessions (token, user_id, expires_at) VALUES (?, ?, ?)')
+            .bind(token, userId, expiresAt),
+    ]);
+
+    return { userId, token };
+}
+
+// ── 登录 ──────────────────────────────────────────────────────────────
+
+/**
+ * Timing-safe 密码验证。
+ * @returns {{ userId: string, token: string } | null}
+ */
+export async function loginUser(username, password) {
+    const user = await findUserById(username);
+
+    // 无论 user 是否存在都跑一次 verifyPassword，耗时一致 (防时序探测)
+    const isValid = user
+        ? await verifyPassword(password, user.password_hash)
+        : (await verifyPassword(password, DUMMY_HASH) && false);
+
+    if (!isValid) return null;
+
+    const token = generateToken();
+    const expiresAt = new Date(Date.now() + SESSION_TTL_MS).toISOString();
+
+    const db = await getRequiredDb();
+    await db.prepare(
+        'INSERT INTO user_sessions (token, user_id, expires_at) VALUES (?, ?, ?)'
+    ).bind(token, user.id, expiresAt).run();
+
+    // 预填 L1 缓存，提升后续业务请求性能
+    memoryCache.set(`sess:${token}`, user.id, SESS_CACHE_TTL);
+
+    return { userId: user.id, token };
+}
+
+// ── 登出 ──────────────────────────────────────────────────────────────
+
+/**
+ * 撤销会话：删除 D1 记录 + 清除 L1 缓存
+ */
+export async function revokeSession(token) {
+    if (!token) return;
+    try {
+        const db = await getRequiredDb();
+        await db.prepare('DELETE FROM user_sessions WHERE token = ?')
+            .bind(token).run();
+    } catch (e) {
+        console.error('[AuthRepo:revokeSession] DB error:', e.message);
+    }
+    memoryCache.delete(`sess:${token}`);
+}
+
+// ── Cookie 配置（集中管理，route 直接引用） ───────────────────────────
+
+export const SESSION_COOKIE_OPTIONS = {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'strict',
+    maxAge: SESSION_TTL_S,
+    path: '/',
+};
 </file>
 
 <file path="lib/storage/intradayRepo.js">
@@ -4876,151 +4879,140 @@ export async function pruneIntradayPoints(env = null) {
 }
 </file>
 
-<file path="lib/storage/logRepo.js">
-import { runSql, queryAll } from './d1Client';
+<file path="lib/storage/userRepo.js">
+import { queryOne, queryAll, getRequiredDb } from './d1Client';
+import { memoryCache } from './memoryCache';
+
+const ASSETS_CACHE_PREFIX = 'user:assets:';
+const CACHE_TTL = 300000; // 5 分钟缓存
 
 /**
- * 系统日志存储仓库
- * 用于记录关键业务逻辑，如外部接口抓取记录。
- */
-
-/**
- * 添加系统日志
- * 将日志保存到 D1 数据库 system_logs 表。
- * @param {string} level
- * @param {string} module
- * @param {string} message
+ * 获取用户的资产列表
+ * @param {string} userId
  * @param {Object} env
  */
-export async function addSystemLog(level, module, message, env = null) {
-    // 智能写策略：WARN/ERROR 必写；核心调度模块(Cron/Sentinel)的 INFO 也写，方便追踪执行记录
-    const levelUp = level?.toUpperCase();
-    const isCoreModule = ['SyncCron', 'DailyCron', 'Sentinel', 'HealthCron'].includes(module);
-    const shouldPersist = ['WARN', 'ERROR'].includes(levelUp) || (levelUp === 'INFO' && isCoreModule);
+export async function getUserAssets(userId, env = null) {
+    if (!userId) return [];
+
+    // 1. 优先查内存缓存
+    const cacheKey = ASSETS_CACHE_PREFIX + userId;
+    const cached = memoryCache.get(cacheKey);
+    if (cached) {
+        return cached;
+    }
+
+    const sql = 'SELECT code, type FROM user_assets WHERE user_id = ? ORDER BY added_at ASC';
+    const assets = await queryAll(sql, [userId], env);
+
+    // 2. 回填内存，直接利用 memoryCache 内置 TTL
+    memoryCache.set(cacheKey, assets, CACHE_TTL);
+
+    return assets;
+}
+
+/**
+ * 检查用户是否在 D1 中存在
+ * @param {string} userId
+ * @param {Object} env
+ */
+export async function checkUserExists(userId, env = null) {
+    if (!userId) return false;
+    try {
+        const row = await queryOne('SELECT 1 FROM users WHERE id = ? LIMIT 1', [userId], env);
+        return !!row;
+    } catch (e) {
+        console.error(`[UserRepo] checkUserExists failed for ${userId}:`, e.message);
+        return false;
+    }
+}
+
+/**
+ * 更新用户的资产列表 (全量覆盖模式，对齐原有 D1 行为)
+ * @param {string} userId
+ * @param {Array} assets
+ * @param {Object} env
+ */
+export async function saveUserAssets(userId, assets, env = null) {
+    if (!userId) return false;
+
+    const db = await getRequiredDb(env);
 
     try {
-        if (shouldPersist) {
-            await runSql(
-                'INSERT INTO system_logs (level, module, message) VALUES (?, ?, ?)',
-                [levelUp, module, message],
-                env
+        // 使用事务确保更新原子性
+        const statements = [
+            // 1. 记录最后活动时间（不再隐式创建用户，若用户不存在此 UPDATE 会静默失败而不产生无效记录）
+            db.prepare('UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = ?').bind(userId),
+            // 2. 删除旧资产
+            db.prepare('DELETE FROM user_assets WHERE user_id = ?').bind(userId)
+        ];
+
+        // 3. 插入新资产
+        for (const a of assets) {
+            statements.push(
+                db.prepare('INSERT INTO user_assets (user_id, code, type) VALUES (?, ?, ?)')
+                    .bind(userId, a.code.toLowerCase(), a.type)
             );
         }
-        console.log(`[LOG][${level}][${module}] ${message}${shouldPersist ? ' (PERSISTED)' : ''}`);
+
+        await db.batch(statements);
+
+        // 关键：更新成功后立即清理内存缓存，确保下次读取到最新数据
+        memoryCache.delete(ASSETS_CACHE_PREFIX + userId);
+
+        console.log(`[UserRepo] saveUserAssets success for ${userId}, items: ${assets.length}`);
+        return true;
     } catch (e) {
-        console.warn('[LogRepo] Failed to save log to D1:', e.message);
-        // Fallback to console only
-        console.log(`[LOG-FALLBACK][${level}][${module}] ${message}`);
+        console.error(`[UserRepo] saveUserAssets CRITICAL FAILED for ${userId}:`, e.message);
+        console.error(`[UserRepo] SQL Error Details:`, e);
+        throw e;
     }
 }
 
 /**
- * 获取系统日志
- * 从 D1 读取最近 N 小时的日志。
- * @param {number} hours
+ * 获取去重后的所有用户资产 (用于 Cron 全量同步)
  * @param {Object} env
  */
-export async function getSystemLogs(hours = 72, env = null) {
-    try {
-        return await queryAll(
-            'SELECT * FROM system_logs WHERE timestamp >= datetime("now", "-" || ? || " hours") ORDER BY timestamp DESC',
-            [hours],
-            env
-        );
-    } catch (e) {
-        console.error('[LogRepo] getSystemLogs failed:', e.message);
-        return [];
-    }
-}
-</file>
-
-<file path="lib/storage/statsRepo.js">
-import { runSql, queryOne, queryAll } from './d1Client';
-
-/**
- * 维度 3 优化: 计数器模式 (Counter Pattern)
- * 用于将 O(N) 的 COUNT(*) 统计降为 O(1) 的点查询
- */
-
-/**
- * 增加计数
- */
-export async function incrementCounter(key, delta = 1, env = null) {
-    try {
-        await runSql(
-            `INSERT INTO system_stats (key, value) VALUES (?, ?) 
-             ON CONFLICT(key) DO UPDATE SET value = value + ?, updated_at = CURRENT_TIMESTAMP`,
-            [key, delta, delta],
-            env
-        );
-    } catch (e) {
-        console.error(`[StatsRepo] Failed to increment ${key}:`, e.message);
-    }
+export async function getGlobalUniqueAssets(env = null) {
+    return await queryAll('SELECT DISTINCT code, type FROM user_assets', [], env);
 }
 
 /**
- * 减少计数
+ * 获取所有活跃用户 ID (用于 Cron 任务)
+ * @param {Object} env
  */
-export async function decrementCounter(key, delta = 1, env = null) {
-    try {
-        await runSql(
-            `UPDATE system_stats SET value = MAX(0, value - ?), updated_at = CURRENT_TIMESTAMP WHERE key = ?`,
-            [delta, key],
-            env
-        );
-    } catch (e) {
-        console.error(`[StatsRepo] Failed to decrement ${key}:`, e.message);
-    }
+export async function getAllUserIds(env = null) {
+    const rows = await queryAll('SELECT id FROM users', [], env);
+    return rows.map(r => r.id);
 }
 
 /**
- * 获取计数
+ * 删除用户及其资产
+ * @param {string} userId
+ * @param {Object} env
  */
-export async function getCounter(key, env = null) {
-    try {
-        const row = await queryOne('SELECT value FROM system_stats WHERE key = ?', [key], env);
-        return row?.value || 0;
-    } catch (e) {
-        return 0;
-    }
-}
+export async function deleteUser(userId, env = null) {
+    if (!userId) return false;
+    const db = await getRequiredDb(env);
 
-/**
- * 批量获取计数 (维度 3 优化: 单次 IN 查询)
- */
-export async function getCounters(keys, env = null) {
-    if (!keys || keys.length === 0) return {};
     try {
-        const placeholders = keys.map(() => '?').join(',');
-        const rows = await queryAll(
-            `SELECT key, value FROM system_stats WHERE key IN (${placeholders})`,
-            keys,
-            env
-        );
-        return Object.fromEntries(rows.map(r => [r.key, r.value]));
-    } catch (e) {
-        console.error('[StatsRepo] getCounters failed:', e.message);
-        return {};
-    }
-}
+        await db.batch([
+            db.prepare('DELETE FROM user_sessions WHERE user_id = ?').bind(userId),
+            db.prepare('DELETE FROM user_assets WHERE user_id = ?').bind(userId),
+            db.prepare('DELETE FROM users WHERE id = ?').bind(userId)
+        ]);
 
-/**
- * 全量修正计数 (昂贵操作，仅在初始化或检测到偏差时运行)
- */
-export async function syncCounterFromTable(key, table, where = '', env = null) {
-    try {
-        const sql = `SELECT COUNT(*) as count FROM ${table} ${where ? 'WHERE ' + where : ''}`;
-        const row = await queryOne(sql, [], env);
-        const count = row?.count || 0;
-        await runSql(
-            `INSERT OR REPLACE INTO system_stats (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)`,
-            [key, count],
-            env
-        );
-        return count;
+        // 联动清理：立刻触发僵尸数据洗消（防止删除用户后行情历史残留）
+        const { purgeZombieAssets } = await import('./maintenanceRepo');
+        await purgeZombieAssets(env);
+
+        // 维度 3 优化: 更新计数器
+        const { decrementCounter } = await import('./statsRepo');
+        await decrementCounter('users', 1, env);
+
+        return true;
     } catch (e) {
-        console.error(`[StatsRepo] Sync failed for ${key}:`, e.message);
-        return 0;
+        console.error(`[UserRepo] deleteUser failed for ${userId}:`, e.message);
+        return false;
     }
 }
 </file>
@@ -5214,6 +5206,232 @@ export function isMarketClosedBeijing() {
 }
 </file>
 
+<file path="schema.sql">
+-- 用户索引表
+CREATE TABLE IF NOT EXISTS users (
+    id          TEXT PRIMARY KEY,
+    password_hash TEXT,
+    email       TEXT UNIQUE,
+    created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+    last_login  DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 会话表 (SaaS 认证)
+CREATE TABLE IF NOT EXISTS user_sessions (
+    token       TEXT PRIMARY KEY,
+    user_id     TEXT NOT NULL,
+    created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+    expires_at  DATETIME NOT NULL,
+    FOREIGN KEY(user_id) REFERENCES users(id)
+);
+CREATE INDEX IF NOT EXISTS idx_sessions_user ON user_sessions(user_id);
+
+-- 用户资产关联表
+CREATE TABLE IF NOT EXISTS user_assets (
+    user_id TEXT NOT NULL,
+    code TEXT NOT NULL,
+    type TEXT NOT NULL,
+    added_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY(user_id, code, type),
+    FOREIGN KEY(user_id) REFERENCES users(id)
+);
+
+-- 资产基本信息 (名称库)
+CREATE TABLE IF NOT EXISTS asset_names (
+    code TEXT NOT NULL,
+    type TEXT NOT NULL,
+    name TEXT NOT NULL,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY(code, type)
+);
+
+-- 历史价格
+CREATE TABLE IF NOT EXISTS asset_history (
+    code TEXT NOT NULL,
+    type TEXT NOT NULL,
+    price REAL NOT NULL,
+    record_date TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY(code, type, record_date)
+);
+
+-- 分时数据 (按天存储的聚合 JSON)
+CREATE TABLE IF NOT EXISTS asset_intraday (
+    code TEXT NOT NULL,
+    record_date TEXT NOT NULL,
+    data TEXT NOT NULL,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY(code, record_date)
+);
+
+-- 分时数据点 (颗粒度到分钟)
+CREATE TABLE IF NOT EXISTS asset_intraday_points (
+    code TEXT NOT NULL,
+    time DATETIME NOT NULL,
+    price REAL NOT NULL,
+    vol REAL NOT NULL,
+    PRIMARY KEY(code, time)
+);
+CREATE INDEX IF NOT EXISTS idx_intra_points_code_time ON asset_intraday_points(code, time DESC);
+
+-- 报价缓存 (D1 历史缓存表)
+CREATE TABLE IF NOT EXISTS asset_quotes (
+    code TEXT PRIMARY KEY,
+    name TEXT,
+    price REAL,
+    change REAL,
+    changePercent REAL,
+    prevClose REAL,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 系统日志 (按计划禁用或存入 D1)
+CREATE TABLE IF NOT EXISTS system_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    level TEXT NOT NULL,
+    module TEXT,
+    message TEXT NOT NULL,
+    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 管理员会话表
+CREATE TABLE IF NOT EXISTS admin_sessions (
+    token TEXT PRIMARY KEY,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    expires_at DATETIME NOT NULL
+);
+
+-- 外部 API 健康监控
+CREATE TABLE IF NOT EXISTS api_health (
+    api_name TEXT PRIMARY KEY,
+    status TEXT DEFAULT 'unknown',
+    success_rate TEXT DEFAULT '0/0',
+    avg_latency INTEGER DEFAULT 0,
+    success_count INTEGER DEFAULT 0,
+    fail_count INTEGER DEFAULT 0,
+    total_count INTEGER DEFAULT 0,
+    recent_results TEXT DEFAULT '',
+    last_check DATETIME DEFAULT CURRENT_TIMESTAMP,
+    heartbeat_ts DATETIME DEFAULT CURRENT_TIMESTAMP,
+    error_msg TEXT
+);
+
+-- 计数器表 (维度 3 优化: 将 O(N) 统计降为 O(1))
+CREATE TABLE IF NOT EXISTS system_stats (
+    key TEXT PRIMARY KEY,
+    value INTEGER DEFAULT 0,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_logs_timestamp ON system_logs(timestamp);
+
+-- [Optimization] 提升近期统计查询速度 (用于 recent_growth)
+CREATE INDEX IF NOT EXISTS idx_asset_history_created_at ON asset_history (created_at);
+</file>
+
+<file path="app/api/admin/queue/route.js">
+import { NextResponse } from 'next/server';
+import { isAdminAuthorized } from '@/lib/storage/authRepo';
+
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+
+export async function GET(request) {
+    console.log(`[AdminQueue] Incoming request: ${request.url}`);
+    if (!(await isAdminAuthorized(request))) {
+        return NextResponse.json({ error: 'Unauthorized' }, { status: 403 });
+    }
+
+    // 目前系统暂未实现持久化队列，仅返回空结构以维持 UI 稳定
+    return NextResponse.json({
+        queue: [],
+        count: 0,
+        status: 'idle'
+    });
+}
+</file>
+
+<file path="app/api/admin/refetch-fund-history/route.js">
+/**
+ * src/app/api/admin/refetch-fund-history/route.js
+ * 
+ * 专用基金重刷接口，采用 Streaming (NDJSON) 响应以防止超时及提供实时进度。
+ */
+
+import { NextResponse } from 'next/server';
+import { isAdminAuthorized } from '@/lib/storage/authRepo';
+import { fetchFundHistory } from '@/lib/services/historyFetcher';
+import { insertDailyPricesBatch, deleteAssetHistory } from '@/lib/storage/historyRepo';
+import { getD1Storage } from '@/lib/storage/d1Client';
+
+export const dynamic = 'force-dynamic';
+export const maxDuration = 300; // 5分钟限时
+
+const HISTORY_DAYS = 250;
+
+export async function GET(request) {
+    // 1. 鉴权
+    if (!(await isAdminAuthorized(request))) {
+        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const { searchParams } = new URL(request.url);
+    const force = searchParams.get('force') === '1';
+
+    // 2. 准备数据库
+    const db = await getD1Storage();
+    if (!db) return NextResponse.json({ error: 'DB unavailable' }, { status: 500 });
+
+    // 3. 获取 KV 绑定 (由 Cloudflare 提供)
+    // 注意：在 Next.js Edge Runtime 中，env 绑定通常通过 process.env 或 requestContext 获取
+    // 这里我们假设通过全局注入或 env 参数获取，实际由 Worker 环境确保 FUND_QUEUE 可用
+    const FUND_QUEUE = process.env.FUND_QUEUE;
+    if (!FUND_QUEUE) {
+        return NextResponse.json({ error: 'FUND_QUEUE KV 未绑定，请检查 Cloudflare 配置' }, { status: 500 });
+    }
+
+    // 4. 获取所有待重刷基金列表
+    const { results: funds } = await db
+        .prepare("SELECT DISTINCT code FROM user_assets WHERE type = 'fund'")
+        .all();
+
+    if (!funds?.length) return NextResponse.json({ ok: true, message: 'No funds found' });
+
+    // 5. 任务投递：将重刷需求写入 KV 队列
+    const t0 = Date.now();
+    let submittedCount = 0;
+    const errors = [];
+
+    // 分批次投递以防 API 超时
+    const writes = funds.map(async (f) => {
+        try {
+            const key = `fund:${f.code.toLowerCase()}`;
+            await FUND_QUEUE.put(key, JSON.stringify({
+                status: 'pending',
+                retry: 0,
+                force: force,
+                updatedAt: Date.now()
+            }));
+            submittedCount++;
+        } catch (e) {
+            errors.push(`${f.code}: ${e.message}`);
+        }
+    });
+
+    await Promise.all(writes);
+
+    const elapsed = Date.now() - t0;
+    return NextResponse.json({
+        ok: true,
+        message: `已将 ${submittedCount} 只基金投递至后端异步队列`,
+        total: funds.length,
+        submitted: submittedCount,
+        errors: errors.length ? errors : undefined,
+        elapsed_ms: elapsed
+    });
+}
+</file>
+
 <file path="app/api/history/bulk/route.js">
 import { NextResponse } from 'next/server'
 import { syncHistoryBulk } from '@/lib/services/assetSyncService'
@@ -5242,277 +5460,6 @@ export async function POST(request) {
         )
     }
 }
-</file>
-
-<file path="app/api/history/route.js">
-import { NextResponse } from 'next/server';
-import { getHistory, insertDailyPricesBatch } from '@/lib/storage/historyRepo';
-import { fetchStockHistory, fetchFundHistory } from '@/lib/services/historyFetcher'
-import { calculateStats } from '@/lib/utils'
-
-function todayStr(date = new Date()) {
-    return date.toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' });
-}
-
-import { EASTMONEY_HEADERS } from '@/lib/constants/headers';
-
-
-
-
-async function fetchWithTimeout(url, options = {}, timeoutMs = 8000) {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), timeoutMs);
-    try {
-        const res = await fetch(url, { ...options, signal: controller.signal });
-        return res;
-    } finally {
-        clearTimeout(timeout);
-    }
-}
-
-export async function GET(request) {
-    const { searchParams } = new URL(request.url);
-    const code = searchParams.get('code');
-    const type = searchParams.get('type');
-    const days = parseInt(searchParams.get('days') || '250', 10);
-    const noCache = searchParams.get('no_cache') === '1';
-
-    if (!code || !type) {
-        return NextResponse.json({ error: 'Missing code or type' }, { status: 400 });
-    }
-
-    try {
-        const today = todayStr();
-
-        // 1. 优先从 D1 读取
-        if (!noCache) {
-            const kvHistory = await getHistory(code, type, days);
-            const hasEnough = kvHistory && kvHistory.length >= days * 0.7;
-
-            // 如果数据量够，或者最新的一条数据就是今天/昨天，说明已经同步过了
-            const lastDate = kvHistory.length > 0 ? kvHistory[kvHistory.length - 1].date : null;
-            const yesterday = todayStr(new Date(Date.now() - 86400000));
-            const isFresh = lastDate && (lastDate === today || lastDate === yesterday);
-
-            if (hasEnough || isFresh) {
-                console.log(`[History] D1 hit ${isFresh ? '(Fresh)' : '(Enough)'}: ${code}`);
-                return NextResponse.json({
-                    history: kvHistory,
-                    summary: calculateStats(kvHistory),
-                    source: 'd1_storage'
-                });
-            }
-        }
-
-        // 3. 外部 API 获取
-        let history = null;
-        if (type === 'stock') {
-            history = await fetchStockHistory(code, days);
-        } else if (type === 'fund') {
-            history = await fetchFundHistory(code, days);
-        }
-
-        if (!history || history.length === 0) {
-            console.warn(`[History] No data from any source for ${code} (${type})`);
-            return NextResponse.json({ history: [], summary: { perf5d: 0, perf22d: 0, perf250d: 0 }, source: 'empty' });
-        }
-
-        // 4. 写回 D1 缓存 (只用 insertDailyPricesBatch，避免 writeDoc 双重写入)
-        const records = history.map(h => ({ code, type, price: h.value, date: h.date }));
-        await insertDailyPricesBatch(records);
-
-        return NextResponse.json({
-            history,
-            summary: calculateStats(history),
-            source: 'external_api'
-        });
-    } catch (e) {
-        console.error(`[History] Crash for ${code}: ${e.message}`);
-        return NextResponse.json({
-            error: e.message,
-            stack: process.env.NODE_ENV !== 'production' ? e.stack : undefined
-        }, { status: 500 });
-    }
-}
-</file>
-
-<file path="lib/cron/realtimeSync.js">
-/**
- * src/lib/cron/realtimeSync.js
- *
- * 盘中实时行情抓取，每 5 分钟由 scheduled handler 调用。
- * 触发窗口：周一到周五 UTC 01:00-07:55 = 北京时间 09:00-15:55。
- *
- * 对齐 intradayRepo.js 的实际存储结构：
- *   主表  asset_intraday_points (code, time, price, vol)  — 逐点存储，供分时图使用
- *   日表  asset_intraday (code, record_date, data)        — JSON 全天数据，供收盘后归档
- *
- * intradayRepo 说明：
- *   - saveIntraday 有盘中/收盘自动切换逻辑，但依赖 memoryCache。
- *     scheduled handler 每次都是全新 Worker 实例，内存不持久，
- *     因此盘中 cron 直接写 asset_intraday_points（持久化），不依赖内存缓存。
- *   - saveIntradayPointsBulk / pruneIntradayPoints 是专为 cron 设计的接口，直接使用。
- *
- * 流程：
- *   1. 判断当前是否在交易时段（09:30-11:30 / 13:00-15:00），非交易时段静默跳过
- *   2. 从 user_assets 读取所有股票资产（基金无盘中分时，跳过）
- *   3. 分批并发拉取实时行情（每批 BATCH_SIZE 条）
- *   4. 调用 saveIntradayPointsBulk 写入 asset_intraday_points
- *   5. 每隔 PRUNE_EVERY_N 次触发一次 pruneIntradayPoints，防止无限增长
- *   6. 失败时写 system_logs，成功时仅打 console（盘中高频，避免刷爆日志）
- *
- * pruneIntradayPoints 说明：
- *   每只股票保留最近 480 个分时点（约 4 天 × 每天 48 个5分钟K线），
- *   每次全部 cron 触发都清理成本较高，故每 6 次（约 30 分钟）触发一次。
- */
-
-import { fetchStockQuote } from '@/lib/services/quoteFetcher';
-import { saveIntradayPointsBulk, pruneIntradayPoints } from '@/lib/storage/intradayRepo';
-import { getBeijingDate } from '@/lib/utils';
-
-// ── 常量 ────────────────────────────────────────────────────────────────────
-
-const BATCH_SIZE = 1;   // 降为 1 以便精确控制子请求预算
-const BATCH_DELAY_MS = 100;  // 批间等待（ms）
-const SUBREQ_BUDGET = 45;    // D1 Free 计划硬上限 50
-const FETCH_TIMEOUT = 5000; // 单资产行情超时（ms）
-
-// 每隔多少次 cron 触发执行一次 pruneIntradayPoints
-const PRUNE_EVERY_N = 6;
-
-// ── 交易时段（北京时间）──────────────────────────────────────────────────────
-
-const TRADING_SESSIONS = [
-    { open: '09:30', close: '11:30' },
-    { open: '13:00', close: '15:00' },
-];
-
-function _isTradingHour(now) {
-    const bjNow = getBeijingDate();
-    const h = bjNow.getHours();
-    const m = bjNow.getMinutes();
-    const hhmm = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
-    return TRADING_SESSIONS.some(s => hhmm >= s.open && hhmm <= s.close);
-}
-
-// ── 简单计数器（模块级，Worker 实例存活期间有效）────────────────────────────
-let _triggerCount = 0;
-
-// ── 主入口 ──────────────────────────────────────────────────────────────────
-
-export async function runRealtimeSync(env) {
-    const now = new Date();
-
-    if (!_isTradingHour(now)) {
-        console.log('[RealtimeSync] Outside trading hours, skipped.');
-        return;
-    }
-
-    _triggerCount++;
-    const t0 = Date.now();
-    let ok = 0, fail = 0, budgetExceeded = false;
-    let subreqCount = 1; // 初始 DB List 请求占 1 次
-    const errors = [];
-
-    try {
-        const { results: assets } = await env.DB
-            .prepare("SELECT DISTINCT code, type FROM user_assets WHERE type != 'fund'")
-            .all();
-
-        if (!assets?.length) {
-            console.log('[RealtimeSync] No stock assets, skipped.');
-            return;
-        }
-
-        const points = [];
-
-        for (let i = 0; i < assets.length; i++) {
-            // 预估单次循环消耗：1 (Fetch) + 1 (Write) ≈ 2
-            if (subreqCount >= SUBREQ_BUDGET) {
-                const msg = `Budget reached (${subreqCount}/${SUBREQ_BUDGET}). Skipped remaining ${assets.length - i} stocks.`;
-                console.warn(`[RealtimeSync] ${msg}`);
-                budgetExceeded = true;
-                break;
-            }
-
-            const asset = assets[i];
-            try {
-                const quote = await _fetchOne(asset);
-                if (quote) {
-                    points.push(quote);
-                    ok++;
-                }
-                subreqCount += 1;
-            } catch (e) {
-                fail++;
-                errors.push(`${asset.code} — ${e.message}`);
-                subreqCount += 1;
-            }
-
-            if (i < assets.length - 1) await _sleep(BATCH_DELAY_MS);
-        }
-
-        if (points.length > 0) {
-            await saveIntradayPointsBulk(points, env);
-            subreqCount += 1;
-        }
-
-        // 4. 定期清理（每 PRUNE_EVERY_N 次触发一次）
-        if (_triggerCount % PRUNE_EVERY_N === 0 && subreqCount < 48) {
-            await pruneIntradayPoints(env);
-            console.log(`[RealtimeSync] pruneIntradayPoints executed (trigger #${_triggerCount})`);
-        }
-
-        // 5. 日志：只在有失败或熔断时写 D1
-        const elapsed = Math.round((Date.now() - t0) / 1000);
-        if (fail > 0 || budgetExceeded) {
-            const summary = `Done in ${elapsed}s — ${ok} OK, ${fail} failed, Budget Exceeded: ${budgetExceeded} / ${assets.length} total`;
-            await _log(env, 'WARN', 'RealtimeSync', summary);
-            if (errors.length) {
-                await _log(env, 'ERROR', 'RealtimeSync',
-                    `Errors: ${errors.slice(0, 5).join(' | ')}`);
-            }
-        } else {
-            console.log(`[RealtimeSync] Done in ${elapsed}s — ${ok}/${assets.length} OK (Subreqs: ${subreqCount})`);
-        }
-
-    } catch (e) {
-        console.error('[RealtimeSync] Fatal:', e.message);
-        await _log(env, 'ERROR', 'RealtimeSync', `Fatal: ${e.message}`);
-    }
-}
-
-// ── 单资产行情拉取 ────────────────────────────────────────────────────────────
-
-async function _fetchOne(asset) {
-    const { code } = asset;
-
-    const ctrl = new AbortController();
-    const tid = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT);
-
-    try {
-        // fetchStockQuote 返回 { code, type, price, changePct, time, vol }
-        // time 已是 "HH:MM" 格式，直接对应 asset_intraday_points.time
-        return await fetchStockQuote(code, ctrl.signal);
-    } finally {
-        clearTimeout(tid);
-    }
-}
-
-// ── 工具 ─────────────────────────────────────────────────────────────────────
-
-async function _log(env, level, module, message) {
-    try {
-        await env.DB
-            .prepare('INSERT INTO system_logs (level, module, message) VALUES (?, ?, ?)')
-            .bind(level, module, message)
-            .run();
-    } catch (e) {
-        console.error('[RealtimeSync] log write failed:', e.message);
-    }
-}
-
-const _sleep = ms => new Promise(r => setTimeout(r, ms));
 </file>
 
 <file path="lib/cron/sentinel.js">
@@ -5721,521 +5668,260 @@ async function _log(db, level, source, message) {
 }
 </file>
 
-<file path="lib/storage/userRepo.js">
-import { queryOne, queryAll, getRequiredDb } from './d1Client';
-import { memoryCache } from './memoryCache';
+<file path="lib/storage/d1Client.js">
+// 模块级单例缓存，消除高频动态导入开销
+let _cfContext = null;
 
-const ASSETS_CACHE_PREFIX = 'user:assets:';
-const CACHE_TTL = 300000; // 5 分钟缓存
-
-/**
- * 获取用户的资产列表
- * @param {string} userId
- * @param {Object} env
- */
-export async function getUserAssets(userId, env = null) {
-    if (!userId) return [];
-
-    // 1. 优先查内存缓存
-    const cacheKey = ASSETS_CACHE_PREFIX + userId;
-    const cached = memoryCache.get(cacheKey);
-    if (cached) {
-        return cached;
-    }
-
-    const sql = 'SELECT code, type FROM user_assets WHERE user_id = ? ORDER BY added_at ASC';
-    const assets = await queryAll(sql, [userId], env);
-
-    // 2. 回填内存，直接利用 memoryCache 内置 TTL
-    memoryCache.set(cacheKey, assets, CACHE_TTL);
-
-    return assets;
-}
-
-/**
- * 检查用户是否在 D1 中存在
- * @param {string} userId
- * @param {Object} env
- */
-export async function checkUserExists(userId, env = null) {
-    if (!userId) return false;
+async function _getCtx() {
+    if (_cfContext) return _cfContext;
     try {
-        const row = await queryOne('SELECT 1 FROM users WHERE id = ? LIMIT 1', [userId], env);
-        return !!row;
+        const { getCloudflareContext } = await import("@opennextjs/cloudflare");
+        _cfContext = await getCloudflareContext();
+        return _cfContext;
     } catch (e) {
-        console.error(`[UserRepo] checkUserExists failed for ${userId}:`, e.message);
-        return false;
+        return null;
     }
 }
 
 /**
- * 更新用户的资产列表 (全量覆盖模式，对齐原有 D1 行为)
- * @param {string} userId
- * @param {Array} assets
- * @param {Object} env
+ * 统合获取 Cloudflare 上下文 (用于访问 env.API_KEY 或 ctx.waitUntil)
  */
-export async function saveUserAssets(userId, assets, env = null) {
-    if (!userId) return false;
+export async function getCloudflareCtx() {
+    return await _getCtx();
+}
 
+/**
+ * 获取 D1 绑定，优先使用显式注入的 env，其次尝试环境上下文单例
+ */
+export async function getD1Storage(env = null) {
+    if (env?.DB) return env.DB;
+    // 回退：尝试从多个潜在注入点获取 D1 绑定 (OpenNext / Next.js 本地开发模式适配)
+    const ctx = await getCloudflareCtx();
+    const db = ctx?.env?.DB ||
+        process.env.DB ||
+        globalThis.DB ||
+        (process.env.__NEXT_D1_BINDING ? JSON.parse(process.env.__NEXT_D1_BINDING) : null);
+    return db || null;
+}
+
+/**
+ * 确保 DB 绑定存在
+ */
+export async function getRequiredDb(env = null) {
+    const db = await getD1Storage(env);
+    if (!db) {
+        throw new Error('D1_BINDING_MISSING: Database binding "DB" is not available.');
+    }
+    return db;
+}
+
+/**
+ * 执行简单 SQL (用于 INSERT/UPDATE/DELETE)
+ */
+export async function runSql(sql, params = [], env = null) {
     const db = await getRequiredDb(env);
-
     try {
-        // 使用事务确保更新原子性
-        const statements = [
-            // 1. 确保用户存在
-            db.prepare('INSERT OR IGNORE INTO users (id) VALUES (?)').bind(userId),
-            db.prepare('UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = ?').bind(userId),
-            // 2. 删除旧资产
-            db.prepare('DELETE FROM user_assets WHERE user_id = ?').bind(userId)
-        ];
-
-        // 3. 插入新资产
-        for (const a of assets) {
-            statements.push(
-                db.prepare('INSERT INTO user_assets (user_id, code, type) VALUES (?, ?, ?)')
-                    .bind(userId, a.code.toLowerCase(), a.type)
-            );
-        }
-
-        await db.batch(statements);
-
-        // 关键：更新成功后立即清理内存缓存，确保下次读取到最新数据
-        memoryCache.delete(ASSETS_CACHE_PREFIX + userId);
-
-        console.log(`[UserRepo] saveUserAssets success for ${userId}, items: ${assets.length}`);
-        return true;
+        return await db.prepare(sql).bind(...params).run();
     } catch (e) {
-        console.error(`[UserRepo] saveUserAssets CRITICAL FAILED for ${userId}:`, e.message);
-        console.error(`[UserRepo] SQL Error Details:`, e);
+        e.d1Source = 'runSql'; // 溯源标记
+        console.error(`[D1Client] runSql failed: ${e.message}`, { sql, params });
         throw e;
     }
 }
 
 /**
- * 获取去重后的所有用户资产 (用于 Cron 全量同步)
- * @param {Object} env
+ * 查询单行
  */
-export async function getGlobalUniqueAssets(env = null) {
-    return await queryAll('SELECT DISTINCT code, type FROM user_assets', [], env);
-}
-
-/**
- * 获取所有活跃用户 ID (用于 Cron 任务)
- * @param {Object} env
- */
-export async function getAllUserIds(env = null) {
-    const rows = await queryAll('SELECT id FROM users', [], env);
-    return rows.map(r => r.id);
-}
-
-/**
- * 删除用户及其资产
- * @param {string} userId
- * @param {Object} env
- */
-export async function deleteUser(userId, env = null) {
-    if (!userId) return false;
+export async function queryOne(sql, params = [], env = null) {
     const db = await getRequiredDb(env);
+    try {
+        return await db.prepare(sql).bind(...params).first();
+    } catch (e) {
+        e.d1Source = 'queryOne'; // 溯源标记
+        console.error(`[D1Client] queryOne failed: ${e.message}`, { sql, params });
+        throw e;
+    }
+}
+
+/**
+ * 查询多行
+ */
+export async function queryAll(sql, params = [], env = null) {
+    const db = await getRequiredDb(env);
+    try {
+        const { results } = await db.prepare(sql).bind(...params).all();
+        return results || [];
+    } catch (e) {
+        e.d1Source = 'queryAll'; // 溯源标记
+        console.error(`[D1Client] queryAll failed: ${e.message}`, { sql, params });
+        throw e;
+    }
+}
+
+/**
+ * 批量执行 SQLs
+ */
+export async function batchSql(statements, env = null) {
+    const db = await getRequiredDb(env);
+    const CHUNK = 100;
+    const allResults = [];
+    try {
+        for (let i = 0; i < statements.length; i += CHUNK) {
+            const chunk = statements.slice(i, i + CHUNK);
+            const batchResult = await db.batch(chunk);
+            allResults.push(...batchResult);
+        }
+        return allResults;
+    } catch (e) {
+        e.d1Source = 'batchSql'; // 溯源标记
+        console.error(`[D1Client] batchSql failed: ${e.message}`);
+        throw e;
+    }
+}
+</file>
+
+<file path="app/api/admin/stats/route.js">
+import { NextResponse } from 'next/server';
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+
+import { isAdminAuthorized } from '@/lib/storage/authRepo';
+import { getAllApiHealth } from '@/lib/storage/healthRepo';
+import { memoryCache } from '@/lib/storage/memoryCache';
+
+const STATS_CACHE_KEY = 'admin_stats_full';
+const CACHE_TTL = 10000; // 10s 缓存
+
+export async function GET(request) {
+    if (!(await isAdminAuthorized(request))) {
+        return NextResponse.json({ error: 'Unauthorized' }, { status: 403 });
+    }
+
+    const { searchParams } = new URL(request.url);
+    const shouldSync = searchParams.get('sync') === 'true';
+
+    if (!shouldSync) {
+        const cached = memoryCache.get(STATS_CACHE_KEY);
+        if (cached) {
+            return NextResponse.json(cached);
+        }
+    }
 
     try {
-        await db.batch([
-            db.prepare('DELETE FROM user_sessions WHERE user_id = ?').bind(userId),
-            db.prepare('DELETE FROM user_assets WHERE user_id = ?').bind(userId),
-            db.prepare('DELETE FROM users WHERE id = ?').bind(userId)
+        if (shouldSync) {
+            const { syncCounterFromTable } = await import('@/lib/storage/statsRepo');
+            await Promise.all([
+                syncCounterFromTable('users', 'users'),
+                syncCounterFromTable('asset_stocks', 'asset_names', 'type = "stock"'),
+                syncCounterFromTable('asset_funds', 'asset_names', 'type = "fund"'),
+                syncCounterFromTable('quotes_count', 'asset_quotes')
+            ]);
+        }
+
+        const { getCounters } = await import('@/lib/storage/statsRepo');
+        const counters = await getCounters([
+            'users', 'asset_stocks', 'asset_funds', 'history_points',
+            'intraday_points', 'quotes_count'
         ]);
 
-        // 维度 3 优化: 更新计数器
-        const { decrementCounter } = await import('./statsRepo');
-        await decrementCounter('users', 1, env);
+        const healthData = await (async () => {
+            try { return await getAllApiHealth(); } catch (e) { return []; }
+        })();
 
-        return true;
+        const finalStats = {
+            users: counters.users,
+            stocks: counters.asset_stocks,
+            funds: counters.asset_funds,
+            history_points: counters.history_points,
+            intraday_points: counters.intraday_points,
+            quotes_count: counters.quotes_count,
+            db_engine: 'Cloudflare D1 (SQLite) + Counters',
+            api_health: healthData || []
+        };
+
+        memoryCache.set(STATS_CACHE_KEY, finalStats, CACHE_TTL);
+
+        return NextResponse.json(finalStats);
     } catch (e) {
-        console.error(`[UserRepo] deleteUser failed for ${userId}:`, e.message);
-        return false;
+        console.error('[AdminStats] Global Critical Failure:', e.message);
+        return NextResponse.json({ error: 'INTERNAL_SERVER_ERROR' }, { status: 500 });
     }
 }
 </file>
 
-<file path="schema.sql">
--- 用户索引表
-CREATE TABLE IF NOT EXISTS users (
-    id          TEXT PRIMARY KEY,
-    password_hash TEXT,
-    email       TEXT UNIQUE,
-    created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
-    last_login  DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-
--- 会话表 (SaaS 认证)
-CREATE TABLE IF NOT EXISTS user_sessions (
-    token       TEXT PRIMARY KEY,
-    user_id     TEXT NOT NULL,
-    created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
-    expires_at  DATETIME NOT NULL,
-    FOREIGN KEY(user_id) REFERENCES users(id)
-);
-CREATE INDEX IF NOT EXISTS idx_sessions_user ON user_sessions(user_id);
-
--- 用户资产关联表
-CREATE TABLE IF NOT EXISTS user_assets (
-    user_id TEXT NOT NULL,
-    code TEXT NOT NULL,
-    type TEXT NOT NULL,
-    added_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY(user_id, code, type),
-    FOREIGN KEY(user_id) REFERENCES users(id)
-);
-
--- 资产基本信息 (名称库)
-CREATE TABLE IF NOT EXISTS asset_names (
-    code TEXT NOT NULL,
-    type TEXT NOT NULL,
-    name TEXT NOT NULL,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY(code, type)
-);
-
--- 历史价格
-CREATE TABLE IF NOT EXISTS asset_history (
-    code TEXT NOT NULL,
-    type TEXT NOT NULL,
-    price REAL NOT NULL,
-    record_date TEXT NOT NULL,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY(code, type, record_date)
-);
-
--- 分时数据 (按天存储的聚合 JSON)
-CREATE TABLE IF NOT EXISTS asset_intraday (
-    code TEXT NOT NULL,
-    record_date TEXT NOT NULL,
-    data TEXT NOT NULL,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY(code, record_date)
-);
-
--- 分时数据点 (颗粒度到分钟)
-CREATE TABLE IF NOT EXISTS asset_intraday_points (
-    code TEXT NOT NULL,
-    time DATETIME NOT NULL,
-    price REAL NOT NULL,
-    vol REAL NOT NULL,
-    PRIMARY KEY(code, time)
-);
-CREATE INDEX IF NOT EXISTS idx_intra_points_code_time ON asset_intraday_points(code, time DESC);
-
--- 报价缓存 (D1 历史缓存表)
-CREATE TABLE IF NOT EXISTS asset_quotes (
-    code TEXT PRIMARY KEY,
-    name TEXT,
-    price REAL,
-    change REAL,
-    changePercent REAL,
-    prevClose REAL,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-
--- 系统日志 (按计划禁用或存入 D1)
-CREATE TABLE IF NOT EXISTS system_logs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    level TEXT NOT NULL,
-    module TEXT,
-    message TEXT NOT NULL,
-    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-
--- 管理员会话表
-CREATE TABLE IF NOT EXISTS admin_sessions (
-    token TEXT PRIMARY KEY,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    expires_at DATETIME NOT NULL
-);
-
--- 外部 API 健康监控
-CREATE TABLE IF NOT EXISTS api_health (
-    api_name TEXT PRIMARY KEY,
-    status TEXT DEFAULT 'unknown',
-    success_rate TEXT DEFAULT '0/0',
-    avg_latency INTEGER DEFAULT 0,
-    success_count INTEGER DEFAULT 0,
-    fail_count INTEGER DEFAULT 0,
-    total_count INTEGER DEFAULT 0,
-    recent_results TEXT DEFAULT '',
-    last_check DATETIME DEFAULT CURRENT_TIMESTAMP,
-    heartbeat_ts DATETIME DEFAULT CURRENT_TIMESTAMP,
-    error_msg TEXT
-);
-
--- 计数器表 (维度 3 优化: 将 O(N) 统计降为 O(1))
-CREATE TABLE IF NOT EXISTS system_stats (
-    key TEXT PRIMARY KEY,
-    value INTEGER DEFAULT 0,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX IF NOT EXISTS idx_logs_timestamp ON system_logs(timestamp);
-
--- [Optimization] 提升近期统计查询速度 (用于 recent_growth)
-CREATE INDEX IF NOT EXISTS idx_asset_history_created_at ON asset_history (created_at);
-</file>
-
-<file path="components/AssetCard.js">
-'use client';
-
-import { useState, useEffect, useRef, memo, useMemo } from 'react';
-import useSWR from 'swr';
-import { motion } from 'framer-motion';
-import { Trash2 } from 'lucide-react';
-import dynamic from 'next/dynamic';
-import { calculatePerformance } from '@/lib/utils';
-import { fetchBulkHistory } from '@/services/api/historyService';
-import { fetchBulkIntradayData } from '@/services/api/intradayService';
-
-// 懒加载重型图表库，显式禁用 SSR 以减小边缘运行时包体积
-const VolatilityChart = dynamic(() => import('./VolatilityChart'), { ssr: false });
-const IntradayChart = dynamic(() => import('./IntradayChart'), { ssr: false });
-
-// 独立子组件，展示具体时段的表现
-function MetricPanel({ label, value, history = [], days }) {
-    if (value === null || value === undefined) {
-        return (
-            <div className="flex flex-col gap-2 opacity-50">
-                <div className="flex justify-between items-end">
-                    <span className="text-sm font-bold opacity-40 uppercase tracking-tighter">{label}表现</span>
-                    <span className="text-base font-mono font-bold text-white/20">--</span>
-                </div>
-                <div className="h-[80px] bg-white/5 rounded-lg border border-white/5 flex items-center justify-center text-[10px] italic">
-                    无数据
-                </div>
-            </div>
-        );
-    }
-
-    const isPositive = value >= 0;
-    return (
-        <div className="flex flex-col gap-2">
-            <div className="flex justify-between items-end">
-                <span className="text-sm font-bold opacity-40 uppercase tracking-tighter">{label}表现</span>
-                <span className={`text-base font-mono font-bold ${isPositive ? 'text-red-400' : 'text-green-400'}`}>
-                    {isPositive ? '+' : ''}{value.toFixed(2)}%
-                </span>
-            </div>
-            {history.length > 0 ? (
-                <VolatilityChart
-                    data={calculatePerformance(history, days)}
-                    title={label}
-                    color={isPositive ? '#ef4444' : '#10b981'}
-                    height={80}
-                    compact={true}
-                />
-            ) : (
-                <div className="h-[80px] flex items-center justify-center text-white/20 text-[10px] italic bg-white/5 rounded-lg">
-                    图表加载中...
-                </div>
-            )}
-        </div>
-    );
-}
-
-function AssetCardComponent({ asset, onRemove, mode = 'volatility' }) {
-    const [isVisible, setIsVisible] = useState(false);
-    const containerRef = useRef(null);
-
-    // 监听进入视口，实现延迟实例化与数据拉取
-    useEffect(() => {
-        if (!containerRef.current) return;
-        const obs = new IntersectionObserver(([entry]) => {
-            if (entry.isIntersecting) {
-                setIsVisible(true);
-                obs.disconnect();
-            }
-        }, { rootMargin: '200px' });
-
-        obs.observe(containerRef.current);
-        return () => obs.disconnect();
-    }, []);
-
-    // 取得 localStorage 中的缓存作为首屏 fallback
-    const cachedHistory = useMemo(() => {
-        try { return JSON.parse(localStorage.getItem(`tracker_cache_hist:${asset.type}:${asset.code}`)) }
-        catch { return undefined }
-    }, [asset.type, asset.code]);
-
-    const cachedIntraday = useMemo(() => {
-        try { return JSON.parse(localStorage.getItem(`tracker_cache_intra:${asset.type}:${asset.code}`)) }
-        catch { return undefined }
-    }, [asset.type, asset.code]);
-
-    // 1. 历史数据获取 (仅在 volatility 模式且可见时启用)
-    const { data: historyData } = useSWR(
-        isVisible && mode === 'volatility' ? `hist:${asset.type}:${asset.code}` : null,
-        () => fetchBulkHistory([{ code: asset.code, type: asset.type }], false).then(res => res[`${asset.type}:${asset.code}`]),
-        {
-            fallbackData: cachedHistory,
-            revalidateOnFocus: false, // 历史数据不随切换 Tab 刷新
-            onSuccess: (data) => {
-                if (data) localStorage.setItem(`tracker_cache_hist:${asset.type}:${asset.code}`, JSON.stringify(data));
-            }
-        }
-    );
-
-    // 2. 分时数据获取 (仅在 realtime 模式且可见时启用，自动轮询 2 分钟)
-    const { data: intradayData, isValidating: isIntraValidating } = useSWR(
-        isVisible && mode === 'realtime' ? `intra:${asset.type}:${asset.code}` : null,
-        () => fetchBulkIntradayData([{ code: asset.code, type: asset.type }], true).then(res => res[asset.code]),
-        {
-            fallbackData: cachedIntraday,
-            refreshInterval: 120000,
-            onSuccess: (data) => {
-                if (data) localStorage.setItem(`tracker_cache_intra:${asset.type}:${asset.code}`, JSON.stringify(data));
-            }
-        }
-    );
-
-    const history = (historyData?.history?.length > 0) ? historyData.history : (asset.history ?? []);
-    // 修改：初始值设为 null，防止 +0.00% 的误导 (High Prio Fix)
-    const summary = (historyData?.summary) ?? (asset.summary ?? { perf5d: null, perf22d: null, perf250d: null });
-    const isHistorySyncing = historyData?.status === 'syncing';
-
-    const intraPoints = intradayData?.points ?? [];
-    const isPositiveChange = (asset.changePercent ?? 0) >= 0;
-
-    return (
-        <motion.div
-            ref={containerRef}
-            layout
-            id={`asset-${asset.code}`}
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0 }} // 移除 scale 以防止 layout 动画抖动 (Low Prio Fix)
-            className="glass-effect p-4 lg:p-5 group"
-        >
-            <div className="flex justify-between items-center mb-4">
-                <div className="flex-1 min-w-0 mr-4">
-                    <h3 className="text-lg font-black italic truncate whitespace-nowrap leading-tight">
-                        {asset.name}
-                    </h3>
-                    {mode === 'realtime' && (
-                        <p className={`text-sm font-mono font-bold mt-0.5 ${isPositiveChange ? 'text-red-400' : 'text-green-400'}`}>
-                            {isPositiveChange ? '+' : ''}{asset.changePercent?.toFixed(2)}%
-                        </p>
-                    )}
-                </div>
-                <div className="flex items-center gap-4">
-                    <button
-                        onClick={() => onRemove(asset.code)}
-                        aria-label="删除资产"
-                        className="p-1.5 bg-white/5 hover:bg-red-500/20 hover:text-red-400 rounded-lg transition-all opacity-0 group-hover:opacity-100"
-                    >
-                        <Trash2 size={16} />
-                    </button>
-                </div>
-            </div>
-
-            {mode === 'realtime' ? (
-                <div className="mt-2">
-
-                    <div className="flex-1">
-                        {asset.type === 'fund' ? (
-                            <div className="h-[120px] flex items-center justify-center text-white/20 text-sm bg-white/5 rounded-xl border border-white/5">
-                                <span className="italic">场外基金不支持分时数据</span>
-                            </div>
-                        ) : (intraPoints.length > 0 && (asset.prevClose || intradayData?.prevClose)) ? (
-                            <IntradayChart
-                                data={intraPoints}
-                                // 修复：移除 asset.price 强制回退，防止误导性的分时渲染 (Mid Prio Fix)
-                                prevClose={asset.prevClose || intradayData?.prevClose}
-                                height={120}
-                            />
-                        ) : isIntraValidating ? (
-                            <div className="h-[120px] flex flex-col items-center justify-center text-white/20 text-sm gap-2 bg-white/5 rounded-xl border border-white/5">
-                                <motion.div
-                                    animate={{ rotate: 360 }}
-                                    transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
-                                    className="w-5 h-5 border-2 border-white/10 border-t-white/40 rounded-full"
-                                />
-                                <span className="italic">行情数据同步中，请稍候...</span>
-                            </div>
-                        ) : (
-                            <div className="h-[120px] flex items-center justify-center text-white/20 text-sm bg-white/5 rounded-xl border border-white/5">
-                                <span className="italic">今日暂无分时交易数据</span>
-                            </div>
-                        )}
-                    </div>
-                </div>
-            ) : isHistorySyncing ? (
-                <div className="h-[100px] flex flex-col items-center justify-center gap-3 bg-white/5 rounded-xl border border-dashed border-white/10">
-                    <motion.div
-                        animate={{ rotate: 360 }}
-                        transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
-                        className="w-5 h-5 border-2 border-cyan-500/20 border-t-cyan-500 rounded-full"
-                    />
-                    <span className="text-xs font-bold text-cyan-500/60 uppercase tracking-widest italic animate-pulse">
-                        历史行情同步中 (后台任务)...
-                    </span>
-                </div>
-            ) : (
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6 pt-2 border-t border-white/5">
-                    <MetricPanel label="5日" value={summary.perf5d} history={history} days={5} />
-                    <MetricPanel label="22日" value={summary.perf22d} history={history} days={22} />
-                    <MetricPanel label="250日" value={summary.perf250d} history={history} days={250} />
-                </div>
-            )}
-        </motion.div>
-    );
-}
-
-export default memo(AssetCardComponent, (prev, next) => {
-    return (
-        prev.mode === next.mode &&
-        prev.onRemove === next.onRemove && // 接入函数比对，防止闭包失效 (High Prio Fix)
-        prev.asset.code === next.asset.code &&
-        prev.asset.name === next.asset.name &&
-        prev.asset.price === next.asset.price &&
-        prev.asset.changePercent === next.asset.changePercent &&
-        prev.asset.history?.[prev.asset.history.length - 1]?.date === next.asset.history?.[next.asset.history.length - 1]?.date &&
-        prev.asset.intraday?.price === next.asset.intraday?.price
-    );
-});
-</file>
-
-<file path="lib/cron/historySync.js">
+<file path="lib/cron/realtimeSync.js">
 /**
- * src/lib/cron/historySync.js
+ * src/lib/cron/realtimeSync.js
  *
- * 历史数据增量同步，由 scheduled handler 在以下时间调用：
- *   周一到周五 21:00（北京）— 收盘后全量刷新
- *   周一到周六 03:00（北京）— 凌晨补跑，确保数据完整
+ * 盘中实时行情抓取，每 5 分钟由 scheduled handler 调用。
+ * 触发窗口：周一到周五 UTC 01:00-07:55 = 北京时间 09:00-15:55。
  *
- * 对齐 historyRepo.js 的实际存储结构：
- *   表名       asset_history
- *   日期字段   record_date（非 date）
- *   写入方法   insertDailyPricesBatch（内含物理截断，保留最近 250 条）
+ * 对齐 intradayRepo.js 的实际存储结构：
+ *   主表  asset_intraday_points (code, time, price, vol)  — 逐点存储，供分时图使用
+ *   日表  asset_intraday (code, record_date, data)        — JSON 全天数据，供收盘后归档
+ *
+ * intradayRepo 说明：
+ *   - saveIntraday 有盘中/收盘自动切换逻辑，但依赖 memoryCache。
+ *     scheduled handler 每次都是全新 Worker 实例，内存不持久，
+ *     因此盘中 cron 直接写 asset_intraday_points（持久化），不依赖内存缓存。
+ *   - saveIntradayPointsBulk / pruneIntradayPoints 是专为 cron 设计的接口，直接使用。
  *
  * 流程：
- *   1. 查询 user_assets 所有资产
- *   2. 分批并发拉取外部历史接口（每批 BATCH_SIZE 条，批间延迟防限流）
- *   3. 对每条资产查询 MAX(record_date) 做增量过滤，只写新数据
- *   4. 调用 insertDailyPricesBatch 写入 asset_history（含自动截断）
- *   5. 汇总写入 system_logs
+ *   1. 判断当前是否在交易时段（09:30-11:30 / 13:00-15:00），非交易时段静默跳过
+ *   2. 从 user_assets 读取所有股票资产（基金无盘中分时，跳过）
+ *   3. 分批并发拉取实时行情（每批 BATCH_SIZE 条）
+ *   4. 调用 saveIntradayPointsBulk 写入 asset_intraday_points
+ *   5. 每隔 PRUNE_EVERY_N 次触发一次 pruneIntradayPoints，防止无限增长
+ *   6. 失败时写 system_logs，成功时仅打 console（盘中高频，避免刷爆日志）
  *
- * 时间限制：scheduled handler 通过 ctx.waitUntil 运行，CPU 上限约 15 分钟。
+ * pruneIntradayPoints 说明：
+ *   每只股票保留最近 480 个分时点（约 4 天 × 每天 48 个5分钟K线），
+ *   每次全部 cron 触发都清理成本较高，故每 6 次（约 30 分钟）触发一次。
  */
 
-import { fetchStockHistory, fetchFundHistory } from '@/lib/services/historyFetcher';
-import { insertDailyPricesBatch } from '@/lib/storage/historyRepo';
+import { fetchStockQuote } from '@/lib/services/quoteFetcher';
+import { saveIntradayPointsBulk, pruneIntradayPoints } from '@/lib/storage/intradayRepo';
+import { getBeijingDate } from '@/lib/utils';
 
 // ── 常量 ────────────────────────────────────────────────────────────────────
 
-const BATCH_DELAY_MS = 100;   // 批间等待（ms）
-const SUBREQ_BUDGET = 45;    // D1 Free 计划硬上限 50，保留 5 次用于日志/基础开销
-const FETCH_TIMEOUT = 8000;  // 单资产拉取超时（ms）
-const HISTORY_DAYS = 365;   // 每次拉取的历史天数（historyRepo 会截断至 250 条）
+const BATCH_SIZE = 1;   // 降为 1 以便精确控制子请求预算
+const BATCH_DELAY_MS = 100;  // 批间等待（ms）
+const SUBREQ_BUDGET = 45;    // D1 Free 计划硬上限 50
+const FETCH_TIMEOUT = 5000; // 单资产行情超时（ms）
+
+// 每隔多少次 cron 触发执行一次 pruneIntradayPoints
+const PRUNE_EVERY_N = 6;
+
+// ── 交易时段（北京时间）──────────────────────────────────────────────────────
+
+const TRADING_SESSIONS = [
+    { open: '09:30', close: '11:30' },
+    { open: '13:00', close: '15:00' },
+];
+
+function _isTradingHour(now) {
+    const bjNow = getBeijingDate();
+    const h = bjNow.getHours();
+    const m = bjNow.getMinutes();
+    const hhmm = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+    return TRADING_SESSIONS.some(s => hhmm >= s.open && hhmm <= s.close);
+}
+
+// ── 简单计数器（模块级，Worker 实例存活期间有效）────────────────────────────
+let _triggerCount = 0;
 
 // ── 主入口 ──────────────────────────────────────────────────────────────────
 
-export async function runHistorySync(env, options = {}) {
-    const force = options.force === true;
+export async function runRealtimeSync(env) {
+    const now = new Date();
+
+    if (!_isTradingHour(now)) {
+        console.log('[RealtimeSync] Outside trading hours, skipped.');
+        return;
+    }
+
+    _triggerCount++;
     const t0 = Date.now();
     let ok = 0, fail = 0, budgetExceeded = false;
     let subreqCount = 1; // 初始 DB List 请求占 1 次
@@ -6243,113 +5929,88 @@ export async function runHistorySync(env, options = {}) {
 
     try {
         const { results: assets } = await env.DB
-            .prepare('SELECT DISTINCT code, type FROM user_assets')
+            .prepare("SELECT DISTINCT code, type FROM user_assets WHERE type != 'fund'")
             .all();
 
         if (!assets?.length) {
-            await _log(env, 'INFO', 'HistorySync', 'No assets, skipped.');
+            console.log('[RealtimeSync] No stock assets, skipped.');
             return;
         }
 
-        console.log(`[HistorySync] Starting for ${assets.length} assets ${force ? '(FORCE REFRESH)' : ''}`);
+        const points = [];
 
         for (let i = 0; i < assets.length; i++) {
-            // 预估单次循环消耗：1 (Check) + 1-3 (Fetch) + 1 (Write) ≈ 5
+            // 预估单次循环消耗：1 (Fetch) + 1 (Write) ≈ 2
             if (subreqCount >= SUBREQ_BUDGET) {
-                const msg = `Budget reached (${subreqCount}/${SUBREQ_BUDGET}). Skipped remaining ${assets.length - i} assets.`;
-                console.warn(`[HistorySync] ${msg}`);
-                await _log(env, 'WARN', 'HistorySync', msg);
+                const msg = `Budget reached (${subreqCount}/${SUBREQ_BUDGET}). Skipped remaining ${assets.length - i} stocks.`;
+                console.warn(`[RealtimeSync] ${msg}`);
                 budgetExceeded = true;
                 break;
             }
 
             const asset = assets[i];
             try {
-                const consumed = await _syncOne(env, asset, force);
-                subreqCount += consumed;
-                ok++;
+                const quote = await _fetchOne(asset);
+                if (quote) {
+                    points.push(quote);
+                    ok++;
+                }
+                subreqCount += 1;
             } catch (e) {
                 fail++;
-                errors.push(`${asset.type}:${asset.code} — ${e.message}`);
-                subreqCount += 2; // 即便失败，通常也消耗了 Check + Fetch
+                errors.push(`${asset.code} — ${e.message}`);
+                subreqCount += 1;
             }
 
             if (i < assets.length - 1) await _sleep(BATCH_DELAY_MS);
         }
 
+        if (points.length > 0) {
+            await saveIntradayPointsBulk(points, env);
+            subreqCount += 1;
+        }
+
+        // 4. 定期清理（每 PRUNE_EVERY_N 次触发一次，排除刚启动时的 0 计数）
+        if (_triggerCount > 0 && _triggerCount % PRUNE_EVERY_N === 0 && subreqCount < 48) {
+            await pruneIntradayPoints(env);
+            console.log(`[RealtimeSync] pruneIntradayPoints executed (trigger #${_triggerCount})`);
+        }
+
+        // 5. 日志：只在有失败或熔断时写 D1
         const elapsed = Math.round((Date.now() - t0) / 1000);
-        const summary = `Done in ${elapsed}s — ${ok} OK, ${fail} failed, Budget Exceeded: ${budgetExceeded} / ${assets.length} total`;
-        console.log(`[HistorySync] ${summary}`);
-        await _log(env, fail > 0 || budgetExceeded ? 'WARN' : 'INFO', 'HistorySync', summary);
-
-        // 5. 定期清理任务 (SaaS: 自动删除过期会话)
-        if (subreqCount < 48) { // 留最后几格配额给清理操作
-            await env.DB.prepare("DELETE FROM user_sessions WHERE expires_at < datetime('now')").run();
+        if (fail > 0 || budgetExceeded) {
+            const summary = `Done in ${elapsed}s — ${ok} OK, ${fail} failed, Budget Exceeded: ${budgetExceeded} / ${assets.length} total`;
+            await _log(env, 'WARN', 'RealtimeSync', summary);
+            if (errors.length) {
+                await _log(env, 'ERROR', 'RealtimeSync',
+                    `Errors: ${errors.slice(0, 5).join(' | ')}`);
+            }
+        } else {
+            console.log(`[RealtimeSync] Done in ${elapsed}s — ${ok}/${assets.length} OK (Subreqs: ${subreqCount})`);
         }
 
-        if (errors.length) {
-            await _log(env, 'ERROR', 'HistorySync',
-                `Errors: ${errors.slice(0, 5).join(' | ')}`);
-        }
     } catch (e) {
-        console.error('[HistorySync] Fatal:', e.message);
-        await _log(env, 'ERROR', 'HistorySync', `Fatal: ${e.message}`);
+        console.error('[RealtimeSync] Fatal:', e.message);
+        await _log(env, 'ERROR', 'RealtimeSync', `Fatal: ${e.message}`);
     }
 }
 
-// ── 单资产同步 ───────────────────────────────────────────────────────────────
+// ── 单资产行情拉取 ────────────────────────────────────────────────────────────
 
-async function _syncOne(env, asset, force = false) {
-    const { code, type } = asset;
-    let consumed = 1; // 初始 DB Check 占 1 次
+async function _fetchOne(asset) {
+    const { code } = asset;
 
-    // 1. 查本地最新日期
-    const row = await env.DB
-        .prepare('SELECT MAX(record_date) AS latest FROM asset_history WHERE code = ? AND type = ?')
-        .bind(code.toLowerCase(), type)
-        .first();
-    const latestDate = row?.latest ?? null;
-
-    // 2. 拉取外部数据
     const ctrl = new AbortController();
     const tid = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT);
-    let history;
-    try {
-        // 因 fetchWithRetry 已改为 retry=0，此处固定占 1 次或多源级联 N 次
-        history = type === 'fund'
-            ? await fetchFundHistory(code, HISTORY_DAYS, ctrl.signal)
-            : await fetchStockHistory(code, HISTORY_DAYS, ctrl.signal);
 
-        consumed += (type === 'stock') ? 3 : 1; // 股票级联 3 源，基金 1 源
+    try {
+        // fetchStockQuote 返回 { code, type, price, changePct, time, vol }
+        // time 已是 "HH:MM" 格式，直接对应 asset_intraday_points.time
+        return await fetchStockQuote(code, ctrl.signal);
     } finally {
         clearTimeout(tid);
     }
-
-    if (!history?.length) {
-        console.log(`[HistorySync] ${type}:${code} skipped: empty response`);
-        return consumed;
-    }
-
-    // 3. 增量过滤 (如果是 force 模式，则全量保留)
-    const newRecords = (latestDate && !force)
-        ? history.filter(h => h.date > latestDate)
-        : history;
-
-    if (!newRecords.length) {
-        return consumed;
-    }
-
-    // 4. 批量写入 (1 次 D1 请求)
-    await insertDailyPricesBatch(
-        newRecords.map(r => ({ code, type, price: r.value, date: r.date })),
-        env
-    );
-    consumed += 1;
-
-    console.log(`[HistorySync] ${type}:${code} +${newRecords.length}`);
-    return consumed;
 }
-
 
 // ── 工具 ─────────────────────────────────────────────────────────────────────
 
@@ -6360,7 +6021,7 @@ async function _log(env, level, module, message) {
             .bind(level, module, message)
             .run();
     } catch (e) {
-        console.error('[HistorySync] log write failed:', e.message);
+        console.error('[RealtimeSync] log write failed:', e.message);
     }
 }
 
@@ -6835,120 +6496,6 @@ export async function getAllApiHealth(env = null) {
 }
 </file>
 
-<file path="lib/storage/quoteRepo.js">
-import { queryAll, runSql, getD1Storage, batchSql } from './d1Client';
-import { memoryCache } from './memoryCache';
-
-/**
- * 将批量报价写入 D1 和内存缓存
- * @param {Object} quotesMap
- * @param {Object} env
- */
-export async function saveQuotes(quotesMap, env = null) {
-    const timeStr = new Date().toISOString();
-    const db = await getD1Storage(env);
-
-    const entries = Object.entries(quotesMap);
-    if (entries.length === 0) return;
-
-    const now = Date.now();
-
-    // 2. 无条件更新内存缓存 (确保 L1 永远是最新的)
-    for (const [code, q] of entries) {
-        const lowerCode = code.toLowerCase();
-        memoryCache.set(`quote:${lowerCode}`, { ...q, updated_at: timeStr, code: lowerCode });
-    }
-
-    // 3. 持久化到 D1 (实施写限流保护)
-    if (db) {
-        const WRITE_INTERVAL_MS = 30 * 60 * 1000; // 30 分钟写一次 D1
-
-        try {
-            const statements = [];
-            for (const [code, q] of entries) {
-                const lowerCode = code.toLowerCase();
-
-                // 读内存里记录的上次 D1 物理写入时间（独立 key）
-                const lastD1Write = memoryCache.get(`quote:wts:${lowerCode}`) ?? 0;
-
-                // 写入条件：1. 内存中无记录 (重启/冷启动) 2. 距离上次写入超过 30 分钟
-                if (now - lastD1Write >= WRITE_INTERVAL_MS) {
-                    statements.push(
-                        db.prepare(`
-                            INSERT OR REPLACE INTO asset_quotes 
-                            (code, name, price, change, changePercent, prevClose, updated_at) 
-                            VALUES (?, ?, ?, ?, ?, ?, ?)
-                        `).bind(
-                            lowerCode,
-                            q.name,
-                            q.price,
-                            q.change,
-                            q.changePercent,
-                            q.prevClose,
-                            timeStr
-                        )
-                    );
-                    // 更新 D1 写入时间戳锁
-                    memoryCache.set(`quote:wts:${lowerCode}`, now);
-                }
-            }
-
-            if (statements.length > 0) {
-                // 分片执行批量任务
-                const CHUNK_SIZE = 50;
-                for (let i = 0; i < statements.length; i += CHUNK_SIZE) {
-                    const chunk = statements.slice(i, i + CHUNK_SIZE);
-                    await db.batch(chunk);
-                }
-                console.log(`[QuoteRepo] D1 physical write: ${statements.length}/${entries.length} (30m throttled)`);
-            }
-        } catch (e) {
-            console.warn(`[QuoteRepo] D1 batch insert failed:`, e?.message);
-        }
-    }
-}
-
-/**
- * 批量从 D1 或内存获取报价
- * @param {Array} codes
- * @param {Object} env
- */
-export async function getBulkQuotes(codes, env = null) {
-    if (!codes || codes.length === 0) return {};
-
-    const result = {};
-    const toQuery = [];
-
-    // 1. 先查内存缓存
-    for (const code of codes) {
-        const lowerCode = code.toLowerCase();
-        const cached = memoryCache.get(`quote:${lowerCode}`);
-        if (cached) {
-            result[lowerCode] = cached;
-        } else {
-            toQuery.push(lowerCode);
-        }
-    }
-
-    if (toQuery.length === 0) return result;
-
-    // 2. 查 D1 数据库
-    try {
-        const sql = `SELECT * FROM asset_quotes WHERE code IN (${toQuery.map(() => '?').join(',')})`;
-        const rows = await queryAll(sql, toQuery, env);
-        for (const row of rows) {
-            result[row.code] = row;
-            // 回填内存缓存
-            memoryCache.set(`quote:${row.code}`, row);
-        }
-    } catch (e) {
-        console.error('[QuoteRepo] getBulkQuotes failed:', e.message);
-    }
-
-    return result;
-}
-</file>
-
 <file path="lib/storage/historyRepo.js">
 import { queryOne, queryAll, runSql, getD1Storage } from './d1Client';
 
@@ -7082,6 +6629,223 @@ export async function getHistory(code, type, days = 250, env = null) {
 }
 </file>
 
+<file path="components/AssetCard.js">
+'use client';
+
+import { useState, useEffect, useRef, memo, useMemo } from 'react';
+import useSWR from 'swr';
+import { motion } from 'framer-motion';
+import { Trash2 } from 'lucide-react';
+import VolatilityChart from './VolatilityChart';
+import IntradayChart from './IntradayChart';
+import { calculatePerformance } from '@/lib/utils';
+import { fetchBulkHistory } from '@/services/api/historyService';
+import { fetchBulkIntradayData } from '@/services/api/intradayService';
+
+// 独立子组件，展示具体时段的表现
+function MetricPanel({ label, value, history = [], days }) {
+    if (value === null || value === undefined) {
+        return (
+            <div className="flex flex-col gap-2 opacity-50">
+                <div className="flex justify-between items-end">
+                    <span className="text-sm font-bold opacity-40 uppercase tracking-tighter">{label}表现</span>
+                    <span className="text-base font-mono font-bold text-white/20">--</span>
+                </div>
+                <div className="h-[80px] bg-white/5 rounded-lg border border-white/5 flex items-center justify-center text-[10px] italic">
+                    无数据
+                </div>
+            </div>
+        );
+    }
+
+    const isPositive = value >= 0;
+    return (
+        <div className="flex flex-col gap-2">
+            <div className="flex justify-between items-end">
+                <span className="text-sm font-bold opacity-40 uppercase tracking-tighter">{label}表现</span>
+                <span className={`text-base font-mono font-bold ${isPositive ? 'text-red-400' : 'text-green-400'}`}>
+                    {isPositive ? '+' : ''}{value.toFixed(2)}%
+                </span>
+            </div>
+            {history.length > 0 ? (
+                <VolatilityChart
+                    data={calculatePerformance(history, days)}
+                    title={label}
+                    color={isPositive ? '#ef4444' : '#10b981'}
+                    height={80}
+                    compact={true}
+                />
+            ) : (
+                <div className="h-[80px] flex items-center justify-center text-white/20 text-[10px] italic bg-white/5 rounded-lg">
+                    图表加载中...
+                </div>
+            )}
+        </div>
+    );
+}
+
+function AssetCardComponent({ asset, onRemove, mode = 'volatility' }) {
+    const [isVisible, setIsVisible] = useState(false);
+    const containerRef = useRef(null);
+
+    // 监听进入视口，实现延迟实例化与数据拉取
+    useEffect(() => {
+        if (!containerRef.current) return;
+        const obs = new IntersectionObserver(([entry]) => {
+            if (entry.isIntersecting) {
+                setIsVisible(true);
+                obs.disconnect();
+            }
+        }, { rootMargin: '200px' });
+
+        obs.observe(containerRef.current);
+        return () => obs.disconnect();
+    }, []);
+
+    // 取得 localStorage 中的缓存作为首屏 fallback
+    const cachedHistory = useMemo(() => {
+        try { return JSON.parse(localStorage.getItem(`tracker_cache_hist:${asset.type}:${asset.code}`)) }
+        catch { return undefined }
+    }, [asset.type, asset.code]);
+
+    const cachedIntraday = useMemo(() => {
+        try { return JSON.parse(localStorage.getItem(`tracker_cache_intra:${asset.type}:${asset.code}`)) }
+        catch { return undefined }
+    }, [asset.type, asset.code]);
+
+    // 1. 历史数据获取 (仅在 volatility 模式且可见时启用)
+    const { data: historyData } = useSWR(
+        isVisible && mode === 'volatility' ? `hist:${asset.type}:${asset.code}` : null,
+        () => fetchBulkHistory([{ code: asset.code, type: asset.type }], false).then(res => res[`${asset.type}:${asset.code}`]),
+        {
+            fallbackData: cachedHistory,
+            revalidateOnFocus: false, // 历史数据不随切换 Tab 刷新
+            onSuccess: (data) => {
+                if (data) localStorage.setItem(`tracker_cache_hist:${asset.type}:${asset.code}`, JSON.stringify(data));
+            }
+        }
+    );
+
+    // 2. 分时数据获取 (仅在 realtime 模式且可见时启用，自动轮询 2 分钟)
+    const { data: intradayData, isValidating: isIntraValidating } = useSWR(
+        isVisible && mode === 'realtime' ? `intra:${asset.type}:${asset.code}` : null,
+        () => fetchBulkIntradayData([{ code: asset.code, type: asset.type }], true).then(res => res[asset.code]),
+        {
+            fallbackData: cachedIntraday,
+            refreshInterval: 120000,
+            onSuccess: (data) => {
+                if (data) localStorage.setItem(`tracker_cache_intra:${asset.type}:${asset.code}`, JSON.stringify(data));
+            }
+        }
+    );
+
+    const history = (historyData?.history?.length > 0) ? historyData.history : (asset.history ?? []);
+    // 修改：初始值设为 null，防止 +0.00% 的误导 (High Prio Fix)
+    const summary = (historyData?.summary) ?? (asset.summary ?? { perf5d: null, perf22d: null, perf250d: null });
+    const isHistorySyncing = historyData?.status === 'syncing';
+
+    const intraPoints = intradayData?.points ?? [];
+    const isPositiveChange = (asset.changePercent ?? 0) >= 0;
+
+    return (
+        <motion.div
+            ref={containerRef}
+            layout
+            id={`asset-${asset.code}`}
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0 }} // 移除 scale 以防止 layout 动画抖动 (Low Prio Fix)
+            className="glass-effect p-4 lg:p-5 group"
+        >
+            <div className="flex justify-between items-center mb-4">
+                <div className="flex-1 min-w-0 mr-4">
+                    <h3 className="text-lg font-black italic truncate whitespace-nowrap leading-tight">
+                        {asset.name}
+                    </h3>
+                    {mode === 'realtime' && (
+                        <p className={`text-sm font-mono font-bold mt-0.5 ${isPositiveChange ? 'text-red-400' : 'text-green-400'}`}>
+                            {isPositiveChange ? '+' : ''}{asset.changePercent?.toFixed(2)}%
+                        </p>
+                    )}
+                </div>
+                <div className="flex items-center gap-4">
+                    <button
+                        onClick={() => onRemove(asset.code)}
+                        aria-label="删除资产"
+                        className="p-1.5 bg-white/5 hover:bg-red-500/20 hover:text-red-400 rounded-lg transition-all opacity-0 group-hover:opacity-100"
+                    >
+                        <Trash2 size={16} />
+                    </button>
+                </div>
+            </div>
+
+            {mode === 'realtime' ? (
+                <div className="mt-2">
+
+                    <div className="flex-1">
+                        {asset.type === 'fund' ? (
+                            <div className="h-[120px] flex items-center justify-center text-white/20 text-sm bg-white/5 rounded-xl border border-white/5">
+                                <span className="italic">场外基金不支持分时数据</span>
+                            </div>
+                        ) : (intraPoints.length > 0 && (asset.prevClose || intradayData?.prevClose)) ? (
+                            <IntradayChart
+                                data={intraPoints}
+                                // 修复：移除 asset.price 强制回退，防止误导性的分时渲染 (Mid Prio Fix)
+                                prevClose={asset.prevClose || intradayData?.prevClose}
+                                height={120}
+                            />
+                        ) : isIntraValidating ? (
+                            <div className="h-[120px] flex flex-col items-center justify-center text-white/20 text-sm gap-2 bg-white/5 rounded-xl border border-white/5">
+                                <motion.div
+                                    animate={{ rotate: 360 }}
+                                    transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
+                                    className="w-5 h-5 border-2 border-white/10 border-t-white/40 rounded-full"
+                                />
+                                <span className="italic">行情数据同步中，请稍候...</span>
+                            </div>
+                        ) : (
+                            <div className="h-[120px] flex items-center justify-center text-white/20 text-sm bg-white/5 rounded-xl border border-white/5">
+                                <span className="italic">今日暂无分时交易数据</span>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            ) : isHistorySyncing ? (
+                <div className="h-[100px] flex flex-col items-center justify-center gap-3 bg-white/5 rounded-xl border border-dashed border-white/10">
+                    <motion.div
+                        animate={{ rotate: 360 }}
+                        transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
+                        className="w-5 h-5 border-2 border-cyan-500/20 border-t-cyan-500 rounded-full"
+                    />
+                    <span className="text-xs font-bold text-cyan-500/60 uppercase tracking-widest italic animate-pulse">
+                        历史行情同步中 (后台任务)...
+                    </span>
+                </div>
+            ) : (
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6 pt-2 border-t border-white/5">
+                    <MetricPanel label="5日" value={summary.perf5d} history={history} days={5} />
+                    <MetricPanel label="22日" value={summary.perf22d} history={history} days={22} />
+                    <MetricPanel label="250日" value={summary.perf250d} history={history} days={250} />
+                </div>
+            )}
+        </motion.div>
+    );
+}
+
+export default memo(AssetCardComponent, (prev, next) => {
+    return (
+        prev.mode === next.mode &&
+        prev.onRemove === next.onRemove && // 接入函数比对，防止闭包失效 (High Prio Fix)
+        prev.asset.code === next.asset.code &&
+        prev.asset.name === next.asset.name &&
+        prev.asset.price === next.asset.price &&
+        prev.asset.changePercent === next.asset.changePercent &&
+        prev.asset.history?.[prev.asset.history.length - 1]?.date === next.asset.history?.[next.asset.history.length - 1]?.date &&
+        prev.asset.intraday?.price === next.asset.intraday?.price
+    );
+});
+</file>
+
 <file path=".github/workflows/deploy.yml">
 name: Deploy to Cloudflare Workers
 
@@ -7129,75 +6893,6 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-</file>
-
-<file path="app/api/admin/stats/route.js">
-import { NextResponse } from 'next/server';
-export const dynamic = 'force-dynamic';
-export const revalidate = 0;
-
-import { isAdminAuthorized } from '@/lib/storage/authRepo';
-import { getAllApiHealth } from '@/lib/storage/healthRepo';
-import { memoryCache } from '@/lib/storage/memoryCache';
-
-const STATS_CACHE_KEY = 'admin_stats_full';
-const CACHE_TTL = 10000; // 10s 缓存
-
-export async function GET(request) {
-    if (!(await isAdminAuthorized(request))) {
-        return NextResponse.json({ error: 'Unauthorized' }, { status: 403 });
-    }
-
-    const { searchParams } = new URL(request.url);
-    const shouldSync = searchParams.get('sync') === 'true';
-
-    if (!shouldSync) {
-        const cached = memoryCache.get(STATS_CACHE_KEY);
-        if (cached) {
-            return NextResponse.json(cached);
-        }
-    }
-
-    try {
-        if (shouldSync) {
-            const { syncCounterFromTable } = await import('@/lib/storage/statsRepo');
-            await Promise.all([
-                syncCounterFromTable('users', 'users'),
-                syncCounterFromTable('asset_stocks', 'asset_names', 'type = "stock"'),
-                syncCounterFromTable('asset_funds', 'asset_names', 'type = "fund"'),
-                syncCounterFromTable('quotes_count', 'asset_quotes')
-            ]);
-        }
-
-        const { getCounters } = await import('@/lib/storage/statsRepo');
-        const counters = await getCounters([
-            'users', 'asset_stocks', 'asset_funds', 'history_points',
-            'intraday_points', 'quotes_count'
-        ]);
-
-        const healthData = await (async () => {
-            try { return await getAllApiHealth(); } catch (e) { return []; }
-        })();
-
-        const finalStats = {
-            users: counters.users,
-            stocks: counters.asset_stocks,
-            funds: counters.asset_funds,
-            history_points: counters.history_points,
-            intraday_points: counters.intraday_points,
-            quotes_count: counters.quotes_count,
-            db_engine: 'Cloudflare D1 (SQLite) + Counters',
-            api_health: healthData || []
-        };
-
-        memoryCache.set(STATS_CACHE_KEY, finalStats, CACHE_TTL);
-
-        return NextResponse.json(finalStats);
-    } catch (e) {
-        console.error('[AdminStats] Global Critical Failure:', e.message);
-        return NextResponse.json({ error: 'INTERNAL_SERVER_ERROR' }, { status: 500 });
-    }
-}
 </file>
 
 <file path="components/DashboardClient.js">
@@ -7439,194 +7134,404 @@ export default function DashboardClient() {
 }
 </file>
 
-<file path="app/api/cron/sync/route.js">
+<file path="lib/cron/historySync.js">
 /**
- * src/app/api/cron/sync/route.js
+ * src/lib/cron/historySync.js
  *
- * 手动触发盘中实时行情同步的 HTTP 调试入口。
- * 正式生产由 wrangler.toml cron + scheduled handler 驱动，本文件仅供调试。
+ * 历史数据增量同步，由 scheduled handler 在以下时间调用：
+ *   周一到周五 21:00（北京）— 收盘后全量刷新
+ *   周一到周六 03:00（北京）— 凌晨补跑，确保数据完整
  *
- * 调用方式：
- *   GET /api/cron/sync?task=realtime&secret=YOUR_SECRET
- *   GET /api/cron/sync?task=history&secret=YOUR_SECRET
- *   GET /api/cron/sync?task=sentinel&secret=YOUR_SECRET
+ * 对齐 historyRepo.js 的实际存储结构：
+ *   表名       asset_history
+ *   日期字段   record_date（非 date）
+ *   写入方法   insertDailyPricesBatch（内含物理截断，保留最近 250 条）
  *
- * 环境变量：
- *   CRON_SECRET  调用密钥，必须配置，否则非生产环境也拒绝访问
+ * 流程：
+ *   1. 查询 user_assets 所有资产
+ *   2. 分批并发拉取外部历史接口（每批 BATCH_SIZE 条，批间延迟防限流）
+ *   3. 对每条资产查询 MAX(record_date) 做增量过滤，只写新数据
+ *   4. 调用 insertDailyPricesBatch 写入 asset_history（含自动截断）
+ *   5. 汇总写入 system_logs
+ *
+ * 时间限制：scheduled handler 通过 ctx.waitUntil 运行，CPU 上限约 15 分钟。
  */
 
-import { NextResponse } from 'next/server';
-import { runHistorySync } from '@/lib/cron/historySync';
-import { runRealtimeSync } from '@/lib/cron/realtimeSync';
-import { runSentinel } from '@/lib/cron/sentinel';
-import { isAdminAuthorized } from '@/lib/storage/authRepo';
+import { fetchStockHistory, fetchFundHistory } from '@/lib/services/historyFetcher';
+import { insertDailyPricesBatch } from '@/lib/storage/historyRepo';
 
-export const dynamic = 'force-dynamic';
+// ── 常量 ────────────────────────────────────────────────────────────────────
 
-const TASK_MAP = {
-    history: runHistorySync,
-    realtime: runRealtimeSync,
-    sentinel: runSentinel,
-};
+const BATCH_DELAY_MS = 100;   // 批间等待（ms）
+const SUBREQ_BUDGET = 45;    // D1 Free 计划硬上限 50，保留 5 次用于日志/基础开销
+const FETCH_TIMEOUT = 8000;  // 单资产拉取超时（ms）
+const HISTORY_DAYS = 365;   // 每次拉取的历史天数（historyRepo 会截断至 250 条）
 
-export async function GET(request) {
-    const { searchParams } = new URL(request.url);
+// ── 主入口 ──────────────────────────────────────────────────────────────────
 
-    // ── 鉴权：统一使用管理员校验 ───────────────────────────────────────
-    if (!(await isAdminAuthorized(request))) {
-        return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
-    }
-
-    // ── 路由 ────────────────────────────────────────────────────────────────
-    const task = searchParams.get('task') ?? 'realtime';
-    const runner = TASK_MAP[task];
-
-    if (!runner) {
-        return NextResponse.json(
-            { success: false, error: `Unknown task "${task}". Valid: ${Object.keys(TASK_MAP).join(', ')}` },
-            { status: 400 }
-        );
-    }
-
-    // ── 执行 ────────────────────────────────────────────────────────────────
-    // 统合规范：直接使用 getD1Storage() 获取绑定，支持 context 与 global 注入
-    const { getD1Storage } = await import('@/lib/storage/d1Client');
-    const db = await getD1Storage();
-    const env = { DB: db };
+export async function runHistorySync(env, options = {}) {
+    const { force, type } = options;
+    const t0 = Date.now();
+    let ok = 0, fail = 0, budgetExceeded = false;
+    let subreqCount = 1; // 初始 DB List 请求占 1 次
+    const errors = [];
 
     try {
-        const t0 = Date.now();
-        const force = searchParams.get('force') === '1';
-        await runner(env, { force });
-        const elapsed = Date.now() - t0;
-        return NextResponse.json({ success: true, task, force, elapsed_ms: elapsed });
+        let query = 'SELECT DISTINCT code, type FROM user_assets';
+        let params = [];
+        if (type) {
+            query += ' WHERE type = ?';
+            params.push(type);
+        }
+
+        const { results: assets } = await env.DB
+            .prepare(query)
+            .bind(...params)
+            .all();
+
+        if (!assets?.length) {
+            await _log(env, 'INFO', 'HistorySync', 'No assets, skipped.');
+            return;
+        }
+
+        console.log(`[HistorySync] Starting for ${assets.length} assets ${force ? '(FORCE REFRESH)' : ''}`);
+
+        for (let i = 0; i < assets.length; i++) {
+            // 预估单次循环消耗：1 (Check) + 1-3 (Fetch) + 1 (Write) ≈ 5
+            if (subreqCount >= SUBREQ_BUDGET) {
+                const msg = `Budget reached (${subreqCount}/${SUBREQ_BUDGET}). Skipped remaining ${assets.length - i} assets.`;
+                console.warn(`[HistorySync] ${msg}`);
+                await _log(env, 'WARN', 'HistorySync', msg);
+                budgetExceeded = true;
+                break;
+            }
+
+            const asset = assets[i];
+            try {
+                const consumed = await _syncOne(env, asset, force);
+                subreqCount += consumed;
+                ok++;
+            } catch (e) {
+                fail++;
+                errors.push(`${asset.type}:${asset.code} — ${e.message}`);
+                subreqCount += 2; // 即便失败，通常也消耗了 Check + Fetch
+            }
+
+            if (i < assets.length - 1) await _sleep(BATCH_DELAY_MS);
+        }
+
+        const elapsed = Math.round((Date.now() - t0) / 1000);
+        const summary = `Done in ${elapsed}s — ${ok} OK, ${fail} failed, Budget Exceeded: ${budgetExceeded} / ${assets.length} total`;
+        console.log(`[HistorySync] ${summary}`);
+        await _log(env, fail > 0 || budgetExceeded ? 'WARN' : 'INFO', 'HistorySync', summary);
+
+        // 5. 定期清理任务 (SaaS: 自动删除过期会话)
+        if (subreqCount < 48) { // 留最后几格配额给清理操作
+            await env.DB.prepare("DELETE FROM user_sessions WHERE expires_at < datetime('now')").run();
+        }
+
+        if (errors.length) {
+            await _log(env, 'ERROR', 'HistorySync',
+                `Errors: ${errors.slice(0, 5).join(' | ')}`);
+        }
     } catch (e) {
-        console.error(`[CronRoute] task=${task} failed:`, e.message);
-        return NextResponse.json({ success: false, task, error: e.message }, { status: 500 });
+        console.error('[HistorySync] Fatal:', e.message);
+        await _log(env, 'ERROR', 'HistorySync', `Fatal: ${e.message}`);
     }
 }
+
+// ── 单资产同步 ───────────────────────────────────────────────────────────────
+
+async function _syncOne(env, asset, force = false) {
+    const { code, type } = asset;
+    let consumed = 1; // 初始 DB Check 占 1 次
+
+    // 1. 查本地最新日期
+    const row = await env.DB
+        .prepare('SELECT MAX(record_date) AS latest FROM asset_history WHERE code = ? AND type = ?')
+        .bind(code.toLowerCase(), type)
+        .first();
+    const latestDate = row?.latest ?? null;
+
+    // 2. 拉取外部数据
+    const ctrl = new AbortController();
+    const tid = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT);
+    let history;
+    try {
+        // 因 fetchWithRetry 已改为 retry=0，此处固定占 1 次或多源级联 N 次
+        history = type === 'fund'
+            ? await fetchFundHistory(code, HISTORY_DAYS, ctrl.signal)
+            : await fetchStockHistory(code, HISTORY_DAYS, ctrl.signal);
+
+        consumed += (type === 'stock') ? 3 : 1; // 股票级联 3 源，基金 1 源
+    } finally {
+        clearTimeout(tid);
+    }
+
+    if (!history?.length) {
+        console.log(`[HistorySync] ${type}:${code} skipped: empty response`);
+        return consumed;
+    }
+
+    // 3. 增量过滤 (如果是 force 模式，则全量保留)
+    const newRecords = (latestDate && !force)
+        ? history.filter(h => h.date > latestDate)
+        : history;
+
+    if (!newRecords.length) {
+        return consumed;
+    }
+
+    // 4. 如果是强制刷新，先物理删除旧记录，确保不残留 API 已剔除的日期
+    if (force) {
+        await env.DB.prepare('DELETE FROM asset_history WHERE code = ? AND type = ?')
+            .bind(code.toLowerCase(), type)
+            .run();
+        consumed += 1;
+    }
+
+    // 5. 批量写入 (1 次 D1 请求)
+    await insertDailyPricesBatch(
+        newRecords.map(r => ({ code, type, price: r.value, date: r.date })),
+        env
+    );
+    consumed += 1;
+
+    console.log(`[HistorySync] ${type}:${code} +${newRecords.length}`);
+    return consumed;
+}
+
+
+// ── 工具 ─────────────────────────────────────────────────────────────────────
+
+async function _log(env, level, module, message) {
+    try {
+        await env.DB
+            .prepare('INSERT INTO system_logs (level, module, message) VALUES (?, ?, ?)')
+            .bind(level, module, message)
+            .run();
+    } catch (e) {
+        console.error('[HistorySync] log write failed:', e.message);
+    }
+}
+
+const _sleep = ms => new Promise(r => setTimeout(r, ms));
 </file>
 
-<file path="app/admin/page.js">
+<file path="app/admin/_hooks/useAdminData.js">
 'use client';
 
-import { useState, useEffect, useCallback, Suspense } from 'react';
-import { AnimatePresence } from 'framer-motion';
-import { useSearchParams } from 'next/navigation';
+import { useState, useCallback } from 'react';
 
-import { useAdminAuth } from './_hooks/useAdminAuth';
-import { useAdminData } from './_hooks/useAdminData';
-import { LoginScreen } from './_components/LoginScreen';
-import { AppShell } from './_components/AppShell';
-import { Toast, ConfirmModal } from './_components/Overlays';
-import {
-    OverviewSection,
-    HealthSection,
-    UsersSection,
-    LogsSection,
-    QueueSection,
-} from './_components/Sections';
+const EMPTY_STATS = {
+    users: 0,
+    stocks: 0,
+    funds: 0,
+    history_points: 0,
+    intraday_points: 0,
+    quotes_count: 0,
+    recent_growth: 0,
+    queue_count: 0,
+    api_health: [],
+};
 
-function AdminCommandCenter() {
-    const [activeSection, setActiveSection] = useState('overview');
-    const [toast, setToast] = useState(null);
-    const searchParams = useSearchParams();
-    const urlKey = searchParams.get('key') || searchParams.get('token');
+/**
+ * 管理员数据 hook
+ * 职责：所有后端请求、数据状态管理、危险操作触发
+ *
+ * @param {string} secretKey   — 当前鉴权密钥
+ * @param {Function} showToast — (msg, type?) => void
+ * @param {Function} onAuthFailure — 鉴权失败时的回调
+ */
+export function useAdminData(secretKey, showToast, onAuthFailure) {
+    const [users, setUsers] = useState([]);
+    const [stats, setStats] = useState(EMPTY_STATS);
+    const [logs, setLogs] = useState([]);
+    const [loading, setLoading] = useState(false);
+    const [queueData, setQueueData] = useState([]);
+    const [queueLoading, setQueueLoading] = useState(false);
+    const [confirmAction, setConfirmAction] = useState(null);
 
-    const showToast = useCallback((msg, type = 'error') => {
-        setToast({ msg, type });
-        setTimeout(() => setToast(null), 3000);
-    }, []);
+    // ── 基础请求 ──────────────────────────────────────────────────────────
 
-    const auth = useAdminAuth();
-    const data = useAdminData(auth.secretKey, showToast, auth.handleAuthFailure);
+    const fetchAllData = useCallback(async (keyToUse, forceSyncStats = false) => {
+        const k = keyToUse || secretKey;
+        if (!k) return;
+        setLoading(true);
 
-    // 初始化：从 URL 或 sessionStorage 恢复密钥
-    useEffect(() => {
-        const storedKey = auth.restoreFromStorage();
-        const finalKey = urlKey || storedKey;
-        if (!finalKey) return;
+        try {
+            const statsUrl = forceSyncStats ? '/api/admin/stats?sync=true' : '/api/admin/stats';
+            const headers = { 'x-admin-key': k };
 
-        auth.setSecretKey(finalKey);
-        if (urlKey) window.history.replaceState({}, '', window.location.pathname);
+            const [usersRes, statsRes, logsRes] = await Promise.all([
+                fetch('/api/user/list', { headers }),
+                fetch(statsUrl, { headers }),
+                fetch('/api/admin/logs?hours=72', { headers }),
+            ]);
 
-        data.fetchAllData(finalKey).then(() => auth.authenticate(finalKey));
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, []);
+            if (statsRes.ok) {
+                const data = await statsRes.json();
+                setStats(prev => ({ ...prev, ...data }));
+            }
+            if (usersRes.ok) {
+                setUsers(await usersRes.json());
+            }
+            if (logsRes.ok) {
+                const data = await logsRes.json();
+                setLogs(data.logs?.slice(0, 500) || []);
+            }
 
-    // 切换到队列 tab 时自动拉取队列数据
-    useEffect(() => {
-        if (activeSection === 'queue') data.fetchQueue();
-    }, [activeSection, data.fetchQueue]);
+            if (!statsRes.ok && !usersRes.ok) {
+                showToast('鉴权失败: 密钥无效或无权限');
+                onAuthFailure?.();
+            }
+        } catch (e) {
+            console.error('[Admin] Fetch failed:', e);
+            showToast('无法连接服务器');
+        } finally {
+            setLoading(false);
+        }
+    }, [secretKey, showToast, onAuthFailure]);
 
-    if (!auth.isAuthenticated) {
-        return (
-            <LoginScreen
-                secretKey={auth.secretKey}
-                setSecretKey={auth.setSecretKey}
-                loading={data.loading}
-                onSubmit={(key) => data.fetchAllData(key).then(() => auth.authenticate(key))}
-            />
-        );
-    }
+    const fetchQueue = useCallback(async () => {
+        if (!secretKey) return;
+        setQueueLoading(true);
+        try {
+            const res = await fetch('/api/admin/queue', {
+                headers: { 'x-admin-key': secretKey },
+            });
+            if (res.ok) {
+                const data = await res.json();
+                setQueueData(data?.queue || []);
+            }
+        } catch (e) {
+            console.error('Failed to fetch queue:', e);
+            showToast('获取队列失败');
+        } finally {
+            setQueueLoading(false);
+        }
+    }, [secretKey, showToast]);
 
-    return (
-        <>
-            <Toast toast={toast} />
-            <ConfirmModal confirmAction={data.confirmAction} onCancel={() => data.setConfirmAction(null)} />
+    // ── 危险操作（统一走 confirmAction 二次确认弹窗）─────────────────────
 
-            <AppShell
-                activeSection={activeSection}
-                onNavigate={setActiveSection}
-                onLogout={auth.handleLogout}
-                loading={data.loading}
-                onRefresh={() => data.fetchAllData(auth.secretKey, true)}
-                onForceSync={data.triggerForceSync}
-                onCleanup={data.triggerCleanup}
-            >
-                <AnimatePresence mode="wait">
-                    {activeSection === 'overview' && (
-                        <OverviewSection
-                            stats={data.stats}
-                            onNavigate={setActiveSection}
-                            onForceSync={data.triggerForceSync}
-                            onCleanup={data.triggerCleanup}
-                            loading={data.loading}
-                        />
-                    )}
-                    {activeSection === 'health' && (
-                        <HealthSection apiHealth={data.stats.api_health} />
-                    )}
-                    {activeSection === 'users' && (
-                        <UsersSection users={data.users} onDeleteUser={data.deleteUser} />
-                    )}
-                    {activeSection === 'logs' && (
-                        <LogsSection logs={data.logs} />
-                    )}
-                    {activeSection === 'queue' && (
-                        <QueueSection queueData={data.queueData} />
-                    )}
-                </AnimatePresence>
-            </AppShell>
-        </>
-    );
-}
+    const deleteUser = useCallback((targetUserId) => {
+        setConfirmAction({
+            message: `!! 危险警报 !!\n\n你即将对用户 "${targetUserId}" 及其相关的资产记录进行物理抹除。\n\n此操作不可逆。确认执行？`,
+            onConfirm: async () => {
+                setLoading(true);
+                try {
+                    const res = await fetch('/api/user/delete', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'x-admin-key': secretKey },
+                        body: JSON.stringify({ targetUserId }),
+                    });
+                    const data = await res.json();
+                    if (res.ok) {
+                        showToast(`主体 [${targetUserId}] 已被终止`, 'success');
+                        fetchAllData(secretKey);
+                    } else {
+                        showToast(data.error || '抹除失败');
+                    }
+                } catch {
+                    showToast('通信错误');
+                } finally {
+                    setLoading(false);
+                    setConfirmAction(null);
+                }
+            },
+        });
+    }, [secretKey, fetchAllData, showToast]);
 
-export default function AdminPage() {
-    return (
-        <Suspense fallback={
-            <div className="min-h-screen bg-[#050510] flex items-center justify-center">
-                <div className="w-12 h-12 border-2 border-white/10 border-t-cyan-500 rounded-full animate-spin" />
-            </div>
-        }>
-            <AdminCommandCenter />
-        </Suspense>
-    );
+    const triggerForceSync = useCallback((type) => {
+        const typeZh = type === 'fund' ? '基金' : '股票';
+        setConfirmAction({
+            message: `!! 协议强制覆盖 !!\n\n系统将针对 ${typeZh} 执行特定刷新逻辑：\n${type === 'fund' ? '• 基金：先拉取 250 天数据，确认成功后清空旧记录并重写 (流式进度)' : '• 股票：沿用旧版强制重写逻辑'}\n\n执行指令？`,
+            onConfirm: async () => {
+                setConfirmAction(null);
+                setLoading(true);
+                try {
+                    const headers = { 'x-admin-key': secretKey };
+                    if (type === 'fund') {
+                        // ── 基金：调用异步队列接口 ──────────────────────
+                        const res = await fetch(`/api/admin/refetch-fund-history?force=1`, { headers });
+                        const data = await res.json();
+
+                        if (res.ok && data.ok) {
+                            showToast(`[任务提交] ${data.message}。由于每分钟限流处理 5 只，请稍后刷新页面查看。`, 'success', 8000);
+                            await fetchAllData(secretKey, true);
+                        } else {
+                            throw new Error(data.error || '任务投递失败');
+                        }
+                    } else {
+                        // ── 股票：改用 Header 传参，移除 URL 中的密钥 ──────────────
+                        const url = `/api/cron/sync?task=history&force=1`;
+                        const res = await fetch(url, { headers });
+                        const data = await res.json();
+                        if (res.ok && data.success) {
+                            showToast(`[成功] 股票刷新任务已启动`, 'success');
+                            await fetchAllData(secretKey, true);
+                        } else {
+                            showToast(data.error || '指令被拒绝');
+                        }
+                    }
+                } catch (e) {
+                    console.error('[Admin] ForceSync error:', e);
+                    showToast(`API 链路中断: ${e.message}`);
+                } finally {
+                    setLoading(false);
+                    setConfirmAction(null);
+                }
+            },
+        });
+    }, [secretKey, fetchAllData, showToast]);
+
+    const triggerCleanup = useCallback(() => {
+        setConfirmAction({
+            message: `!! 环境全量洗消 !!\n\n系统将扫描并清理 D1 数据库中所有失效的无主行情数据，以优化背板性能。\n\n继续执行？`,
+            onConfirm: async () => {
+                setLoading(true);
+                try {
+                    const res = await fetch('/api/admin/cleanup', {
+                        method: 'POST',
+                        headers: { 'x-admin-key': secretKey },
+                    });
+                    const data = await res.json();
+                    if (res.ok) {
+                        showToast(`区域清理完成！\n历史: -${data.deleted_hist}, 名称: -${data.deleted_names}`, 'success');
+                        fetchAllData(secretKey);
+                    } else {
+                        showToast(data.error || '洗消任务失败');
+                    }
+                } catch {
+                    showToast('链路请求超时');
+                } finally {
+                    setLoading(false);
+                    setConfirmAction(null);
+                }
+            },
+        });
+    }, [secretKey, fetchAllData, showToast]);
+
+    return {
+        users,
+        stats,
+        logs,
+        loading,
+        queueData,
+        queueLoading,
+        confirmAction,
+        setConfirmAction,
+        fetchAllData,
+        fetchQueue,
+        deleteUser,
+        triggerForceSync,
+        triggerCleanup,
+    };
 }
 </file>
 
 <file path="lib/services/historyFetcher.js">
-import { fetchWithRetry, getBeijingTodayStr, isMarketClosedBeijing } from '@/lib/utils';
+import { fetchWithRetry, getBeijingTodayStr, isMarketClosedBeijing, formatDateInTimezone } from '@/lib/utils';
 import { addSystemLog } from '@/lib/storage/logRepo';
 import { parseStockCode } from '@/lib/utils/stockCode';
 
@@ -7808,6 +7713,200 @@ export async function fetchFundHistory(code, days, signal = null) {
         console.error(`[Fetcher] Fund ${code} failed:`, e.message);
         return null;
     }
+}
+</file>
+
+<file path="app/api/cron/sync/route.js">
+/**
+ * src/app/api/cron/sync/route.js
+ *
+ * 手动触发盘中实时行情同步的 HTTP 调试入口。
+ * 正式生产由 wrangler.toml cron + scheduled handler 驱动，本文件仅供调试。
+ *
+ * 调用方式：
+ *   GET /api/cron/sync?task=realtime&key=YOUR_SECRET
+ *   GET /api/cron/sync?task=history&key=YOUR_SECRET
+ *
+ * 鉴权：
+ *   统一通过 isAdminAuthorized 进行校验（支持 Session Token 或 ?key=xxx）
+ */
+
+import { NextResponse } from 'next/server';
+import { runHistorySync } from '@/lib/cron/historySync';
+import { runRealtimeSync } from '@/lib/cron/realtimeSync';
+import { runSentinel } from '@/lib/cron/sentinel';
+import { isAdminAuthorized } from '@/lib/storage/authRepo';
+
+export const dynamic = 'force-dynamic';
+
+const TASK_MAP = {
+    history: runHistorySync,
+    realtime: runRealtimeSync,
+    sentinel: runSentinel,
+};
+
+export async function GET(request) {
+    const { searchParams } = new URL(request.url);
+
+    // ── 鉴权：统一使用管理员校验 ───────────────────────────────────────
+    if (!(await isAdminAuthorized(request))) {
+        return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+    }
+
+    // ── 路由 ────────────────────────────────────────────────────────────────
+    const task = searchParams.get('task') ?? 'realtime';
+    const runner = TASK_MAP[task];
+
+    if (!runner) {
+        return NextResponse.json(
+            { success: false, error: `Unknown task "${task}". Valid: ${Object.keys(TASK_MAP).join(', ')}` },
+            { status: 400 }
+        );
+    }
+
+    // ── 执行 ────────────────────────────────────────────────────────────────
+    // 统合规范：直接使用 getD1Storage() 获取绑定，支持 context 与 global 注入
+    const { getD1Storage } = await import('@/lib/storage/d1Client');
+    const db = await getD1Storage();
+    const env = { DB: db };
+
+    try {
+        const t0 = Date.now();
+        const force = searchParams.get('force') === '1';
+        const type = searchParams.get('type');
+        await runner(env, { force, type });
+        const elapsed = Date.now() - t0;
+        return NextResponse.json({ success: true, task, force, type, elapsed_ms: elapsed });
+    } catch (e) {
+        console.error(`[CronRoute] task=${task} failed:`, e.message);
+        return NextResponse.json({ success: false, task, error: e.message }, { status: 500 });
+    }
+}
+</file>
+
+<file path="app/admin/page.js">
+'use client';
+
+import { useState, useEffect, useCallback, Suspense } from 'react';
+import { AnimatePresence } from 'framer-motion';
+import { useSearchParams } from 'next/navigation';
+
+import { useAdminAuth } from './_hooks/useAdminAuth';
+import { useAdminData } from './_hooks/useAdminData';
+import { LoginScreen } from './_components/LoginScreen';
+import { AppShell } from './_components/AppShell';
+import { Toast, ConfirmModal } from './_components/Overlays';
+import {
+    OverviewSection,
+    HealthSection,
+    UsersSection,
+    LogsSection,
+    QueueSection,
+} from './_components/Sections';
+
+function AdminCommandCenter() {
+    const [activeSection, setActiveSection] = useState('overview');
+    const [toast, setToast] = useState(null);
+    const searchParams = useSearchParams();
+    const urlKey = searchParams.get('key') || searchParams.get('token');
+
+    const [toastTimer, setToastTimer] = useState(null);
+
+    const showToast = useCallback((msg, type = 'error', duration = 3000) => {
+        if (toastTimer) clearTimeout(toastTimer);
+        setToast({ msg, type });
+        if (duration > 0) {
+            const timer = setTimeout(() => setToast(null), duration);
+            setToastTimer(timer);
+        } else {
+            setToastTimer(null);
+        }
+    }, [toastTimer]);
+
+    const auth = useAdminAuth();
+    const data = useAdminData(auth.secretKey, showToast, auth.handleAuthFailure);
+
+    // 初始化：从 URL 或 sessionStorage 恢复密钥
+    useEffect(() => {
+        const storedKey = auth.restoreFromStorage();
+        const finalKey = urlKey || storedKey;
+        if (!finalKey) return;
+
+        auth.setSecretKey(finalKey);
+        if (urlKey) window.history.replaceState({}, '', window.location.pathname);
+
+        data.fetchAllData(finalKey).then(() => auth.authenticate(finalKey));
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    // 切换到队列 tab 时自动拉取队列数据
+    useEffect(() => {
+        if (activeSection === 'queue') data.fetchQueue();
+    }, [activeSection, data.fetchQueue]);
+
+    if (!auth.isAuthenticated) {
+        return (
+            <LoginScreen
+                secretKey={auth.secretKey}
+                setSecretKey={auth.setSecretKey}
+                loading={data.loading}
+                onSubmit={(key) => data.fetchAllData(key).then(() => auth.authenticate(key))}
+            />
+        );
+    }
+
+    return (
+        <>
+            <Toast toast={toast} />
+            <ConfirmModal confirmAction={data.confirmAction} onCancel={() => data.setConfirmAction(null)} />
+
+            <AppShell
+                activeSection={activeSection}
+                onNavigate={setActiveSection}
+                onLogout={auth.handleLogout}
+                loading={data.loading}
+                onRefresh={() => data.fetchAllData(auth.secretKey, true)}
+                onForceSync={data.triggerForceSync}
+                onCleanup={data.triggerCleanup}
+            >
+                <AnimatePresence mode="wait">
+                    {activeSection === 'overview' && (
+                        <OverviewSection
+                            stats={data.stats}
+                            onNavigate={setActiveSection}
+                            onForceSync={data.triggerForceSync}
+                            onCleanup={data.triggerCleanup}
+                            loading={data.loading}
+                        />
+                    )}
+                    {activeSection === 'health' && (
+                        <HealthSection apiHealth={data.stats.api_health} />
+                    )}
+                    {activeSection === 'users' && (
+                        <UsersSection users={data.users} onDeleteUser={data.deleteUser} />
+                    )}
+                    {activeSection === 'logs' && (
+                        <LogsSection logs={data.logs} />
+                    )}
+                    {activeSection === 'queue' && (
+                        <QueueSection queueData={data.queueData} />
+                    )}
+                </AnimatePresence>
+            </AppShell>
+        </>
+    );
+}
+
+export default function AdminPage() {
+    return (
+        <Suspense fallback={
+            <div className="min-h-screen bg-[#050510] flex items-center justify-center">
+                <div className="w-12 h-12 border-2 border-white/10 border-t-cyan-500 rounded-full animate-spin" />
+            </div>
+        }>
+            <AdminCommandCenter />
+        </Suspense>
+    );
 }
 </file>
 

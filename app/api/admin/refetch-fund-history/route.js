@@ -8,7 +8,7 @@ import { NextResponse } from 'next/server';
 import { isAdminAuthorized } from '@/lib/storage/authRepo';
 import { fetchFundHistory } from '@/lib/services/historyFetcher';
 import { insertDailyPricesBatch, deleteAssetHistory } from '@/lib/storage/historyRepo';
-import { getD1Storage } from '@/lib/storage/d1Client';
+import { getKvStorage, getD1Storage } from '@/lib/storage/d1Client';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300; // 5分钟限时
@@ -29,9 +29,7 @@ export async function GET(request) {
     if (!db) return NextResponse.json({ error: 'DB unavailable' }, { status: 500 });
 
     // 3. 获取 KV 绑定 (由 Cloudflare 提供)
-    // 注意：在 Next.js Edge Runtime 中，env 绑定通常通过 process.env 或 requestContext 获取
-    // 这里我们假设通过全局注入或 env 参数获取，实际由 Worker 环境确保 FUND_QUEUE 可用
-    const FUND_QUEUE = process.env.FUND_QUEUE;
+    const FUND_QUEUE = await getKvStorage('FUND_QUEUE');
     if (!FUND_QUEUE) {
         return NextResponse.json({ error: 'FUND_QUEUE KV 未绑定，请检查 Cloudflare 配置' }, { status: 500 });
     }
