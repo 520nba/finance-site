@@ -132,8 +132,8 @@ export function useAdminData(secretKey, showToast, onAuthFailure) {
                     if (type === 'fund') {
                         // ── 基金：调用专门的 Streaming 接口 ──────────────────────
                         const res = await fetch(`/api/admin/refetch-fund-history?force=1`, { headers });
-
                         if (!res.ok) throw new Error('接口响应异常');
+                        if (!res.body) throw new Error('流式响应体为空');
 
                         const reader = res.body.getReader();
                         const decoder = new TextDecoder();
@@ -148,13 +148,15 @@ export function useAdminData(secretKey, showToast, onAuthFailure) {
                                 for (const line of lines) {
                                     try {
                                         const data = JSON.parse(line);
-                                        if (data.status === 'fetched') {
+                                        if (data.status === 'started') {
+                                            showToast(`已开始任务: 准备处理 ${data.total} 只基金`, 'info');
+                                        } else if (data.status === 'fetched') {
                                             // 阶段一：抓取进度
                                             if (data.index % 5 === 0 || data.index === 1) {
                                                 showToast(`正在从节点抓取: ${data.index} 只已就绪`, 'info');
                                             }
                                         } else if (data.status === 'writing_prepare') {
-                                            showToast(`抓取完成，正在构造批量写入请求...`, 'info');
+                                            showToast(`数据归集完成，正在批量写入 D1...`, 'info');
                                         } else if (data.status === 'ok') {
                                             // 阶段二：写入进度 (batch_index)
                                             showToast(`正在落库: 第 ${data.batch_index} 批同步成功`, 'info');
