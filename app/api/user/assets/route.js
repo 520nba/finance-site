@@ -57,15 +57,15 @@ export async function POST(request) {
         // 1. 优先写入资产基础关联
         await saveUserAssets(userId, cleanAssets);
 
-        // 2. 检查并补全资产名称 (D1 维护)
-        const nameResults = await syncNamesBulk(cleanAssets);
+        // 2. 预热资产名称到缓存 (D1 维护)
+        await syncNamesBulk(cleanAssets);
 
-        // 2. 架构减负：移除原本笨重的 ctx.waitUntil 历史抓取逻辑。
+        // 3. 架构减负：移除原本笨重的 ctx.waitUntil 历史抓取逻辑。
         // 现在抓取压力由前端 useAssetSync 识别数据空洞并分片发起请求。
         // 这里仅辅助触发轻量级的名称预热（可选）或直接返回告知前端哪些是新增的。
 
         if (removedAssets.length > 0) {
-            // 背景清理 (保留轻量级清理任务)
+            // 4. 背景清理 (保留轻量级清理任务)
             const cloudflare = await getCloudflareCtx();
             const cleanupTask = Promise.all(
                 removedAssets.map(r => cleanupSingleAssetIfNotUsed(r.type, r.code).catch(() => { }))
