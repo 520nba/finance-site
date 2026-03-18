@@ -3,7 +3,7 @@
 import { useState, useMemo, useEffect } from 'react';
 import { ChevronDown, ChevronUp, ChevronsUpDown } from 'lucide-react';
 import { calculatePerformance } from '@/lib/utils';
-import { fetchBulkHistory } from '@/services/api/historyService';
+import { fetchBulkHistory } from '@/lib/api/client/historyService';
 import { useQuotes } from '@/providers/AssetProvider';
 
 // ── 辅助函数 ──────────────────────────────────────────────────────
@@ -32,9 +32,9 @@ function SortIcon({ colKey, sortKey, sortDesc }) {
 }
 
 const COLS = [
-    { key: 'd5', label: '5日' },
-    { key: 'd22', label: '22日' },
-    { key: 'd250', label: '250日' },
+    { key: 'd5', label: '5�? },
+    { key: 'd22', label: '22�? },
+    { key: 'd250', label: '250�? },
 ];
 
 /**
@@ -74,7 +74,7 @@ function WatchlistRealtimeMode({ assets, selectedCode, onSelect, scrollToAsset }
                     onClick={() => { if (sortKey === 'changePercent') setSortDesc(!sortDesc); else { setSortKey('changePercent'); setSortDesc(true); } }}
                     className="w-16 flex items-center justify-end gap-0.5 text-right text-[10px] font-bold uppercase tracking-widest opacity-40 hover:opacity-80 transition-opacity cursor-pointer"
                 >
-                    涨跌幅
+                    涨跌�?
                     <SortIcon colKey="changePercent" sortKey={sortKey} sortDesc={sortDesc} />
                 </button>
             </div>
@@ -107,7 +107,7 @@ function WatchlistRealtimeMode({ assets, selectedCode, onSelect, scrollToAsset }
 }
 
 /**
- * ── 2. 波动率分析模式组件 (不订阅 QuotesContext，完全不受高频报价影响) ──────────────
+ * ── 2. 波动率分析模式组�?(不订�?QuotesContext，完全不受高频报价影�? ──────────────
  */
 function WatchlistVolatilityMode({ assets, scrollToAsset }) {
     const [sortKey, setSortKey] = useState('d5');
@@ -165,14 +165,14 @@ function WatchlistVolatilityMode({ assets, scrollToAsset }) {
         });
         if (!latest) return '';
         const [y, m, d] = latest.split('-');
-        return `(更新至${parseInt(m)}月${parseInt(d)}日)`;
+        return `(更新�?{parseInt(m)}�?{parseInt(d)}�?`;
     }, [assets, statsData]);
 
     return (
         <>
             <div className="px-4 py-2.5 border-b border-white/5 flex items-center gap-2">
                 <div className="w-1.5 h-1.5 rounded-full bg-cyan-400 opacity-40" />
-                <span className="text-xs font-bold uppercase tracking-widest opacity-40">自选清单分析</span>
+                <span className="text-xs font-bold uppercase tracking-widest opacity-40">自选清单分�?/span>
                 <span className="text-[10px] font-bold text-cyan-400/60 uppercase tracking-tighter ml-1">
                     {latestDateStr}
                 </span>
