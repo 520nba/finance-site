@@ -9,14 +9,12 @@ import { useAdminData } from './_hooks/useAdminData';
 import { LoginScreen } from './_components/LoginScreen';
 import { AppShell } from './_components/AppShell';
 import { Toast, ConfirmModal } from './_components/Overlays';
-import {
-    OverviewSection,
-    HealthSection,
-    UsersSection,
-    LogsSection,
-    QueueSection,
-    AssetStatusSection,
-} from './_components/Sections';
+import { OverviewSection } from './_components/sections/overview';
+import { HealthSection } from './_components/sections/health';
+import { UsersSection } from './_components/sections/users';
+import { LogsSection } from './_components/sections/logs';
+import { QueueSection } from './_components/sections/queue';
+import { AssetStatusSection } from './_components/sections/assets';
 
 function AdminCommandCenter() {
     const [activeSection, setActiveSection] = useState('overview');
