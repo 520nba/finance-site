@@ -4,10 +4,10 @@ import { isAdminAuthorized } from '@/lib/storage/authRepo';
 
 export async function POST(request) {
     try {
-        const { adminId, targetUserId } = await request.json();
+        const { targetUserId } = await request.json();
 
         // 统一权限验证
-        if (!(await isAdminAuthorized(request, adminId))) {
+        if (!(await isAdminAuthorized(request))) {
             return NextResponse.json({ error: 'Unauthorized' }, { status: 403 });
         }
 

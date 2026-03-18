@@ -25,6 +25,9 @@ export async function GET(request) {
     }
 
     try {
+        const { getD1Storage } = await import('@/lib/storage/d1Client');
+        const db = await getD1Storage();
+
         if (shouldSync) {
             const { syncCounterFromTable } = await import('@/lib/storage/statsRepo');
             await Promise.all([
@@ -36,9 +39,12 @@ export async function GET(request) {
         }
 
         const { getCounters } = await import('@/lib/storage/statsRepo');
-        const counters = await getCounters([
-            'users', 'asset_stocks', 'asset_funds', 'history_points',
-            'intraday_points', 'quotes_count'
+        const [counters, queueRow] = await Promise.all([
+            getCounters([
+                'users', 'asset_stocks', 'asset_funds', 'history_points',
+                'intraday_points', 'quotes_count'
+            ]),
+            db.prepare("SELECT COUNT(*) as c FROM sync_jobs WHERE status = 'pending'").first().catch(() => ({ c: 0 }))
         ]);
 
         const healthData = await (async () => {
@@ -52,6 +58,7 @@ export async function GET(request) {
             history_points: counters.history_points,
             intraday_points: counters.intraday_points,
             quotes_count: counters.quotes_count,
+            queue_count: queueRow?.c || 0,
             db_engine: 'Cloudflare D1 (SQLite) + Counters',
             api_health: healthData || []
         };

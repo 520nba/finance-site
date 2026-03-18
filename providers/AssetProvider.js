@@ -11,15 +11,10 @@ import { useAssetActions } from '@/hooks/useAssetActions';
 function AuthProvider({ children }) {
     const auth = useAuthSession();
 
-    const handleAuthAction = useCallback(async (actionFn) => {
-        const result = await actionFn();
-        return result;
-    }, []);
-
     const value = useMemo(() => ({
         ...auth,
-        handleLogin: () => handleAuthAction(() => auth.handleLogin()),
-        handleRegister: () => handleAuthAction(() => auth.handleRegister()),
+        handleLogin: auth.handleLogin,
+        handleRegister: auth.handleRegister,
     }), [
         auth.userId, auth.isLogged, auth.isPending, auth.loginInput,
         auth.passwordInput, auth.isRegistering, auth.handleLogin,

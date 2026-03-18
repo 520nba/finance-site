@@ -1,5 +1,3 @@
-import { logger } from '@/lib/logger';
-
 /**
  * 集中式的 Fetch 请求器，能自动脱除 Envelope 包络，打印统一下游日志
  */
@@ -28,7 +26,7 @@ export async function apiClient(endpoint, options = {}) {
 
         return json;
     } catch (error) {
-        logger.error(`[apiClient] Network request failed for ${endpoint}`, error, { endpoint, method: options.method || 'GET' });
+        console.error(`[apiClient] Network request failed for ${endpoint}:`, error.message);
         throw error;
     }
 }

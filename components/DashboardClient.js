@@ -38,7 +38,6 @@ export default function DashboardClient() {
     const filteredAssets = assets.filter(a => activeTab === 'watchlist' ? a.type === 'stock' : a.type === activeTab);
 
     const handleSelectAsset = (code) => {
-        if (activeTab === 'watchlist') return;
         setSelectedCode(code);
     };
 

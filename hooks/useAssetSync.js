@@ -200,7 +200,6 @@ export function useAssetSync({ userId, isLogged }) {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ assets: skeleton }),
             });
-            localStorage.setItem('tracker_assets_updated', Date.now().toString());
         } catch (e) {
             console.error('Sync failed:', e);
         }
@@ -208,23 +207,7 @@ export function useAssetSync({ userId, isLogged }) {
 
 
 
-    // 监听多标签页同步防冲突 (跨 Tab 数据漂移保护)
-    useEffect(() => {
-        const handleStorage = (e) => {
-            if (e.key === 'tracker_assets_updated' && isLogged) {
-                fetch('/api/user/assets').then(r => r.json()).then(json => {
-                    const list = json?.data ?? json;
-                    if (Array.isArray(list)) {
-                        const newStr = list.map(a => `${a.type}:${a.code}`).sort().join(',');
-                        const oldStr = assetsRef.current.map(a => `${a.type}:${a.code}`).sort().join(',');
-                        if (newStr !== oldStr) refreshAssets(list);
-                    }
-                }).catch(e => console.warn('[Frontend:StorageSync] Cross-tab fetch failed:', e));
-            }
-        };
-        window.addEventListener('storage', handleStorage);
-        return () => window.removeEventListener('storage', handleStorage);
-    }, [isLogged, userId, refreshAssets]);
+
 
     return { assets, setAssets, isSyncing, setIsSyncing, assetsRef, refreshAssets, syncAssetsToServer };
 }
