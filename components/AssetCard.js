@@ -62,8 +62,9 @@ function RealtimeLayer({ asset }) {
     const isPositiveChange = (displayChange ?? 0) >= 0;
     const intraPoints = intradayData?.points ?? [];
 
-    const finalPrevClose = asset.prevClose || intradayData?.prevClose || intraPoints[0]?.price || intraPoints[0]?.value;
-    const hasData = intraPoints.length > 0 && finalPrevClose > 0;
+    // 关键修正：移除无效的 .price 字段（数据点只有 value）；且优先使用服务端的 prevClose 确保趋势坐标系正确
+    const finalPrevClose = intradayData?.prevClose || asset.prevClose || intraPoints[0]?.value;
+    const hasData = intraPoints.length > 0;
 
     return (
         <div className="mt-2 text-right">

@@ -53,8 +53,10 @@ export function useRealtimeQuotes({
     }, [activeTab, isLogged, assetsRef, setQuotesMap]);
 
     // 2. 分时数据批量轮询 (固定 2 分钟)
+    const intradayMapRef = useRef({}); // 引入辅助 Ref 用于闭包内的最新状态对比
+
     useEffect(() => {
-        if (activeTab !== 'watchlist') return; // ✅ 同上，节约非实时监控下的网络开销
+        if (activeTab !== 'watchlist') return;
         if (!isLogged) return;
 
         const tickIntraday = async () => {
@@ -62,17 +64,29 @@ export function useRealtimeQuotes({
             if (stockItems.length === 0) return;
 
             try {
-                // 统一分时数据批量轮询（替代此前各卡片独立 SWR，大幅节省 Fetch 配额）
                 const result = await fetchBulkIntradayData(stockItems, true);
                 if (Object.keys(result).length > 0) {
-                    setIntradayMap(result);
+                    // ✅ 核心修复：合并而非覆盖，防止由于部分请求超时导致已有数据被抹除
+                    setIntradayMap(prev => {
+                        const next = { ...prev, ...result };
+                        intradayMapRef.current = next;
+                        return next;
+                    });
                 }
             } catch (e) {
                 console.warn('[IntradayQuotes] Tick failed:', e.message);
             }
         };
 
-        tickIntraday();
+        // 首次加载补全策略：由于 sync-asset 可能还在后台，tickIntraday 可能因为后端 D1 没准备好而跳过。
+        // 为此增加一个 30s 后的“扫尾”异步任务。
+        tickIntraday().then(() => {
+            const missing = assetsRef.current.filter(a => a.type === 'stock' && !intradayMapRef.current[a.code]);
+            if (missing.length > 0) {
+                setTimeout(tickIntraday, 30000);
+            }
+        });
+
         const intradayTimer = setInterval(tickIntraday, 120000);
 
         return () => clearInterval(intradayTimer);
