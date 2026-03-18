@@ -228,6 +228,32 @@ export function useAdminData(secretKey, showToast, onAuthFailure) {
         });
     }, [secretKey, fetchAllData, showToast]);
 
+    const triggerFullSync = useCallback(() => {
+        setConfirmAction({
+            message: `!! 生产者全量调度 !!\n\n系统将模拟 22:15 的 Cron 任务逻辑：\n• 扫描所有用户资产\n• 为每个资产生成一个同步 Job 并存入 D1 任务表\n\n该操作会瞬间增加任务负载，确认执行？`,
+            onConfirm: async () => {
+                setLoading(true);
+                try {
+                    const res = await fetch('/api/cron/sync?task=history', {
+                        headers: { 'x-admin-key': secretKey },
+                    });
+                    const data = await res.json();
+                    if (res.ok && data.success) {
+                        showToast(`模拟成功！已向队列投递 ${data.elapsed_ms ? '全量' : ''} 任务`, 'success');
+                        await fetchAllData(secretKey, true);
+                    } else {
+                        showToast(data.error || '触发失败');
+                    }
+                } catch {
+                    showToast('请求超时');
+                } finally {
+                    setLoading(false);
+                    setConfirmAction(null);
+                }
+            },
+        });
+    }, [secretKey, fetchAllData, showToast]);
+
     return {
         users,
         stats,
@@ -242,6 +268,7 @@ export function useAdminData(secretKey, showToast, onAuthFailure) {
         deleteUser,
         triggerForceSync,
         triggerCleanup,
+        triggerFullSync,
         assetStatus,
         assetStatusLoading,
         fetchAssetStatus,

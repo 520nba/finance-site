@@ -83,6 +83,7 @@ function AdminCommandCenter() {
                 onRefresh={() => data.fetchAllData(auth.secretKey, true)}
                 onForceSync={data.triggerForceSync}
                 onCleanup={data.triggerCleanup}
+                onFullSync={data.triggerFullSync}
             >
                 <AnimatePresence mode="wait">
                     {activeSection === 'overview' && (
@@ -91,6 +92,7 @@ function AdminCommandCenter() {
                             onNavigate={setActiveSection}
                             onForceSync={data.triggerForceSync}
                             onCleanup={data.triggerCleanup}
+                            onFullSync={data.triggerFullSync}
                             loading={data.loading}
                         />
                     )}

@@ -9,7 +9,7 @@ import { useState, useMemo } from 'react';
 
 // ── OverviewSection ───────────────────────────────────────────────────────
 
-export function OverviewSection({ stats, onNavigate, onForceSync, onCleanup, loading }) {
+export function OverviewSection({ stats, onNavigate, onForceSync, onCleanup, onFullSync, loading }) {
     const kpis = [
         { label: '注册账户', value: stats.users ?? 0, icon: <Users size={18} />, color: 'text-blue-400', bg: 'from-blue-500/10', id: 'users' },
         { label: '总资产数', value: (stats.stocks ?? 0) + (stats.funds ?? 0), icon: <Zap size={18} />, color: 'text-yellow-400', bg: 'from-yellow-500/10', id: 'assets' },
@@ -60,9 +60,16 @@ export function OverviewSection({ stats, onNavigate, onForceSync, onCleanup, loa
                     <button
                         onClick={onCleanup}
                         disabled={loading}
-                        className="flex-1 lg:flex-none px-8 py-4 bg-white/5 hover:bg-white/10 disabled:opacity-50 text-white/60 rounded-2xl font-black uppercase tracking-widest text-xs transition-all active:scale-95 flex items-center justify-center gap-2"
+                        className="flex-1 lg:flex-none px-8 py-4 bg-white/5 hover:bg-white/10 disabled:opacity-50 text-white/60 rounded-2xl font-black uppercase tracking-widest text-[10px] transition-all active:scale-95 flex items-center justify-center gap-2"
                     >
                         <Zap size={14} /> 深度洗消
+                    </button>
+                    <button
+                        onClick={onFullSync}
+                        disabled={loading}
+                        className="flex-1 lg:flex-none px-8 py-4 bg-orange-600/20 hover:bg-orange-600/40 border border-orange-500/20 disabled:opacity-50 text-orange-400 rounded-2xl font-black uppercase tracking-widest text-[10px] transition-all active:scale-95 flex items-center justify-center gap-2"
+                    >
+                        <Clock size={14} /> 模拟 Cron
                     </button>
                 </div>
             </div>
