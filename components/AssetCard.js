@@ -62,6 +62,9 @@ function RealtimeLayer({ asset }) {
     const isPositiveChange = (displayChange ?? 0) >= 0;
     const intraPoints = intradayData?.points ?? [];
 
+    const finalPrevClose = asset.prevClose || intradayData?.prevClose || intraPoints[0]?.price || intraPoints[0]?.value;
+    const hasData = intraPoints.length > 0 && finalPrevClose > 0;
+
     return (
         <div className="mt-2 text-right">
             <div className="flex flex-col items-end mb-4 absolute top-4 right-4 group-hover:top-3 transition-all">
@@ -75,10 +78,10 @@ function RealtimeLayer({ asset }) {
                     <div className="h-[120px] flex items-center justify-center text-white/20 text-sm bg-white/5 rounded-xl border border-white/5">
                         <span className="italic">场外基金不支持分时数据</span>
                     </div>
-                ) : (intraPoints.length > 0 && (asset.prevClose || intradayData?.prevClose)) ? (
+                ) : hasData ? (
                     <IntradayChart
                         data={intraPoints}
-                        prevClose={asset.prevClose || intradayData?.prevClose}
+                        prevClose={finalPrevClose}
                         height={120}
                     />
                 ) : (
