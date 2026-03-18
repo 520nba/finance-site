@@ -1,6 +1,6 @@
 'use client';
 
-import React, { createContext, useContext, useState, useCallback, useRef, useMemo } from 'react';
+import React, { createContext, useContext, useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { AuthContext, AssetsStructureContext, QuotesContext, UIContext } from './contexts';
 import { useAuthSession } from '@/hooks/useAuthSession';
 import { useAssetSync } from '@/hooks/useAssetSync';
