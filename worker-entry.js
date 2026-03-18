@@ -70,7 +70,6 @@ async function processSyncJobs(env) {
                 // ── 分时数据同步（针对 realtimeSync 投递的任务） ──────────────────────────────
                 if (job.type === 'intraday_sync') {
                     const { fetchSingleIntraday } = await import('./lib/services/assetSyncService.js');
-                    const { updateIntradayJson } = await import('./lib/storage/intradayRepo.js');
                     const { getBeijingTodayStr } = await import('./lib/utils.js');
 
                     const data = await fetchSingleIntraday(job.code);
@@ -129,10 +128,11 @@ async function processSyncJobs(env) {
             }
         }));
 
-        // 处理后清理：仅保留最近一天的记录
-        await DB.prepare(
-            "DELETE FROM sync_jobs WHERE status IN ('completed', 'failed') AND updated_at < datetime('now', '-1 day')"
-        ).run();
+        // 3. 自动清理机制：仅在每小时整点左右触发一次，防止表膨胀，同时减少 D1 扫描频率
+        const minute = new Date().getMinutes();
+        if (minute === 0) {
+            await DB.prepare("DELETE FROM sync_jobs WHERE status IN ('completed', 'failed') AND updated_at < datetime('now', '-1 day')").run();
+        }
 
     } catch (e) {
         console.error('[Queue:Critical] Batch process failure:', e.message);

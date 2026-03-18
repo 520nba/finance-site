@@ -100,8 +100,14 @@ function VolatilityLayer({ asset, isVisible }) {
     // 1. 优先检查 Context 里是否已经有批量取回的历史数据
     const hasContextHistory = asset.history?.length > 0;
 
-    // 2. 取得 localStorage 中的缓存 (同步方案，虽然可能导致首帧轻微阻塞，但能确保 fallbackData 正确初始化)
-    // 或者我们直接把这个逻辑放在 useSWR 外部
+    // 2. 加一个延迟标志，等 refreshAssets 的异步 history 加载完成
+    const [isReady, setIsReady] = useState(false);
+    useEffect(() => {
+        const timer = setTimeout(() => setIsReady(true), 800);
+        return () => clearTimeout(timer);
+    }, [asset.code]); // asset.code 变化时重置，防止切换资产残留旧状态
+
+    // 3. 取得 localStorage 中的缓存 (同步方案，确保 fallbackData 正确初始化)
     const storageKey = `tracker_cache_hist:${asset.type}:${asset.code}`;
     const [initialCachedData] = useState(() => {
         if (typeof window === 'undefined') return undefined;
@@ -111,21 +117,26 @@ function VolatilityLayer({ asset, isVisible }) {
         } catch (e) { return undefined; }
     });
 
-    // 3. 历史数据获取 (仅在可见且 Context 没数据时才发请求，实现 N+1 -> 1)
+    // 4. 历史数据获取
     const { data: historyData } = useSWR(
-        isVisible && !hasContextHistory ? `hist:${asset.type}:${asset.code}` : null,
+        // isReady 确保等待 Context 数据有机会填充，再决定是否发请求
+        isVisible && isReady && !hasContextHistory
+            ? `hist:${asset.type}:${asset.code}`
+            : null,
         () => fetchBulkHistory([{ code: asset.code, type: asset.type }], false)
             .then(res => res[`${asset.type}:${asset.code}`]),
         {
             fallbackData: initialCachedData,
             revalidateOnFocus: false,
+            revalidateOnReconnect: false,  // 断网重连不触发请求
+            dedupingInterval: 300000,       // 5 分钟内不重复请求相同 key
             onSuccess: (data) => {
                 if (data) localStorage.setItem(storageKey, JSON.stringify(data));
             }
         }
     );
 
-    // 4. 数据合并优先级：Context > SWR > 默认空架子
+    // 5. 数据合并优先级：Context > SWR > 默认空架子
     const history = hasContextHistory
         ? asset.history
         : (historyData?.history ?? []);
@@ -230,11 +241,5 @@ export default memo(AssetCardComponent, (prev, next) => {
         return prevDate === nextDate;
     }
 
-    /* 
-       实时模式备注：
-       价格和分时数据现在由 QuotesContext 注入，不在 props.asset 中。
-       AssetCard 内部会通过 useQuotes() 自动重渲染该卡片。
-       因此 memo 只需要保证资产结构本身没变即可。
-    */
     return true;
 });
