@@ -44,15 +44,7 @@ async function processSyncJobs(env) {
     const DB = env.DB;
     if (!DB) return;
 
-    // 0. 预检：若无处于活跃状态的任务，直接退出以保护 D1 写入配额
-    try {
-        const activeCount = await DB.prepare("SELECT count(*) as count FROM sync_jobs WHERE status IN ('pending', 'processing')").first('count');
-        if (activeCount === 0) return;
-    } catch (countErr) {
-        console.error('[Queue:PreCheck] Failed to count active jobs:', countErr.message);
-    }
-
-    // 1. 先把卡死超过 10 分钟的 processing 任务重置回 pending
+    // 1. 自动复位逻辑：将卡死超过 10 分钟的 processing 任务重置回 pending
     try {
         await DB.prepare(`
             UPDATE sync_jobs 
@@ -64,67 +56,58 @@ async function processSyncJobs(env) {
         console.error('[Queue:Cleanup] Reset stuck jobs failed:', cleanupErr.message);
     }
 
-
     const BATCH_SIZE = 5;
     try {
-        // 1. 获取待处理任务 ID (拆分锁定逻辑以提高 D1/SQLite 兼容性)
-        const { results: targets } = await DB.prepare(`
-            SELECT id FROM sync_jobs 
-            WHERE status = 'pending' 
-            ORDER BY created_at ASC 
-            LIMIT ?
-        `).bind(BATCH_SIZE).all();
-
-        if (!targets || targets.length === 0) return;
-        const ids = targets.map(t => t.id);
-
-        // 2. 批量更新状态为 processing
-        const placeholders = ids.map(() => '?').join(',');
-        await DB.prepare(`
+        // 2. 原子锁定：使用单条 SQL 完成选取、锁定与 RETURNING，彻底消除竞态窗口并减少 DB 往返
+        const { results: jobs } = await DB.prepare(`
             UPDATE sync_jobs 
             SET status = 'processing', updated_at = CURRENT_TIMESTAMP 
-            WHERE id IN (${placeholders})
-        `).bind(...ids).run();
-
-        // 3. 重新获取完整的任务对象
-        const { results: jobs } = await DB.prepare(`
-            SELECT * FROM sync_jobs WHERE id IN (${placeholders})
-        `).bind(...ids).all();
+            WHERE id IN (
+                SELECT id FROM sync_jobs 
+                WHERE status = 'pending' 
+                ORDER BY created_at ASC 
+                LIMIT ?
+            )
+            RETURNING *
+        `).bind(BATCH_SIZE).all();
 
         if (!jobs || jobs.length === 0) return;
 
-        console.log(`[Queue:D1] Processing ${jobs.length} jobs`);
+        console.log(`[Queue:D1] Concurrent processing ${jobs.length} jobs`);
 
-        for (const job of jobs) {
+        // 3. 并发执行：使用 Promise.allSettled 确保任务互不干扰且最大化利用 IO 窗口
+        const VALID_ASSET_TYPES = new Set(['stock', 'fund']);
+
+        await Promise.allSettled(jobs.map(async (job) => {
             try {
+                // 仅处理历史数据同步任务
                 if (job.type === 'fund_history' || job.type === 'asset_history_sync') {
                     const { syncHistoryBulk } = await import('./lib/services/assetSyncService');
-                    let force = false;
-                    let assetType = job.type === 'fund_history' ? 'fund' : 'stock';
 
-                    try {
-                        const payload = JSON.parse(job.payload || '{}');
-                        force = !!payload.force;
-                        if (payload.type) assetType = payload.type;
-                    } catch (e) { /* ignore */ }
+                    const payload = JSON.parse(job.payload || '{}');
+                    const force = !!payload.force;
 
-                    // 调用核心同步 Service (days=250, allowExternal=true)
-                    // 该 Service 内部会自动处理多源级联拉取与 D1 写入
+                    // 类型推断：payload 最高优且受校验，job.type 为兜底
+                    let assetType = VALID_ASSET_TYPES.has(payload.type)
+                        ? payload.type
+                        : (job.type === 'fund_history' ? 'fund' : 'stock');
+
+                    // 调用服务层核心同步（自动包含拉取、对比、UPSERT）
                     await syncHistoryBulk([{ code: job.code, type: assetType }], 250, true, env, force);
 
+                    // 任务归档
                     await DB.prepare("UPDATE sync_jobs SET status = 'completed', updated_at = CURRENT_TIMESTAMP WHERE id = ?")
                         .bind(job.id)
                         .run();
                 } else {
-                    console.warn(`[Queue:D1] Unknown job type: ${job.type}, job ${job.id} skipped`);
+                    console.warn(`[Queue:D1] Unsupported job type: ${job.type}`);
                     await DB.prepare("UPDATE sync_jobs SET status = 'failed', error_msg = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
-                        .bind(`Unknown type: ${job.type}`, job.id)
+                        .bind(`Unsupported type: ${job.type}`, job.id)
                         .run();
                 }
-
             } catch (jobErr) {
-                console.error(`[Queue:D1] Job ${job.id} failed:`, jobErr.message);
-                // 重试逻辑：若 retry_count + 1 < 3 则回退到 pending，否则标记为 failed
+                console.error(`[Queue:D1] Job ${job.id} execution failed:`, jobErr.message);
+                // 容错与重试机制
                 await DB.prepare(`
                     UPDATE sync_jobs 
                     SET status = CASE WHEN retry_count + 1 < 3 THEN 'pending' ELSE 'failed' END,
@@ -136,8 +119,9 @@ async function processSyncJobs(env) {
                     .bind(jobErr.message, job.id)
                     .run();
             }
-        }
+        }));
+
     } catch (e) {
-        console.error('[Queue:D1] Batch process failed:', e.message);
+        console.error('[Queue:D1] Global batch process error:', e.message);
     }
 }
