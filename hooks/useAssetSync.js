@@ -71,7 +71,7 @@ export function useAssetSync({ userId, isLogged }) {
 
             // 3. 异步补充历史数据 (Orchestrator Layer 1.5 - Background Hydration)
             // 这一步不需要阻塞，完成后会自动触发 UI 图表渲染
-            fetchBulkHistory(list, true, 250).then(histMap => {
+            fetchBulkHistory(list, false, 250).then(histMap => {
                 setAssets(prev => prev.map(a => {
                     const key = `${a.type}:${a.code}`;
                     if (histMap[key]) {
