@@ -11,8 +11,8 @@ const HISTORY_DAYS = 250
 
 export async function POST(request) {
     try {
-        const { items, days = HISTORY_DAYS } = await request.json()
-        const data = await syncHistoryBulk(items, days)
+        const { items, days = HISTORY_DAYS, allowExternal = false } = await request.json()
+        const data = await syncHistoryBulk(items, days, allowExternal)
         return NextResponse.json({
             success: true,
             data
