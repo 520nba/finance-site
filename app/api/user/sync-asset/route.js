@@ -23,11 +23,11 @@ export async function POST(request) {
         const env = cfCtx?.env || null;
         const items = [{ code, type }];
 
-        // 1. 同步名称
-        await syncNamesBulk(items, true);
+        // 1. 同步名称 (禁用外部抓取，仅读 D1)
+        await syncNamesBulk(items, false);
 
-        // 2. 同步 250 天历史数据 (透传 env 确保 D1 访问正常)
-        await syncHistoryBulk(items, 250, true, env);
+        // 2. 同步 250 天历史数据 (禁用外部抓取，仅读 D1)
+        await syncHistoryBulk(items, 250, false, env);
 
         return NextResponse.json({ success: true, code, type });
     } catch (e) {

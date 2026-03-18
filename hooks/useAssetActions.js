@@ -16,8 +16,7 @@ export function useAssetActions({ activeTabRef, setAssets, setIsSyncing, showToa
             const nameMap = await fetchBulkNames([{ code, type }], true);
             const name = nameMap[`${type}:${code}`] ?? (type === 'fund' ? `基金 ${code}` : `股票 ${code}`);
 
-            // 预加载历史数据（静默失败，不阻塞主流程）
-            fetchBulkHistory([{ code, type }], true, 250).catch(() => { });
+            // 历史数据现在由后台定时任务补全，不再由前端新增时刻触发异步请求
 
             if (type === 'stock') {
                 const quoteMap = await fetchBulkStockQuotes([{ code, type }], true);

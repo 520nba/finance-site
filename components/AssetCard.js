@@ -97,31 +97,44 @@ function RealtimeLayer({ asset }) {
 
 // ── 2. 波动率内核：完全不建立 QuotesContext 订阅 ──────────────────────────
 function VolatilityLayer({ asset, isVisible }) {
-    // 取得 localStorage 中的缓存作为首屏 fallback (SSR 友好模式)
-    const [cachedHistory, setCachedHistory] = useState(undefined);
-    useEffect(() => {
-        try {
-            const val = localStorage.getItem(`tracker_cache_hist:${asset.type}:${asset.code}`);
-            if (val) setCachedHistory(JSON.parse(val));
-        } catch (e) { /* silent fail */ }
-    }, [asset.type, asset.code]);
+    // 1. 优先检查 Context 里是否已经有批量取回的历史数据
+    const hasContextHistory = asset.history?.length > 0;
 
-    // 历史数据获取 (仅在可见时启用)
+    // 2. 取得 localStorage 中的缓存 (同步方案，虽然可能导致首帧轻微阻塞，但能确保 fallbackData 正确初始化)
+    // 或者我们直接把这个逻辑放在 useSWR 外部
+    const storageKey = `tracker_cache_hist:${asset.type}:${asset.code}`;
+    const [initialCachedData] = useState(() => {
+        if (typeof window === 'undefined') return undefined;
+        try {
+            const val = localStorage.getItem(storageKey);
+            return val ? JSON.parse(val) : undefined;
+        } catch (e) { return undefined; }
+    });
+
+    // 3. 历史数据获取 (仅在可见且 Context 没数据时才发请求，实现 N+1 -> 1)
     const { data: historyData } = useSWR(
-        isVisible ? `hist:${asset.type}:${asset.code}` : null,
-        () => fetchBulkHistory([{ code: asset.code, type: asset.type }], false).then(res => res[`${asset.type}:${asset.code}`]),
+        isVisible && !hasContextHistory ? `hist:${asset.type}:${asset.code}` : null,
+        () => fetchBulkHistory([{ code: asset.code, type: asset.type }], false)
+            .then(res => res[`${asset.type}:${asset.code}`]),
         {
-            fallbackData: cachedHistory,
+            fallbackData: initialCachedData,
             revalidateOnFocus: false,
             onSuccess: (data) => {
-                if (data) localStorage.setItem(`tracker_cache_hist:${asset.type}:${asset.code}`, JSON.stringify(data));
+                if (data) localStorage.setItem(storageKey, JSON.stringify(data));
             }
         }
     );
 
-    const history = (historyData?.history?.length > 0) ? historyData.history : (asset.history ?? []);
-    const summary = (historyData?.summary) ?? (asset.summary ?? { perf5d: null, perf22d: null, perf250d: null });
-    const isHistorySyncing = historyData?.status === 'syncing';
+    // 4. 数据合并优先级：Context > SWR > 默认空架子
+    const history = hasContextHistory
+        ? asset.history
+        : (historyData?.history ?? []);
+
+    const summary = hasContextHistory
+        ? asset.summary
+        : (historyData?.summary ?? { perf5d: null, perf22d: null, perf250d: null });
+
+    const isHistorySyncing = (!hasContextHistory && historyData?.status === 'syncing');
 
     if (isHistorySyncing) {
         return (

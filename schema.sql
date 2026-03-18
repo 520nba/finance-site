@@ -55,15 +55,15 @@ CREATE TABLE IF NOT EXISTS asset_intraday (
     PRIMARY KEY(code, record_date)
 );
 
--- 分时数据点 (颗粒度到分钟)
-CREATE TABLE IF NOT EXISTS asset_intraday_points (
-    code TEXT NOT NULL,
-    time DATETIME NOT NULL,
-    price REAL NOT NULL,
-    vol REAL NOT NULL,
-    PRIMARY KEY(code, time)
-);
-CREATE INDEX IF NOT EXISTS idx_intra_points_code_time ON asset_intraday_points(code, time DESC);
+-- [DEPRECATED] 分时数据点 (颗粒度到分钟) - 已被全 JSON 模式取代
+-- CREATE TABLE IF NOT EXISTS asset_intraday_points (
+--     code TEXT NOT NULL,
+--     time DATETIME NOT NULL,
+--     price REAL NOT NULL,
+--     vol REAL NOT NULL,
+--     PRIMARY KEY(code, time)
+-- );
+-- CREATE INDEX IF NOT EXISTS idx_intra_points_code_time ON asset_intraday_points(code, time DESC);
 
 -- 报价缓存 (D1 历史缓存表)
 CREATE TABLE IF NOT EXISTS asset_quotes (
@@ -133,3 +133,7 @@ CREATE TABLE IF NOT EXISTS sync_jobs (
 );
 CREATE INDEX IF NOT EXISTS idx_sync_jobs_status ON sync_jobs(status, updated_at);
 CREATE INDEX IF NOT EXISTS idx_sync_jobs_code ON sync_jobs(code);
+
+-- 核心修复：添加部分唯一索引，使 ON CONFLICT(code, type) WHERE status = 'pending' 生效
+CREATE UNIQUE INDEX IF NOT EXISTS idx_sync_jobs_upsert 
+ON sync_jobs(code, type) WHERE status = 'pending';
