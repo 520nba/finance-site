@@ -44,10 +44,8 @@ async function processSyncJobs(env) {
     const DB = env.DB;
     if (!DB) return;
 
-    const BATCH_SIZE = 5;
+    const BATCH_SIZE = 20; // 调大批处理量，支持高频分时同步
     try {
-        // 1. 绝对原子锁定：将“复位过期任务”与“锁定新任务”合并为单条事务级 SQL
-        // WHERE 子句同时匹配待处理(pending)和卡死超过10分钟(stuck)的任务
         const { results: jobs } = await DB.prepare(`
             UPDATE sync_jobs 
             SET status = 'processing', updated_at = CURRENT_TIMESTAMP 
@@ -65,37 +63,56 @@ async function processSyncJobs(env) {
 
         console.log(`[Queue:D1] Atomic lock: ${jobs.length} jobs`);
 
-        // 2. 并发执行
         const VALID_ASSET_TYPES = new Set(['stock', 'fund']);
 
         await Promise.allSettled(jobs.map(async (job) => {
             try {
-                if (job.type === 'fund_history' || job.type === 'asset_history_sync') {
-                    const { syncHistoryBulk } = await import('./lib/services/assetSyncService');
+                // ── 分时数据同步（针对 realtimeSync 投递的任务） ──────────────────────────────
+                if (job.type === 'intraday_sync') {
+                    const { fetchSingleIntraday } = await import('./lib/services/assetSyncService.js');
+                    const { updateIntradayJson } = await import('./lib/storage/intradayRepo.js');
+                    const { getBeijingTodayStr } = await import('./lib/utils.js');
+
+                    const data = await fetchSingleIntraday(job.code);
+
+                    if (data?.points?.length > 0) {
+                        await updateIntradayJson([{
+                            code: job.code,
+                            date: getBeijingTodayStr(),
+                            points: data.points,
+                            price: data.price,
+                            prevClose: data.prevClose
+                        }], env);
+                    }
+
+                    await DB.prepare(
+                        "UPDATE sync_jobs SET status = 'completed', updated_at = CURRENT_TIMESTAMP WHERE id = ?"
+                    ).bind(job.id).run();
+
+                    // ── 历史数据同步（原有逻辑） ──────────────────────
+                } else if (job.type === 'fund_history' || job.type === 'asset_history_sync') {
+                    const { syncHistoryBulk } = await import('./lib/services/assetSyncService.js');
 
                     const payload = JSON.parse(job.payload || '{}');
-
-                    // 类型推断
-                    let assetType = VALID_ASSET_TYPES.has(payload.type)
+                    const assetType = VALID_ASSET_TYPES.has(payload.type)
                         ? payload.type
                         : (job.type === 'fund_history' ? 'fund' : 'stock');
 
-                    // 执行同步（Service 内部已移除 forceRefresh 参数）
                     await syncHistoryBulk([{ code: job.code, type: assetType }], 250, true, env);
 
-                    // 任务归档
-                    await DB.prepare("UPDATE sync_jobs SET status = 'completed', updated_at = CURRENT_TIMESTAMP WHERE id = ?")
-                        .bind(job.id)
-                        .run();
+                    await DB.prepare(
+                        "UPDATE sync_jobs SET status = 'completed', updated_at = CURRENT_TIMESTAMP WHERE id = ?"
+                    ).bind(job.id).run();
+
                 } else {
                     console.warn(`[Queue:D1] Unsupported job type: ${job.type}`);
-                    await DB.prepare("UPDATE sync_jobs SET status = 'failed', error_msg = 'Unsupported type', updated_at = CURRENT_TIMESTAMP WHERE id = ?")
-                        .bind(job.id)
-                        .run();
+                    await DB.prepare(
+                        "UPDATE sync_jobs SET status = 'failed', error_msg = 'Unsupported type', updated_at = CURRENT_TIMESTAMP WHERE id = ?"
+                    ).bind(job.id).run();
                 }
+
             } catch (jobErr) {
-                console.error(`[Queue:D1] Job ${job.id} execution failed:`, jobErr.message);
-                // 指数级重试逻辑
+                console.error(`[Queue:D1] Job ${job.id} failed:`, jobErr.message);
                 await DB.prepare(`
                     UPDATE sync_jobs 
                     SET status = CASE WHEN retry_count + 1 < 3 THEN 'pending' ELSE 'failed' END,
@@ -103,14 +120,14 @@ async function processSyncJobs(env) {
                         retry_count = retry_count + 1, 
                         updated_at = CURRENT_TIMESTAMP 
                     WHERE id = ?
-                `)
-                    .bind(jobErr.message, job.id)
-                    .run();
+                `).bind(jobErr.message, job.id).run();
             }
         }));
 
-        // 3. 自动清理机制：每次处理后顺便清理超过 1 天的已完成或失败任务，防止表膨胀
-        await DB.prepare("DELETE FROM sync_jobs WHERE status IN ('completed', 'failed') AND updated_at < datetime('now', '-1 day')").run();
+        // 处理后清理：仅保留最近一天的记录
+        await DB.prepare(
+            "DELETE FROM sync_jobs WHERE status IN ('completed', 'failed') AND updated_at < datetime('now', '-1 day')"
+        ).run();
 
     } catch (e) {
         console.error('[Queue:Critical] Batch process failure:', e.message);
