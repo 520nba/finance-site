@@ -21,7 +21,7 @@ export function useRealtimeQuotes({ activeTab, isLogged, assets, isSyncing, user
                         const oldCodes = assetsRef.current.map(a => `${a.type}:${a.code}`).sort().join(',');
                         if (newCodes !== oldCodes) {
                             refreshAssets(remoteList);
-                            return true; // 返回 true 表示由于结构变更需要中断本次 tick
+                            return; // 资产结构已变，交给 refreshAssets 处理，本次不再抓取行情
                         }
                     }
                 } catch (e) { /* ignore */ }
@@ -36,7 +36,6 @@ export function useRealtimeQuotes({ activeTab, isLogged, assets, isSyncing, user
                 if (q) return { ...a, price: q.price, changePercent: q.changePercent };
                 return a;
             }));
-            return false;
         };
 
         // 动态计算轮询间隔：盘中 1 分钟，盘外 5 分钟
@@ -52,8 +51,8 @@ export function useRealtimeQuotes({ activeTab, isLogged, assets, isSyncing, user
         let timer;
         const scheduleNext = () => {
             timer = setTimeout(async () => {
-                const interrupted = await tick();
-                if (!interrupted) scheduleNext();
+                await tick();
+                scheduleNext(); // 无论本次 tick 是否因资产变更提前结束，都继续调度下一次循环
             }, getInterval());
         };
 
