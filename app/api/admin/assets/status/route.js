@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { isAdminAuthorized } from '@/lib/storage/authRepo';
+import { isAdminAuthorized } from '@/lib/auth/adminAuth';
 import { getAssetSyncStatus } from '@/lib/storage/statsRepo';
 import { getD1Storage } from '@/lib/storage/d1Client';
 

@@ -16,7 +16,7 @@ import { NextResponse } from 'next/server';
 import { runHistorySync } from '@/lib/cron/historySync';
 import { runRealtimeSync } from '@/lib/cron/realtimeSync';
 import { runSentinel } from '@/lib/cron/sentinel';
-import { isAdminAuthorized } from '@/lib/storage/authRepo';
+import { isAdminAuthorized } from '@/lib/auth/adminAuth';
 
 export const dynamic = 'force-dynamic';
 

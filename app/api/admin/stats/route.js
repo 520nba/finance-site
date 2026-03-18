@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
-import { isAdminAuthorized } from '@/lib/storage/authRepo';
+import { isAdminAuthorized } from '@/lib/auth/adminAuth';
 import { getAllApiHealth } from '@/lib/storage/healthRepo';
 import { memoryCache } from '@/lib/storage/memoryCache';
 

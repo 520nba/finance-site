@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { deleteUser } from '@/lib/storage/userRepo';
-import { isAdminAuthorized } from '@/lib/storage/authRepo';
+import { isAdminAuthorized } from '@/lib/auth/adminAuth';
 
 export async function POST(request) {
     try {
@@ -15,7 +15,7 @@ export async function POST(request) {
             return NextResponse.json({ error: 'Invalid target user' }, { status: 400 });
         }
 
-        // 仅在 D1 中物理删除 (100% D1 化)
+        // 仅在 D1 中物理删�?(100% D1 �?
         const d1Deleted = await deleteUser(targetUserId);
 
         if (d1Deleted) {

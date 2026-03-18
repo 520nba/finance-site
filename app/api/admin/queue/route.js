@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { isAdminAuthorized } from '@/lib/storage/authRepo';
+import { isAdminAuthorized } from '@/lib/auth/adminAuth';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -15,7 +15,7 @@ export async function GET(request) {
     if (!db) return NextResponse.json({ error: 'DB unavailable' }, { status: 500 });
 
     try {
-        // 读取最近 300 条任务状态，并尝试关联资产名称库
+        // 读取最�?300 条任务状态，并尝试关联资产名称库
         const items = await queryAll(`
             SELECT 
                 j.id, 
@@ -27,7 +27,7 @@ export async function GET(request) {
                 n.name as asset_name
             FROM sync_jobs j
             LEFT JOIN asset_names n ON j.code = n.code
-            GROUP BY j.id -- 防止一个 code 对应多个 type 时产生重复行
+            GROUP BY j.id -- 防止一�?code 对应多个 type 时产生重复行
             ORDER BY j.updated_at DESC LIMIT 300
         `);
 

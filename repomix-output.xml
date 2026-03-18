@@ -259,6 +259,21 @@ export async function GET(request) {
 }
 </file>
 
+<file path="app/api/names/bulk/route.js">
+import { NextResponse } from 'next/server';
+import { syncNamesBulk } from '@/lib/services/assetSyncService';
+
+export async function POST(request) {
+    try {
+        const { items, allowExternal = false } = await request.json();
+        const result = await syncNamesBulk(items, allowExternal);
+        return NextResponse.json({ success: true, data: result });
+    } catch (e) {
+        return NextResponse.json({ success: false, error: e.message, code: 'INTERNAL_ERROR' }, { status: 500 });
+    }
+}
+</file>
+
 <file path="app/api/ping/route.js">
 export async function GET() {
     let hasKv = false;
@@ -1502,55 +1517,6 @@ export async function fetchBulkStockQuotes(stocks, allowExternal = false) {
 }
 </file>
 
-<file path=".github/workflows/deploy.yml">
-name: Deploy to Cloudflare Workers
-
-on:
-  push:
-    branches:
-      - main
-
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  # Diagnostic: Triggering re-fetch due to transient checkout failure in previous run.
-
-jobs:
-  deploy:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-
-      - name: Install Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: 'npm'
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Setup Next.js Cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.npm
-            ${{ github.workspace }}/.next/cache
-          key: ${{ runner.os }}-nextjs-${{ hashFiles('**/package-lock.json') }}-${{ hashFiles('**/*.[jt]s', '**/*.[jt]sx') }}
-          restore-keys: |
-            ${{ runner.os }}-nextjs-${{ hashFiles('**/package-lock.json') }}-
-
-      # 由于 OpenNext 构建需要特定的 Windows 二进制包，但在 Linux 环境下 npm 会根据平台自动处理。
-      # 我们直接运行 package.json 中定义的 deploy 脚本。
-      - name: Build and Deploy
-        run: npm run deploy
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-</file>
-
 <file path="app/admin/_components/LoginScreen.js">
 'use client';
 
@@ -2481,21 +2447,6 @@ export async function POST(request) {
     } catch (e) {
         console.error('[Auth:Register] Error:', e);
         return NextResponse.json({ error: 'Registration failed' }, { status: 500 });
-    }
-}
-</file>
-
-<file path="app/api/names/bulk/route.js">
-import { NextResponse } from 'next/server';
-import { syncNamesBulk } from '@/lib/services/assetSyncService';
-
-export async function POST(request) {
-    try {
-        const { items, allowExternal = false } = await request.json();
-        const result = await syncNamesBulk(items, allowExternal);
-        return NextResponse.json({ success: true, data: result });
-    } catch (e) {
-        return NextResponse.json({ success: false, error: e.message, code: 'INTERNAL_ERROR' }, { status: 500 });
     }
 }
 </file>
@@ -3539,6 +3490,85 @@ export async function apiClient(endpoint, options = {}) {
     } catch (error) {
         console.error(`[apiClient] Network request failed for ${endpoint}:`, error.message);
         throw error;
+    }
+}
+</file>
+
+<file path=".github/workflows/deploy.yml">
+name: Deploy to Cloudflare Workers
+
+on:
+  push:
+    branches:
+      - main
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: 'npm'
+
+      - name: Setup Next.js Cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.next/cache
+          key: ${{ runner.os }}-nextjs-${{ hashFiles('**/package-lock.json') }}-${{ hashFiles('app/**/*.[jt]sx?', 'components/**/*.[jt]sx?', 'lib/**/*.[jt]s') }}
+          restore-keys: |
+            ${{ runner.os }}-nextjs-${{ hashFiles('**/package-lock.json') }}-
+
+      - name: Install dependencies
+        run: npm ci
+
+      # 由于 OpenNext 构建需要特定的 Windows 二进制包，但在 Linux 环境下 npm 会根据平台自动处理。
+      # 我们直接运行 package.json 中定义的 deploy 脚本。
+      - name: Build and Deploy
+        run: npm run deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          NEXT_PUBLIC_SITE_URL: ${{ secrets.NEXT_PUBLIC_SITE_URL }}
+          ADMIN_API_KEY: ${{ secrets.ADMIN_API_KEY }}
+</file>
+
+<file path="app/api/history/bulk/route.js">
+import { NextResponse } from 'next/server'
+import { syncHistoryBulk } from '@/lib/services/assetSyncService'
+
+const HISTORY_DAYS = 250
+
+/**
+ * =============================
+ * API
+ * =============================
+ */
+
+export async function POST(request) {
+    try {
+        const { items, days = HISTORY_DAYS } = await request.json()
+        // 性能加固：由路由层强制屏蔽 allowExternal。外部同步仅允许由 Cron 任务触发。
+        const data = await syncHistoryBulk(items, days, false)
+        return NextResponse.json({
+            success: true,
+            data
+        })
+    } catch (e) {
+        console.error('[HistoryBulkAPI] Fatal Error:', e);
+        return NextResponse.json(
+            { success: false, error: e.message },
+            { status: 500 }
+        )
     }
 }
 </file>
@@ -4834,33 +4864,98 @@ export function AppShell({ activeSection, onNavigate, onLogout, loading, onRefre
 }
 </file>
 
-<file path="app/api/history/bulk/route.js">
-import { NextResponse } from 'next/server'
-import { syncHistoryBulk } from '@/lib/services/assetSyncService'
+<file path="app/api/user/assets/route.js">
+import { NextResponse } from 'next/server';
+import { getUserAssets, saveUserAssets } from '@/lib/storage/userRepo';
+import { cleanupSingleAssetIfNotUsed } from '@/lib/storage/maintenanceRepo';
+import { getD1Storage, getCloudflareCtx } from '@/lib/storage/d1Client';
+import { syncHistoryBulk, syncNamesBulk } from '@/lib/services/assetSyncService';
+import { requireUser } from '@/lib/auth/requireUser';
 
-const HISTORY_DAYS = 250
+const MAX_ASSETS_PER_USER = 100;
 
-/**
- * =============================
- * API
- * =============================
- */
+export async function GET(request) {
+    const userId = await requireUser(request);
+
+    if (!userId) {
+        return NextResponse.json({ success: false, error: 'Unauthorized', code: 'UNAUTHORIZED' }, { status: 401 });
+    }
+
+    try {
+        const userAssets = await getUserAssets(userId);
+        return NextResponse.json({ success: true, data: userAssets });
+    } catch (e) {
+        console.error(`[Assets] GET failed for ${userId}: `, e.message);
+        return NextResponse.json({ success: false, error: e.message, code: 'D1_ERROR' }, { status: 503 });
+    }
+}
 
 export async function POST(request) {
+    const userId = await requireUser(request);
+    if (!userId) {
+        return NextResponse.json({ success: false, error: 'Unauthorized', code: 'UNAUTHORIZED' }, { status: 401 });
+    }
+
     try {
-        const { items, days = HISTORY_DAYS } = await request.json()
-        // 性能加固：由路由层强制屏蔽 allowExternal。外部同步仅允许由 Cron 任务触发。
-        const data = await syncHistoryBulk(items, days, false)
+        const payload = await request.json();
+        const { assets } = payload || {};
+
+        const db = await getD1Storage();
+        if (!db) {
+            return NextResponse.json({ success: false, error: 'Database unavailable', code: 'D1_UNAVAILABLE' }, { status: 503 });
+        }
+
+        const oldAssets = await getUserAssets(userId);
+        const cleanAssets = (Array.isArray(assets) ? assets : [])
+            .filter(a => a && a.code && a.type)
+            .map(a => ({ code: String(a.code).toLowerCase(), type: a.type }));
+
+        if (cleanAssets.length > MAX_ASSETS_PER_USER) {
+            return NextResponse.json({
+                success: false,
+                error: `Tracking limit reached: max ${MAX_ASSETS_PER_USER} assets per account`,
+                code: 'QUOTA_EXCEEDED'
+            }, { status: 400 });
+        }
+
+        const addedAssets = cleanAssets.filter(c => !oldAssets.some(o => o.code === c.code && o.type === c.type));
+        const removedAssets = oldAssets.filter(old => !cleanAssets.some(a => a.code === old.code && a.type === old.type));
+
+        // 1. 优先写入资产基础关联
+        await saveUserAssets(userId, cleanAssets);
+
+        // 2. 预热资产名称到缓存 (D1 维护)
+        await syncNamesBulk(cleanAssets);
+
+        // 3. 架构减负：移除原本笨重的 ctx.waitUntil 历史抓取逻辑。
+        // 现在抓取压力由前端 useAssetSync 识别数据空洞并分片发起请求。
+        // 这里仅辅助触发轻量级的名称预热（可选）或直接返回告知前端哪些是新增的。
+
+        if (removedAssets.length > 0) {
+            // 4. 背景清理 (保留轻量级清理任务)
+            const cloudflare = await getCloudflareCtx();
+            const cleanupTask = Promise.all(
+                removedAssets.map(r => cleanupSingleAssetIfNotUsed(r.type, r.code).catch(() => { }))
+            );
+            if (cloudflare?.ctx?.waitUntil) {
+                cloudflare.ctx.waitUntil(cleanupTask);
+            }
+        }
+
         return NextResponse.json({
             success: true,
-            data
-        })
+            data: {
+                added: addedAssets.map(a => ({ code: a.code, type: a.type })),
+                removedCount: removedAssets.length
+            }
+        });
     } catch (e) {
-        console.error('[HistoryBulkAPI] Fatal Error:', e);
-        return NextResponse.json(
-            { success: false, error: e.message },
-            { status: 500 }
-        )
+        console.error(`[Assets] POST critical failure for ${userId}: `, e.message);
+        return NextResponse.json({
+            success: false,
+            error: e.message,
+            code: 'INTERNAL_ERROR'
+        }, { status: 500 });
     }
 }
 </file>
@@ -5259,102 +5354,6 @@ export function isMarketClosedBeijing() {
     const minute = bjNow.getMinutes();
     // 15:30 以后视为收盘
     return (hour > 15) || (hour === 15 && minute >= 30);
-}
-</file>
-
-<file path="app/api/user/assets/route.js">
-import { NextResponse } from 'next/server';
-import { getUserAssets, saveUserAssets } from '@/lib/storage/userRepo';
-import { cleanupSingleAssetIfNotUsed } from '@/lib/storage/maintenanceRepo';
-import { getD1Storage, getCloudflareCtx } from '@/lib/storage/d1Client';
-import { syncHistoryBulk, syncNamesBulk } from '@/lib/services/assetSyncService';
-import { requireUser } from '@/lib/auth/requireUser';
-
-const MAX_ASSETS_PER_USER = 100;
-
-export async function GET(request) {
-    const userId = await requireUser(request);
-
-    if (!userId) {
-        return NextResponse.json({ success: false, error: 'Unauthorized', code: 'UNAUTHORIZED' }, { status: 401 });
-    }
-
-    try {
-        const userAssets = await getUserAssets(userId);
-        return NextResponse.json({ success: true, data: userAssets });
-    } catch (e) {
-        console.error(`[Assets] GET failed for ${userId}: `, e.message);
-        return NextResponse.json({ success: false, error: e.message, code: 'D1_ERROR' }, { status: 503 });
-    }
-}
-
-export async function POST(request) {
-    const userId = await requireUser(request);
-    if (!userId) {
-        return NextResponse.json({ success: false, error: 'Unauthorized', code: 'UNAUTHORIZED' }, { status: 401 });
-    }
-
-    try {
-        const payload = await request.json();
-        const { assets } = payload || {};
-
-        const db = await getD1Storage();
-        if (!db) {
-            return NextResponse.json({ success: false, error: 'Database unavailable', code: 'D1_UNAVAILABLE' }, { status: 503 });
-        }
-
-        const oldAssets = await getUserAssets(userId);
-        const cleanAssets = (Array.isArray(assets) ? assets : [])
-            .filter(a => a && a.code && a.type)
-            .map(a => ({ code: String(a.code).toLowerCase(), type: a.type }));
-
-        if (cleanAssets.length > MAX_ASSETS_PER_USER) {
-            return NextResponse.json({
-                success: false,
-                error: `Tracking limit reached: max ${MAX_ASSETS_PER_USER} assets per account`,
-                code: 'QUOTA_EXCEEDED'
-            }, { status: 400 });
-        }
-
-        const addedAssets = cleanAssets.filter(c => !oldAssets.some(o => o.code === c.code && o.type === c.type));
-        const removedAssets = oldAssets.filter(old => !cleanAssets.some(a => a.code === old.code && a.type === old.type));
-
-        // 1. 优先写入资产基础关联
-        await saveUserAssets(userId, cleanAssets);
-
-        // 2. 预热资产名称到缓存 (D1 维护)
-        await syncNamesBulk(cleanAssets);
-
-        // 3. 架构减负：移除原本笨重的 ctx.waitUntil 历史抓取逻辑。
-        // 现在抓取压力由前端 useAssetSync 识别数据空洞并分片发起请求。
-        // 这里仅辅助触发轻量级的名称预热（可选）或直接返回告知前端哪些是新增的。
-
-        if (removedAssets.length > 0) {
-            // 4. 背景清理 (保留轻量级清理任务)
-            const cloudflare = await getCloudflareCtx();
-            const cleanupTask = Promise.all(
-                removedAssets.map(r => cleanupSingleAssetIfNotUsed(r.type, r.code).catch(() => { }))
-            );
-            if (cloudflare?.ctx?.waitUntil) {
-                cloudflare.ctx.waitUntil(cleanupTask);
-            }
-        }
-
-        return NextResponse.json({
-            success: true,
-            data: {
-                added: addedAssets.map(a => ({ code: a.code, type: a.type })),
-                removedCount: removedAssets.length
-            }
-        });
-    } catch (e) {
-        console.error(`[Assets] POST critical failure for ${userId}: `, e.message);
-        return NextResponse.json({
-            success: false,
-            error: e.message,
-            code: 'INTERNAL_ERROR'
-        }, { status: 500 });
-    }
 }
 </file>
 

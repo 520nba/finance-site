@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getSystemLogs } from '@/lib/storage/logRepo';
-import { isAdminAuthorized } from '@/lib/storage/authRepo';
+import { isAdminAuthorized } from '@/lib/auth/adminAuth';
 
 export async function GET(request) {
     if (!(await isAdminAuthorized(request))) {
