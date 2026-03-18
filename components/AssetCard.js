@@ -93,10 +93,13 @@ function RealtimeLayer({ asset }) {
 
 // ── 2. 波动率内核：完全不建立 QuotesContext 订阅 ──────────────────────────
 function VolatilityLayer({ asset, isVisible }) {
-    // 取得 localStorage 中的缓存作为首屏 fallback
-    const cachedHistory = useMemo(() => {
-        try { return JSON.parse(localStorage.getItem(`tracker_cache_hist:${asset.type}:${asset.code}`)) }
-        catch { return undefined }
+    // 取得 localStorage 中的缓存作为首屏 fallback (SSR 友好模式)
+    const [cachedHistory, setCachedHistory] = useState(undefined);
+    useEffect(() => {
+        try {
+            const val = localStorage.getItem(`tracker_cache_hist:${asset.type}:${asset.code}`);
+            if (val) setCachedHistory(JSON.parse(val));
+        } catch (e) { /* silent fail */ }
     }, [asset.type, asset.code]);
 
     // 历史数据获取 (仅在可见时启用)
