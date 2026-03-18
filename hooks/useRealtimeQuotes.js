@@ -11,43 +11,54 @@ export function useRealtimeQuotes({ activeTab, isLogged, assets, isSyncing, user
             if (isSyncing) return;
             tickCount++;
 
-            // 1. 每 5 分钟才做一次跨设备检查（节省 4/5 的 D1 读取）
+            // 1. 每 5 次 tick（根据动态间隔，约 5-25 分钟）做一次跨设备同步检查
             if (tickCount % 5 === 0) {
                 try {
                     const res = await fetch('/api/user/assets');
-                    const json = await res.json();
-                    // 后端统一返回 { success, data: [] } envelope 格式
-                    const remoteList = json?.data ?? json;
+                    const remoteList = (await res.json())?.data || [];
                     if (Array.isArray(remoteList)) {
                         const newCodes = remoteList.map(a => `${a.type}:${a.code}`).sort().join(',');
                         const oldCodes = assetsRef.current.map(a => `${a.type}:${a.code}`).sort().join(',');
                         if (newCodes !== oldCodes) {
                             refreshAssets(remoteList);
-                            return; // 直接交给重加载进程接管
+                            return true; // 返回 true 表示由于结构变更需要中断本次 tick
                         }
                     }
                 } catch (e) { /* ignore */ }
             }
 
-            // 2. 如果资产结构没变，继续原有的报价刷新流程
-            // 从 ref 拿到最准的映射
+            // 2. 正常行情刷新流程
             const stockItems = assetsRef.current.filter(a => a.type === 'stock');
-            // 只更新轻量级的 Quotes
             const quoteMap = await fetchBulkStockQuotes(stockItems);
 
             setAssets(prev => prev.map(a => {
                 const q = quoteMap[a.code.toLowerCase()] || quoteMap[a.code];
-                const newAsset = { ...a };
-                if (q) {
-                    newAsset.price = q.price;
-                    newAsset.changePercent = q.changePercent;
-                }
-                return newAsset;
+                if (q) return { ...a, price: q.price, changePercent: q.changePercent };
+                return a;
             }));
+            return false;
         };
 
-        const timer = setInterval(tick, 60000);
+        // 动态计算轮询间隔：盘中 1 分钟，盘外 5 分钟
+        const getInterval = () => {
+            const hourStr = new Date().toLocaleString('zh-CN', {
+                timeZone: 'Asia/Shanghai', hour: 'numeric', hour12: false
+            });
+            const hour = parseInt(hourStr);
+            const isInSession = (hour >= 9 && hour < 12) || (hour >= 13 && hour < 15);
+            return isInSession ? 60000 : 300000;
+        };
+
+        let timer;
+        const scheduleNext = () => {
+            timer = setTimeout(async () => {
+                const interrupted = await tick();
+                if (!interrupted) scheduleNext();
+            }, getInterval());
+        };
+
         tick();
-        return () => clearInterval(timer);
+        scheduleNext();
+        return () => clearTimeout(timer);
     }, [activeTab, isLogged, assets.length, isSyncing, userId, assetsRef, refreshAssets, setAssets]);
 }
