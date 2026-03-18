@@ -6,7 +6,7 @@ import { calculatePerformance } from '@/lib/utils';
 import { fetchBulkHistory } from '@/lib/api/client/historyService';
 import { useQuotes } from '@/providers/AssetProvider';
 
-// 鈹€鈹€ 杈呭姪鍑芥暟 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+// —— 辅助函数 ——
 function lastPerf(history, days) {
     if (!history || history.length === 0) return null;
     const curve = calculatePerformance(history, days);
@@ -32,13 +32,13 @@ function SortIcon({ colKey, sortKey, sortDesc }) {
 }
 
 const COLS = [
-    { key: 'd5', label: '5鏃? },
-    { key: 'd22', label: '22鏃? },
-    { key: 'd250', label: '250鏃? },
+    { key: 'd5', label: '5日' },
+    { key: 'd22', label: '22日' },
+    { key: 'd250', label: '250日' },
 ];
 
 /**
- * 鈹€鈹€ 1. 瀹炴椂鐩戞帶妯″紡缁勪欢 (璁㈤槄楂橀 QuotesContext) 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+ * —— 1. 实时监控模式组件 (订阅高频 QuotesContext) ——
  */
 function WatchlistRealtimeMode({ assets, selectedCode, onSelect, scrollToAsset }) {
     const { quotesMap } = useQuotes();
@@ -68,13 +68,13 @@ function WatchlistRealtimeMode({ assets, selectedCode, onSelect, scrollToAsset }
     return (
         <div className="border-t border-white/5">
             <div className="flex items-center px-4 py-1.5 border-b border-white/5 gap-3">
-                <span className="flex-1 text-[10px] font-bold uppercase tracking-widest opacity-25">鍚嶇О</span>
-                <span className="w-20 text-right text-[10px] font-bold uppercase tracking-widest opacity-25">鐜颁环</span>
+                <span className="flex-1 text-[10px] font-bold uppercase tracking-widest opacity-25">名称</span>
+                <span className="w-20 text-right text-[10px] font-bold uppercase tracking-widest opacity-25">现价</span>
                 <button
                     onClick={() => { if (sortKey === 'changePercent') setSortDesc(!sortDesc); else { setSortKey('changePercent'); setSortDesc(true); } }}
                     className="w-16 flex items-center justify-end gap-0.5 text-right text-[10px] font-bold uppercase tracking-widest opacity-40 hover:opacity-80 transition-opacity cursor-pointer"
                 >
-                    娑ㄨ穼骞?
+                    涨跌幅
                     <SortIcon colKey="changePercent" sortKey={sortKey} sortDesc={sortDesc} />
                 </button>
             </div>
@@ -107,7 +107,7 @@ function WatchlistRealtimeMode({ assets, selectedCode, onSelect, scrollToAsset }
 }
 
 /**
- * 鈹€鈹€ 2. 娉㈠姩鐜囧垎鏋愭ā寮忕粍浠?(涓嶈闃?QuotesContext锛屽畬鍏ㄤ笉鍙楅珮棰戞姤浠峰奖鍝? 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+ * —— 2. 波动率分析模式组件 (不订阅 QuotesContext，完全不受高频报价影响) ——
  */
 function WatchlistVolatilityMode({ assets, scrollToAsset }) {
     const [sortKey, setSortKey] = useState('d5');
@@ -165,20 +165,20 @@ function WatchlistVolatilityMode({ assets, scrollToAsset }) {
         });
         if (!latest) return '';
         const [y, m, d] = latest.split('-');
-        return `(鏇存柊鑷?{parseInt(m)}鏈?{parseInt(d)}鏃?`;
+        return `(更新至 ${parseInt(m)}月${parseInt(d)}日)`;
     }, [assets, statsData]);
 
     return (
         <>
             <div className="px-4 py-2.5 border-b border-white/5 flex items-center gap-2">
                 <div className="w-1.5 h-1.5 rounded-full bg-cyan-400 opacity-40" />
-                <span className="text-xs font-bold uppercase tracking-widest opacity-40">鑷€夋竻鍗曞垎鏋?/span>
+                <span className="text-xs font-bold uppercase tracking-widest opacity-40">自选清单分析</span>
                 <span className="text-[10px] font-bold text-cyan-400/60 uppercase tracking-tighter ml-1">
                     {latestDateStr}
                 </span>
             </div>
             <div className="flex items-center px-4 py-1.5 border-b border-white/5 gap-3">
-                <span className="flex-1 text-[10px] font-bold uppercase tracking-widest opacity-25">鍚嶇О</span>
+                <span className="flex-1 text-[10px] font-bold uppercase tracking-widest opacity-25">名称</span>
                 {COLS.map(col => (
                     <button
                         key={col.key}
@@ -211,7 +211,7 @@ function WatchlistVolatilityMode({ assets, scrollToAsset }) {
 }
 
 /**
- * 鈹€鈹€ 3. 涓诲嚭鍙ｇ粍浠讹細瀹炵幇鎸夐渶鍒嗗寘娓叉煋 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+ * —— 3. 主出口组件：实现按需分包渲染 ——
  */
 export default function WatchlistSidebar({ assets, mode = 'volatility', selectedCode, onSelect }) {
     if (!assets || assets.length === 0) return null;
@@ -238,7 +238,7 @@ export default function WatchlistSidebar({ assets, mode = 'volatility', selected
                     <>
                         <div className="px-4 py-2.5 border-b border-white/5 flex items-center gap-2">
                             <div className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
-                            <span className="text-xs font-bold uppercase tracking-widest opacity-40">瀹炴椂鐩戞帶</span>
+                            <span className="text-xs font-bold uppercase tracking-widest opacity-40">实时监控</span>
                             <span className="ml-auto text-xs font-mono opacity-20">{assets.length}</span>
                         </div>
                         <WatchlistRealtimeMode
@@ -258,4 +258,3 @@ export default function WatchlistSidebar({ assets, mode = 'volatility', selected
         </aside>
     );
 }
-

@@ -4,19 +4,19 @@ import { fetchBulkStockQuotes } from '@/lib/api/client/quotesService';
 import { fetchBulkHistory } from '@/lib/api/client/historyService';
 
 /**
- * 璧勪骇鍐欐搷浣?Hook锛坅ddAsset / removeAsset锛?
- * 鑱岃矗锛氬皝瑁呮墍鏈変細鏀瑰彉 assets 鍒楄〃鐨勭敤鎴锋搷浣滐紝
- * 璁?AssetProvider 鍥炲綊鍒扮函绮圭殑鐘舵€佽仛鍚堝眰銆?
+ * 资产写操作 Hook（addAsset / removeAsset）
+ * 职责：封装所有会改变 assets 列表的用户操作，
+ * 让 AssetProvider 回归到纯粹的状态聚合层。
  */
 export function useAssetActions({ activeTabRef, setAssets, setIsSyncing, showToast, selectedCodeRef, setSelectedCode, syncAssetsToServer, assetsRef }) {
 
-    // 鍐呴儴杈呭姪锛氳幏鍙栧崟涓祫浜х殑瀹屾暣鎻忚堪淇℃伅锛堝悕绉?+ 瀹炴椂鎶ヤ环锛?
+    // 内部辅助：获取单个资产的完整描述信息（名称 + 实时报价）
     const getAssetDetails = useCallback(async (code, type) => {
         try {
             const nameMap = await fetchBulkNames([{ code, type }], true);
-            const name = nameMap[`${type}:${code}`] ?? (type === 'fund' ? `鍩洪噾 ${code}` : `鑲＄エ ${code}`);
+            const name = nameMap[`${type}:${code}`] ?? (type === 'fund' ? `基金 ${code}` : `股票 ${code}`);
 
-            // 鍘嗗彶鏁版嵁鐜板湪鐢卞悗鍙板畾鏃朵换鍔¤ˉ鍏紝涓嶅啀鐢卞墠绔柊澧炴椂鍒昏Е鍙戝紓姝ヨ姹?
+            // 历史数据现在由后台定时任务补全，不再由前端新增时刻触发异步请求
 
             if (type === 'stock') {
                 const quoteMap = await fetchBulkStockQuotes([{ code, type }], true);
@@ -31,24 +31,24 @@ export function useAssetActions({ activeTabRef, setAssets, setIsSyncing, showToa
     }, []);
 
     /**
-     * 娣诲姞璧勪骇鍒拌嚜閫夊垪琛?
-     * 鍖呭惈鏍煎紡鏍￠獙 鈫?鏁版嵁棰勫姞杞?鈫?鍘婚噸鍐欏叆
+     * 添加资产到自选列表
+     * 包含格式校验 -> 数据预加载 -> 去重写入
      */
     const addAsset = useCallback(async (rawCode, typeHint) => {
         setIsSyncing(true);
         const code = rawCode.trim().toLowerCase();
         const currentTab = activeTabRef.current;
 
-        // 鏍煎紡鏍￠獙
+        // 格式校验
         if (typeHint === 'stock' || currentTab === 'watchlist') {
             if (!/^[a-zA-Z]{2}\d{6}$/i.test(code)) {
-                showToast('鑲＄エ浠ｇ爜蹇呴』鍖呭惈甯傚満鍓嶇紑 (濡?sh600036)');
+                showToast('股票代码必须包含市场前缀 (如 sh600036)');
                 setIsSyncing(false);
                 return;
             }
         } else if (typeHint === 'fund') {
             if (!/^\d{6}$/.test(code)) {
-                showToast('鍩洪噾浠ｇ爜蹇呴』涓?6 浣嶆暟瀛?);
+                showToast('基金代码必须为 6 位数字');
                 setIsSyncing(false);
                 return;
             }
@@ -57,22 +57,22 @@ export function useAssetActions({ activeTabRef, setAssets, setIsSyncing, showToa
         const asset = await getAssetDetails(code, typeHint);
         if (asset) {
             const list = Array.isArray(assetsRef.current) ? assetsRef.current : [];
-            // 鍘婚噸锛氬凡瀛樺湪鍒欎笉閲嶅娣诲姞
+            // 去重：已存在则不重复添加
             if (!list.find(a => a.code === code)) {
                 const newList = [...list, asset];
                 setAssets(newList);
-                // 绔嬪嵆瑙﹀彂寮哄埗鍚屾锛岄伩鍏嶄緷璧?useEffect 寮曞彂鏂版棫鐘舵€佺珵鎬?
+                // 立即触发强制同步，避免依赖 useEffect 引发新旧状态竞态
                 syncAssetsToServer(newList);
             }
         } else {
-            showToast('鍔犺浇澶辫触锛屽彲鑳戒唬鐮佹棤鏁?);
+            showToast('加载失败，可能代码无效');
         }
         setIsSyncing(false);
     }, [activeTabRef, getAssetDetails, setIsSyncing, setAssets, showToast, assetsRef, syncAssetsToServer]);
 
     /**
-     * 浠庤嚜閫夊垪琛ㄧЩ闄よ祫浜?
-     * 鍚屾娓呴櫎渚ц竟鏍忛€変腑鐘舵€?
+     * 从自选列表移除资产
+     * 同步清除侧边栏选中状态
      */
     const removeAsset = useCallback((code) => {
         const newList = assetsRef.current.filter(a => a.code !== code);
