@@ -1146,6 +1146,61 @@ export async function requireUser(request) {
 }
 </file>
 
+<file path="lib/storage/memoryCache.js">
+/**
+ * 请求级内存缓存（L1）
+ *
+ * Cloudflare Workers 生产环境：每个 HTTP 请求独立的 V8 Isolate，
+ * 内存不跨请求共享，TTL 在生产环境中无实际意义，
+ * 主要作用是在同一请求内对相同 key 去重，避免重复 D1 查询。
+ *
+ * 本地开发环境（Node.js）：内存跨请求共享，TTL 在此环境下真正生效。
+ */
+class MemoryCache {
+    constructor(maxSize = 1000) {
+        this.cache = new Map();
+        this.maxSize = maxSize;
+    }
+
+    set(key, value, ttlMs = 0) {
+        // 容量控制：LRU 基础逻辑（删除最旧的）
+        if (this.cache.size >= this.maxSize) {
+            const firstKey = this.cache.keys().next().value;
+            this.cache.delete(firstKey);
+        }
+
+        const entry = {
+            value,
+            expiry: ttlMs > 0 ? Date.now() + ttlMs : null
+        };
+        this.cache.set(key, entry);
+    }
+
+    get(key) {
+        const entry = this.cache.get(key);
+        if (!entry) return null;
+
+        // 过期检查
+        if (entry.expiry && Date.now() > entry.expiry) {
+            this.cache.delete(key);
+            return null;
+        }
+
+        return entry.value;
+    }
+
+    delete(key) {
+        this.cache.delete(key);
+    }
+
+    clear() {
+        this.cache.clear();
+    }
+}
+
+export const memoryCache = new MemoryCache(1500);
+</file>
+
 <file path="lib/storage/nameRepo.js">
 import { queryAll, runSql, getD1Storage } from './d1Client';
 import { memoryCache } from './memoryCache';
@@ -2264,6 +2319,82 @@ export async function GET(request) {
 }
 </file>
 
+<file path="app/api/admin/stats/route.js">
+import { NextResponse } from 'next/server';
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+
+import { isAdminAuthorized } from '@/lib/storage/authRepo';
+import { getAllApiHealth } from '@/lib/storage/healthRepo';
+import { memoryCache } from '@/lib/storage/memoryCache';
+
+const STATS_CACHE_KEY = 'admin_stats_full';
+const CACHE_TTL = 10000; // 10s 缓存
+
+export async function GET(request) {
+    if (!(await isAdminAuthorized(request))) {
+        return NextResponse.json({ error: 'Unauthorized' }, { status: 403 });
+    }
+
+    const { searchParams } = new URL(request.url);
+    const shouldSync = searchParams.get('sync') === 'true';
+
+    if (!shouldSync) {
+        const cached = memoryCache.get(STATS_CACHE_KEY);
+        if (cached) {
+            return NextResponse.json(cached);
+        }
+    }
+
+    try {
+        const { getD1Storage } = await import('@/lib/storage/d1Client');
+        const db = await getD1Storage();
+
+        if (shouldSync) {
+            const { syncCounterFromTable } = await import('@/lib/storage/statsRepo');
+            await Promise.all([
+                syncCounterFromTable('users', 'users'),
+                syncCounterFromTable('asset_stocks', 'asset_names', 'type = "stock"'),
+                syncCounterFromTable('asset_funds', 'asset_names', 'type = "fund"'),
+                syncCounterFromTable('quotes_count', 'asset_quotes')
+            ]);
+        }
+
+        const { getCounters } = await import('@/lib/storage/statsRepo');
+        const [counters, queueRow] = await Promise.all([
+            getCounters([
+                'users', 'asset_stocks', 'asset_funds', 'history_points',
+                'intraday_points', 'quotes_count'
+            ]),
+            db.prepare("SELECT COUNT(*) as c FROM sync_jobs WHERE status = 'pending'").first().catch(() => ({ c: 0 }))
+        ]);
+
+        const healthData = await (async () => {
+            try { return await getAllApiHealth(); } catch (e) { return []; }
+        })();
+
+        const finalStats = {
+            users: counters.users,
+            stocks: counters.asset_stocks,
+            funds: counters.asset_funds,
+            history_points: counters.history_points,
+            intraday_points: counters.intraday_points,
+            quotes_count: counters.quotes_count,
+            queue_count: queueRow?.c || 0,
+            db_engine: 'Cloudflare D1 (SQLite) + Counters',
+            api_health: healthData || []
+        };
+
+        memoryCache.set(STATS_CACHE_KEY, finalStats, CACHE_TTL);
+
+        return NextResponse.json(finalStats);
+    } catch (e) {
+        console.error('[AdminStats] Global Critical Failure:', e.message);
+        return NextResponse.json({ error: 'INTERNAL_SERVER_ERROR' }, { status: 500 });
+    }
+}
+</file>
+
 <file path="app/api/auth/login/route.js">
 /**
  * app/api/auth/login/route.js
@@ -3356,61 +3487,6 @@ export async function purgeZombieAssets(env = null) {
 }
 </file>
 
-<file path="lib/storage/memoryCache.js">
-/**
- * 请求级内存缓存（L1）
- *
- * Cloudflare Workers 生产环境：每个 HTTP 请求独立的 V8 Isolate，
- * 内存不跨请求共享，TTL 在生产环境中无实际意义，
- * 主要作用是在同一请求内对相同 key 去重，避免重复 D1 查询。
- *
- * 本地开发环境（Node.js）：内存跨请求共享，TTL 在此环境下真正生效。
- */
-class MemoryCache {
-    constructor(maxSize = 1000) {
-        this.cache = new Map();
-        this.maxSize = maxSize;
-    }
-
-    set(key, value, ttlMs = 0) {
-        // 容量控制：LRU 基础逻辑（删除最旧的）
-        if (this.cache.size >= this.maxSize) {
-            const firstKey = this.cache.keys().next().value;
-            this.cache.delete(firstKey);
-        }
-
-        const entry = {
-            value,
-            expiry: ttlMs > 0 ? Date.now() + ttlMs : null
-        };
-        this.cache.set(key, entry);
-    }
-
-    get(key) {
-        const entry = this.cache.get(key);
-        if (!entry) return null;
-
-        // 过期检查
-        if (entry.expiry && Date.now() > entry.expiry) {
-            this.cache.delete(key);
-            return null;
-        }
-
-        return entry.value;
-    }
-
-    delete(key) {
-        this.cache.delete(key);
-    }
-
-    clear() {
-        this.cache.clear();
-    }
-}
-
-export const memoryCache = new MemoryCache(1500);
-</file>
-
 <file path="providers/contexts.js">
 import { createContext } from 'react';
 
@@ -3463,82 +3539,6 @@ export async function apiClient(endpoint, options = {}) {
     } catch (error) {
         console.error(`[apiClient] Network request failed for ${endpoint}:`, error.message);
         throw error;
-    }
-}
-</file>
-
-<file path="app/api/admin/stats/route.js">
-import { NextResponse } from 'next/server';
-export const dynamic = 'force-dynamic';
-export const revalidate = 0;
-
-import { isAdminAuthorized } from '@/lib/storage/authRepo';
-import { getAllApiHealth } from '@/lib/storage/healthRepo';
-import { memoryCache } from '@/lib/storage/memoryCache';
-
-const STATS_CACHE_KEY = 'admin_stats_full';
-const CACHE_TTL = 10000; // 10s 缓存
-
-export async function GET(request) {
-    if (!(await isAdminAuthorized(request))) {
-        return NextResponse.json({ error: 'Unauthorized' }, { status: 403 });
-    }
-
-    const { searchParams } = new URL(request.url);
-    const shouldSync = searchParams.get('sync') === 'true';
-
-    if (!shouldSync) {
-        const cached = memoryCache.get(STATS_CACHE_KEY);
-        if (cached) {
-            return NextResponse.json(cached);
-        }
-    }
-
-    try {
-        const { getD1Storage } = await import('@/lib/storage/d1Client');
-        const db = await getD1Storage();
-
-        if (shouldSync) {
-            const { syncCounterFromTable } = await import('@/lib/storage/statsRepo');
-            await Promise.all([
-                syncCounterFromTable('users', 'users'),
-                syncCounterFromTable('asset_stocks', 'asset_names', 'type = "stock"'),
-                syncCounterFromTable('asset_funds', 'asset_names', 'type = "fund"'),
-                syncCounterFromTable('quotes_count', 'asset_quotes')
-            ]);
-        }
-
-        const { getCounters } = await import('@/lib/storage/statsRepo');
-        const [counters, queueRow] = await Promise.all([
-            getCounters([
-                'users', 'asset_stocks', 'asset_funds', 'history_points',
-                'intraday_points', 'quotes_count'
-            ]),
-            db.prepare("SELECT COUNT(*) as c FROM sync_jobs WHERE status = 'pending'").first().catch(() => ({ c: 0 }))
-        ]);
-
-        const healthData = await (async () => {
-            try { return await getAllApiHealth(); } catch (e) { return []; }
-        })();
-
-        const finalStats = {
-            users: counters.users,
-            stocks: counters.asset_stocks,
-            funds: counters.asset_funds,
-            history_points: counters.history_points,
-            intraday_points: counters.intraday_points,
-            quotes_count: counters.quotes_count,
-            queue_count: queueRow?.c || 0,
-            db_engine: 'Cloudflare D1 (SQLite) + Counters',
-            api_health: healthData || []
-        };
-
-        memoryCache.set(STATS_CACHE_KEY, finalStats, CACHE_TTL);
-
-        return NextResponse.json(finalStats);
-    } catch (e) {
-        console.error('[AdminStats] Global Critical Failure:', e.message);
-        return NextResponse.json({ error: 'INTERNAL_SERVER_ERROR' }, { status: 500 });
     }
 }
 </file>
@@ -4136,6 +4136,71 @@ export async function getAllApiHealth(env = null) {
         console.error('[HealthRepo] getAllApiHealth failed:', e.message);
         return [];
     }
+}
+</file>
+
+<file path="lib/storage/kvClient.js">
+import { memoryCache } from './memoryCache';
+import { getKvStorage as getBaseKv } from './d1Client';
+
+/**
+ * 统一获取项目主 KV (STOCK_DATA)
+ */
+export async function getKvStorage() {
+    return await getBaseKv('STOCK_DATA');
+}
+
+export async function readDoc(key, defaultValue = {}) {
+    const kv = await getKvStorage();
+    if (kv) {
+        try {
+            const data = await kv.get(key);
+            return data ? JSON.parse(data) : defaultValue;
+        } catch (e) {
+            console.error(`[KV:readDoc] Failed to get key "${key}":`, e.message);
+        }
+    }
+    const cached = memoryCache.get(key);
+    return cached !== undefined ? cached : defaultValue;
+}
+
+export async function writeDoc(key, val) {
+    const kv = await getKvStorage();
+    const dataStr = typeof val === 'string' ? val : JSON.stringify(val);
+
+    let success = false;
+    if (kv) {
+        try {
+            await kv.put(key, dataStr);
+            success = true;
+        } catch (e) {
+            console.error(`[KV:writeDoc] Failed to put key "${key}":`, e.message);
+        }
+    }
+
+    // 写入本地缓存作为热备份/降级
+    memoryCache.set(key, val);
+
+    // 维度 9 优化：仅在 KV 真正写入成功时返回 true
+    // 如果 KV 失败但写入了内存库，也返回 false 提示调用方存在持久化风险
+    return success;
+}
+
+export async function deleteDoc(key) {
+    const kv = await getKvStorage();
+    let success = false;
+
+    if (kv) {
+        try {
+            await kv.delete(key);
+            success = true;
+        } catch (e) {
+            console.error(`[KV:deleteDoc] Failed to delete key "${key}":`, e.message);
+        }
+    }
+
+    memoryCache.delete(key);
+    return success;
 }
 </file>
 
@@ -4769,6 +4834,37 @@ export function AppShell({ activeSection, onNavigate, onLogout, loading, onRefre
 }
 </file>
 
+<file path="app/api/history/bulk/route.js">
+import { NextResponse } from 'next/server'
+import { syncHistoryBulk } from '@/lib/services/assetSyncService'
+
+const HISTORY_DAYS = 250
+
+/**
+ * =============================
+ * API
+ * =============================
+ */
+
+export async function POST(request) {
+    try {
+        const { items, days = HISTORY_DAYS } = await request.json()
+        // 性能加固：由路由层强制屏蔽 allowExternal。外部同步仅允许由 Cron 任务触发。
+        const data = await syncHistoryBulk(items, days, false)
+        return NextResponse.json({
+            success: true,
+            data
+        })
+    } catch (e) {
+        console.error('[HistoryBulkAPI] Fatal Error:', e);
+        return NextResponse.json(
+            { success: false, error: e.message },
+            { status: 500 }
+        )
+    }
+}
+</file>
+
 <file path="app/api/user/sync-asset/route.js">
 import { NextResponse } from 'next/server';
 import { requireUser } from '@/lib/auth/requireUser';
@@ -4806,71 +4902,6 @@ export async function POST(request) {
         console.error(`[SyncAsset] Failed for ${userId}:`, e.message);
         return NextResponse.json({ success: false, error: e.message }, { status: 500 });
     }
-}
-</file>
-
-<file path="lib/storage/kvClient.js">
-import { memoryCache } from './memoryCache';
-import { getKvStorage as getBaseKv } from './d1Client';
-
-/**
- * 统一获取项目主 KV (STOCK_DATA)
- */
-export async function getKvStorage() {
-    return await getBaseKv('STOCK_DATA');
-}
-
-export async function readDoc(key, defaultValue = {}) {
-    const kv = await getKvStorage();
-    if (kv) {
-        try {
-            const data = await kv.get(key);
-            return data ? JSON.parse(data) : defaultValue;
-        } catch (e) {
-            console.error(`[KV:readDoc] Failed to get key "${key}":`, e.message);
-        }
-    }
-    const cached = memoryCache.get(key);
-    return cached !== undefined ? cached : defaultValue;
-}
-
-export async function writeDoc(key, val) {
-    const kv = await getKvStorage();
-    const dataStr = typeof val === 'string' ? val : JSON.stringify(val);
-
-    let success = false;
-    if (kv) {
-        try {
-            await kv.put(key, dataStr);
-            success = true;
-        } catch (e) {
-            console.error(`[KV:writeDoc] Failed to put key "${key}":`, e.message);
-        }
-    }
-
-    // 写入本地缓存作为热备份/降级
-    memoryCache.set(key, val);
-
-    // 维度 9 优化：仅在 KV 真正写入成功时返回 true
-    // 如果 KV 失败但写入了内存库，也返回 false 提示调用方存在持久化风险
-    return success;
-}
-
-export async function deleteDoc(key) {
-    const kv = await getKvStorage();
-    let success = false;
-
-    if (kv) {
-        try {
-            await kv.delete(key);
-            success = true;
-        } catch (e) {
-            console.error(`[KV:deleteDoc] Failed to delete key "${key}":`, e.message);
-        }
-    }
-
-    memoryCache.delete(key);
-    return success;
 }
 </file>
 
@@ -5028,34 +5059,206 @@ export async function deleteUser(userId, env = null) {
 }
 </file>
 
-<file path="app/api/history/bulk/route.js">
-import { NextResponse } from 'next/server'
-import { syncHistoryBulk } from '@/lib/services/assetSyncService'
-
-const HISTORY_DAYS = 250
-
+<file path="lib/utils.js">
 /**
- * =============================
- * API
- * =============================
+ * 波动率与表现曲线计算逻辑
  */
 
-export async function POST(request) {
-    try {
-        const { items, days = HISTORY_DAYS } = await request.json()
-        // 性能加固：由路由层强制屏蔽 allowExternal。外部同步仅允许由 Cron 任务触发。
-        const data = await syncHistoryBulk(items, days, false)
-        return NextResponse.json({
-            success: true,
-            data
-        })
-    } catch (e) {
-        console.error('[HistoryBulkAPI] Fatal Error:', e);
-        return NextResponse.json(
-            { success: false, error: e.message },
-            { status: 500 }
-        )
+/**
+ * 计算相对表现曲线 (Performance Curve)
+ * 将初始价格基准设为 100，观察后续走势
+ * @param {Array} history 历史数据 [{value: 10, ...}, ...]
+ * @param {number} days 周期天数
+ */
+export function calculatePerformance(history, days) {
+    if (!history || history.length === 0) return [];
+
+    // 截取最近 N+1 天的数据，以第 0 点作为起算的基准
+    const data = history.slice(-(days + 1));
+    if (data.length === 0) return [];
+
+    const baseValue = data[0].value;
+
+    // 防御：baseValue 为 0 时（停牌、数据缺失）无法计算涨跌幅，返回空数组
+    // 避免产生 Infinity 或 NaN 传入 ECharts 导致图表崩溃
+    if (!baseValue || baseValue <= 0) return [];
+
+    return data.map(item => ({
+        date: item.date,
+        // (当前价 / 基准价 - 1) * 100 = 收益率
+        performance: ((item.value / baseValue) - 1) * 100,
+        originalValue: item.value
+    }));
+}
+
+/**
+ * 计算波动率 (Standard Deviation of returns) - 可选增强功能
+ */
+export function calculateVolatility(history, days) {
+    const perf = calculatePerformance(history, days);
+    if (perf.length < 2) return 0;
+
+    const returns = [];
+    for (let i = 1; i < perf.length; i++) {
+        const prev = perf[i - 1].originalValue;
+        const curr = perf[i].originalValue;
+        if (prev <= 0 || curr <= 0) continue; // 健壮性：屏蔽休市除零与黑天鹅负值
+        returns.push(Math.log(curr / prev));
     }
+
+    const mean = returns.reduce((a, b) => a + b, 0) / returns.length;
+    const variance = returns.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / returns.length;
+
+    // 年化波动率 (假设每年 250 个交易日)
+    return Math.sqrt(variance) * Math.sqrt(250) * 100;
+}
+/**
+ * 计算多周期表现统计 (Performance Stats)
+ * @param {Array} history 历史数据
+ */
+export function calculateStats(history) {
+    if (!history || history.length < 2)
+        return { perf5d: 0, perf22d: 0, perf250d: 0 }
+
+    const getPerf = (days) => {
+        const data = history.slice(-(days + 1))
+        if (data.length < 2 || !data[0].value || data[0].value === 0) return 0
+        const perf = ((data[data.length - 1].value / data[0].value) - 1) * 100
+        if (isNaN(perf) || !isFinite(perf)) return 0
+        return Number(perf.toFixed(2))
+    }
+
+    return {
+        perf5d: getPerf(5),
+        perf22d: getPerf(22),
+        perf250d: getPerf(250)
+    }
+}
+
+/**
+ * 切分数组 (Chunk Array)
+ */
+export function chunkArray(arr, size) {
+    const result = [];
+    for (let i = 0; i < arr.length; i += size) {
+        result.push(arr.slice(i, i + size));
+    }
+    return result;
+}
+
+// 缓存 Intl.DateTimeFormat 实例以优化性能，避免在循环中重复创建高代价对象
+const dateFormatterCache = new Map();
+
+/**
+ * ── 健壮性增强工具 ──────────────────────────────────────────────────
+ */
+
+/**
+ * 获取标准北京时间 Date 对象
+ * 屏蔽由于部署环境（如 Cloudflare Edge）时区不一致导致的计算偏差
+ */
+export function getBeijingDate() {
+    // 效率优化：直接使用 Timezone Offset 进行本地化计算，减少 toLocaleString 调用
+    const now = new Date();
+    // 目标时区北京 (UTC+8)
+    const offset = 8 * 60 * 60 * 1000;
+    const utc = now.getTime() + (now.getTimezoneOffset() * 60000);
+    return new Date(utc + offset);
+}
+
+/**
+ * 获取北京时间当前的日期字符串 (YYYY-MM-DD)
+ */
+export function getBeijingTodayStr() {
+    const bjNow = getBeijingDate();
+    const y = bjNow.getFullYear();
+    const m = String(bjNow.getMonth() + 1).padStart(2, '0');
+    const d = String(bjNow.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+}
+
+/**
+ * 将时间戳转换为指定时区的日期字符串 (YYYY-MM-DD)
+ * @param {number|Date} date 时间戳或对象
+ * @param {string} timeZone 时区名称
+ */
+export function formatDateInTimezone(date, timeZone = "Asia/Shanghai") {
+    const d = typeof date === 'number' ? new Date(date) : date;
+
+    let formatter = dateFormatterCache.get(timeZone);
+    if (!formatter) {
+        formatter = new Intl.DateTimeFormat('en-CA', {
+            timeZone,
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit'
+        });
+        dateFormatterCache.set(timeZone, formatter);
+    }
+
+    return formatter.format(d);
+}
+
+/**
+ * 带有指数退避 + Jitter 的通用 fetch 重试逻辑
+ * @param {string} url 目标 URL
+ * @param {Object} options fetch 选项
+ * @param {number} retry 重试次数
+ * @param {AbortSignal} signal 外部取消信号
+ */
+export async function fetchWithRetry(url, options = {}, retry = 2, signal = null) {
+    const timeoutMs = options.timeout ?? 10000;
+
+    for (let i = 0; i <= retry; i++) {
+        const controller = new AbortController();
+        const t = setTimeout(() => controller.abort(), timeoutMs);
+
+        try {
+            const signals = [controller.signal];
+            if (signal) signals.push(signal);
+
+            const res = await fetch(url, {
+                ...options,
+                signal: AbortSignal.any(signals)
+            });
+
+            if (res.ok) return res;
+
+            // 429 Too Many Requests | 503 Service Unavailable | 504 Gateway Timeout -> 触发重试
+            if ([429, 503, 504].includes(res.status) && i < retry) {
+                const backoff = Math.min(1000 * Math.pow(2, i) + Math.random() * 1000, 10000);
+                console.warn(`[FetchRetry] Status ${res.status} for ${url}, retrying in ${Math.round(backoff)}ms...`);
+                await new Promise(r => setTimeout(r, backoff));
+                continue;
+            }
+
+            return res; // 其他非 ok 状态（如 404, 401）不重试，直接返回
+        } catch (e) {
+            const isAbort = e.name === 'AbortError' || (signal?.aborted);
+            if (isAbort && !controller.signal.aborted) throw e; // 外部 Abort 直接抛出
+
+            if (i < retry) {
+                const backoff = Math.min(1000 * Math.pow(2, i) + Math.random() * 1000, 10000);
+                console.warn(`[FetchRetry] Attempt ${i + 1} failed for ${url}: ${e.message}, retrying in ${Math.round(backoff)}ms...`);
+                await new Promise(r => setTimeout(r, backoff));
+                continue;
+            }
+            throw e;
+        } finally {
+            clearTimeout(t);
+        }
+    }
+}
+
+/**
+ * 判断当前是否已过 A 股收盘时间 (北京时间 15:30 以后)
+ */
+export function isMarketClosedBeijing() {
+    const bjNow = getBeijingDate();
+    const hour = bjNow.getHours();
+    const minute = bjNow.getMinutes();
+    // 15:30 以后视为收盘
+    return (hour > 15) || (hour === 15 && minute >= 30);
 }
 </file>
 
@@ -5534,209 +5737,6 @@ export async function pruneIntradayPoints(env = null) {
     } catch (e) {
         console.error(`[IntradayRepo] pruneIntradayPoints failed:`, e.message);
     }
-}
-</file>
-
-<file path="lib/utils.js">
-/**
- * 波动率与表现曲线计算逻辑
- */
-
-/**
- * 计算相对表现曲线 (Performance Curve)
- * 将初始价格基准设为 100，观察后续走势
- * @param {Array} history 历史数据 [{value: 10, ...}, ...]
- * @param {number} days 周期天数
- */
-export function calculatePerformance(history, days) {
-    if (!history || history.length === 0) return [];
-
-    // 截取最近 N+1 天的数据，以第 0 点作为起算的基准
-    const data = history.slice(-(days + 1));
-    if (data.length === 0) return [];
-
-    const baseValue = data[0].value;
-
-    // 防御：baseValue 为 0 时（停牌、数据缺失）无法计算涨跌幅，返回空数组
-    // 避免产生 Infinity 或 NaN 传入 ECharts 导致图表崩溃
-    if (!baseValue || baseValue <= 0) return [];
-
-    return data.map(item => ({
-        date: item.date,
-        // (当前价 / 基准价 - 1) * 100 = 收益率
-        performance: ((item.value / baseValue) - 1) * 100,
-        originalValue: item.value
-    }));
-}
-
-/**
- * 计算波动率 (Standard Deviation of returns) - 可选增强功能
- */
-export function calculateVolatility(history, days) {
-    const perf = calculatePerformance(history, days);
-    if (perf.length < 2) return 0;
-
-    const returns = [];
-    for (let i = 1; i < perf.length; i++) {
-        const prev = perf[i - 1].originalValue;
-        const curr = perf[i].originalValue;
-        if (prev <= 0 || curr <= 0) continue; // 健壮性：屏蔽休市除零与黑天鹅负值
-        returns.push(Math.log(curr / prev));
-    }
-
-    const mean = returns.reduce((a, b) => a + b, 0) / returns.length;
-    const variance = returns.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / returns.length;
-
-    // 年化波动率 (假设每年 250 个交易日)
-    return Math.sqrt(variance) * Math.sqrt(250) * 100;
-}
-/**
- * 计算多周期表现统计 (Performance Stats)
- * @param {Array} history 历史数据
- */
-export function calculateStats(history) {
-    if (!history || history.length < 2)
-        return { perf5d: 0, perf22d: 0, perf250d: 0 }
-
-    const getPerf = (days) => {
-        const data = history.slice(-(days + 1))
-        if (data.length < 2 || !data[0].value || data[0].value === 0) return 0
-        const perf = ((data[data.length - 1].value / data[0].value) - 1) * 100
-        if (isNaN(perf) || !isFinite(perf)) return 0
-        return Number(perf.toFixed(2))
-    }
-
-    return {
-        perf5d: getPerf(5),
-        perf22d: getPerf(22),
-        perf250d: getPerf(250)
-    }
-}
-
-/**
- * 切分数组 (Chunk Array)
- */
-export function chunkArray(arr, size) {
-    const result = [];
-    for (let i = 0; i < arr.length; i += size) {
-        result.push(arr.slice(i, i + size));
-    }
-    return result;
-}
-
-// 缓存 Intl.DateTimeFormat 实例以优化性能，避免在循环中重复创建高代价对象
-const dateFormatterCache = new Map();
-
-/**
- * ── 健壮性增强工具 ──────────────────────────────────────────────────
- */
-
-/**
- * 获取标准北京时间 Date 对象
- * 屏蔽由于部署环境（如 Cloudflare Edge）时区不一致导致的计算偏差
- */
-export function getBeijingDate() {
-    // 效率优化：直接使用 Timezone Offset 进行本地化计算，减少 toLocaleString 调用
-    const now = new Date();
-    // 目标时区北京 (UTC+8)
-    const offset = 8 * 60 * 60 * 1000;
-    const utc = now.getTime() + (now.getTimezoneOffset() * 60000);
-    return new Date(utc + offset);
-}
-
-/**
- * 获取北京时间当前的日期字符串 (YYYY-MM-DD)
- */
-export function getBeijingTodayStr() {
-    const bjNow = getBeijingDate();
-    const y = bjNow.getFullYear();
-    const m = String(bjNow.getMonth() + 1).padStart(2, '0');
-    const d = String(bjNow.getDate()).padStart(2, '0');
-    return `${y}-${m}-${d}`;
-}
-
-/**
- * 将时间戳转换为指定时区的日期字符串 (YYYY-MM-DD)
- * @param {number|Date} date 时间戳或对象
- * @param {string} timeZone 时区名称
- */
-export function formatDateInTimezone(date, timeZone = "Asia/Shanghai") {
-    const d = typeof date === 'number' ? new Date(date) : date;
-
-    let formatter = dateFormatterCache.get(timeZone);
-    if (!formatter) {
-        formatter = new Intl.DateTimeFormat('en-CA', {
-            timeZone,
-            year: 'numeric',
-            month: '2-digit',
-            day: '2-digit'
-        });
-        dateFormatterCache.set(timeZone, formatter);
-    }
-
-    return formatter.format(d);
-}
-
-/**
- * 带有指数退避 + Jitter 的通用 fetch 重试逻辑
- * @param {string} url 目标 URL
- * @param {Object} options fetch 选项
- * @param {number} retry 重试次数
- * @param {AbortSignal} signal 外部取消信号
- */
-export async function fetchWithRetry(url, options = {}, retry = 2, signal = null) {
-    const timeoutMs = options.timeout ?? 10000;
-
-    for (let i = 0; i <= retry; i++) {
-        const controller = new AbortController();
-        const t = setTimeout(() => controller.abort(), timeoutMs);
-
-        try {
-            const signals = [controller.signal];
-            if (signal) signals.push(signal);
-
-            const res = await fetch(url, {
-                ...options,
-                signal: AbortSignal.any(signals)
-            });
-
-            if (res.ok) return res;
-
-            // 429 Too Many Requests | 503 Service Unavailable | 504 Gateway Timeout -> 触发重试
-            if ([429, 503, 504].includes(res.status) && i < retry) {
-                const backoff = Math.min(1000 * Math.pow(2, i) + Math.random() * 1000, 10000);
-                console.warn(`[FetchRetry] Status ${res.status} for ${url}, retrying in ${Math.round(backoff)}ms...`);
-                await new Promise(r => setTimeout(r, backoff));
-                continue;
-            }
-
-            return res; // 其他非 ok 状态（如 404, 401）不重试，直接返回
-        } catch (e) {
-            const isAbort = e.name === 'AbortError' || (signal?.aborted);
-            if (isAbort && !controller.signal.aborted) throw e; // 外部 Abort 直接抛出
-
-            if (i < retry) {
-                const backoff = Math.min(1000 * Math.pow(2, i) + Math.random() * 1000, 10000);
-                console.warn(`[FetchRetry] Attempt ${i + 1} failed for ${url}: ${e.message}, retrying in ${Math.round(backoff)}ms...`);
-                await new Promise(r => setTimeout(r, backoff));
-                continue;
-            }
-            throw e;
-        } finally {
-            clearTimeout(t);
-        }
-    }
-}
-
-/**
- * 判断当前是否已过 A 股收盘时间 (北京时间 15:30 以后)
- */
-export function isMarketClosedBeijing() {
-    const bjNow = getBeijingDate();
-    const hour = bjNow.getHours();
-    const minute = bjNow.getMinutes();
-    // 15:30 以后视为收盘
-    return (hour > 15) || (hour === 15 && minute >= 30);
 }
 </file>
 
@@ -7170,6 +7170,57 @@ export async function GET(request) {
 }
 </file>
 
+<file path="lib/cron/realtimeSync.js">
+import { getBeijingDate } from '@/lib/utils';
+
+const TRADING_SESSIONS = [
+    { open: '09:30', close: '15:30' },
+];
+
+function _isTradingHour() {
+    const bjNow = getBeijingDate();
+    const h = bjNow.getHours();
+    const m = bjNow.getMinutes();
+    const hhmm = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+    return TRADING_SESSIONS.some(s => hhmm >= s.open && hhmm <= s.close);
+}
+
+export async function runRealtimeSync(env) {
+    if (!_isTradingHour()) {
+        console.log('[RealtimeSync] Outside trading hours, skipped.');
+        return;
+    }
+
+    try {
+        const { results: assets } = await env.DB
+            .prepare("SELECT DISTINCT code FROM user_assets WHERE type = 'stock'")
+            .all();
+
+        if (!assets?.length) {
+            console.log('[RealtimeSync] No stock assets, skipped.');
+            return;
+        }
+
+        // 只投任务，不做任何外部请求
+        // ON CONFLICT 依赖 idx_sync_jobs_code_type_pending 唯一索引实现去重
+        const stmts = assets.map(a =>
+            env.DB.prepare(`
+                INSERT INTO sync_jobs (type, code, payload, status)
+                VALUES ('intraday_sync', ?, '{}', 'pending')
+                ON CONFLICT(code, type) WHERE status = 'pending'
+                DO UPDATE SET updated_at = CURRENT_TIMESTAMP
+            `).bind(a.code)
+        );
+
+        await env.DB.batch(stmts);
+
+        console.log(`[RealtimeSync] Enqueued ${assets.length} intraday_sync jobs.`);
+    } catch (e) {
+        console.error('[RealtimeSync] Fatal:', e.message);
+    }
+}
+</file>
+
 <file path="components/AssetCard.js">
 'use client';
 
@@ -7273,8 +7324,14 @@ function VolatilityLayer({ asset, isVisible }) {
     // 1. 优先检查 Context 里是否已经有批量取回的历史数据
     const hasContextHistory = asset.history?.length > 0;
 
-    // 2. 取得 localStorage 中的缓存 (同步方案，虽然可能导致首帧轻微阻塞，但能确保 fallbackData 正确初始化)
-    // 或者我们直接把这个逻辑放在 useSWR 外部
+    // 2. 加一个延迟标志，等 refreshAssets 的异步 history 加载完成
+    const [isReady, setIsReady] = useState(false);
+    useEffect(() => {
+        const timer = setTimeout(() => setIsReady(true), 800);
+        return () => clearTimeout(timer);
+    }, [asset.code]); // asset.code 变化时重置，防止切换资产残留旧状态
+
+    // 3. 取得 localStorage 中的缓存 (同步方案，确保 fallbackData 正确初始化)
     const storageKey = `tracker_cache_hist:${asset.type}:${asset.code}`;
     const [initialCachedData] = useState(() => {
         if (typeof window === 'undefined') return undefined;
@@ -7284,21 +7341,26 @@ function VolatilityLayer({ asset, isVisible }) {
         } catch (e) { return undefined; }
     });
 
-    // 3. 历史数据获取 (仅在可见且 Context 没数据时才发请求，实现 N+1 -> 1)
+    // 4. 历史数据获取
     const { data: historyData } = useSWR(
-        isVisible && !hasContextHistory ? `hist:${asset.type}:${asset.code}` : null,
+        // isReady 确保等待 Context 数据有机会填充，再决定是否发请求
+        isVisible && isReady && !hasContextHistory
+            ? `hist:${asset.type}:${asset.code}`
+            : null,
         () => fetchBulkHistory([{ code: asset.code, type: asset.type }], false)
             .then(res => res[`${asset.type}:${asset.code}`]),
         {
             fallbackData: initialCachedData,
             revalidateOnFocus: false,
+            revalidateOnReconnect: false,  // 断网重连不触发请求
+            dedupingInterval: 300000,       // 5 分钟内不重复请求相同 key
             onSuccess: (data) => {
                 if (data) localStorage.setItem(storageKey, JSON.stringify(data));
             }
         }
     );
 
-    // 4. 数据合并优先级：Context > SWR > 默认空架子
+    // 5. 数据合并优先级：Context > SWR > 默认空架子
     const history = hasContextHistory
         ? asset.history
         : (historyData?.history ?? []);
@@ -7403,65 +7465,8 @@ export default memo(AssetCardComponent, (prev, next) => {
         return prevDate === nextDate;
     }
 
-    /* 
-       实时模式备注：
-       价格和分时数据现在由 QuotesContext 注入，不在 props.asset 中。
-       AssetCard 内部会通过 useQuotes() 自动重渲染该卡片。
-       因此 memo 只需要保证资产结构本身没变即可。
-    */
     return true;
 });
-</file>
-
-<file path="lib/cron/realtimeSync.js">
-import { getBeijingDate } from '@/lib/utils';
-
-const TRADING_SESSIONS = [
-    { open: '09:30', close: '15:30' },
-];
-
-function _isTradingHour() {
-    const bjNow = getBeijingDate();
-    const h = bjNow.getHours();
-    const m = bjNow.getMinutes();
-    const hhmm = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
-    return TRADING_SESSIONS.some(s => hhmm >= s.open && hhmm <= s.close);
-}
-
-export async function runRealtimeSync(env) {
-    if (!_isTradingHour()) {
-        console.log('[RealtimeSync] Outside trading hours, skipped.');
-        return;
-    }
-
-    try {
-        const { results: assets } = await env.DB
-            .prepare("SELECT DISTINCT code FROM user_assets WHERE type = 'stock'")
-            .all();
-
-        if (!assets?.length) {
-            console.log('[RealtimeSync] No stock assets, skipped.');
-            return;
-        }
-
-        // 只投任务，不做任何外部请求
-        // ON CONFLICT 依赖 idx_sync_jobs_code_type_pending 唯一索引实现去重
-        const stmts = assets.map(a =>
-            env.DB.prepare(`
-                INSERT INTO sync_jobs (type, code, payload, status)
-                VALUES ('intraday_sync', ?, '{}', 'pending')
-                ON CONFLICT(code, type) WHERE status = 'pending'
-                DO UPDATE SET updated_at = CURRENT_TIMESTAMP
-            `).bind(a.code)
-        );
-
-        await env.DB.batch(stmts);
-
-        console.log(`[RealtimeSync] Enqueued ${assets.length} intraday_sync jobs.`);
-    } catch (e) {
-        console.error('[RealtimeSync] Fatal:', e.message);
-    }
-}
 </file>
 
 <file path="lib/cron/historySync.js">
@@ -7550,144 +7555,6 @@ async function _log(env, level, module, message) {
             .run();
     } catch (e) {
         console.error('[HistorySync] log write failed:', e.message);
-    }
-}
-</file>
-
-<file path="worker-entry.js">
-/**
- * worker-entry.js
- * 
- * Cloudflare Workers 统一入口 (Refactored for D1 Task Queue)
- */
-
-import openNextWorker from './.open-next/worker.js';
-import { runHistorySync } from './lib/cron/historySync.js';
-import { runRealtimeSync } from './lib/cron/realtimeSync.js';
-import { runSentinel } from './lib/cron/sentinel.js';
-
-export default {
-    fetch(request, env, ctx) {
-        return openNextWorker.fetch(request, env, ctx);
-    },
-
-    async scheduled(event, env, ctx) {
-        switch (event.cron) {
-            case '15 14 * * 1-5': // Beijing 22:15
-            case '0 19 * * 1-6':  // Beijing 03:00
-                ctx.waitUntil(runHistorySync(env));
-                break;
-            case '*/5 1-7 * * 1-5':
-                ctx.waitUntil(runRealtimeSync(env));
-                break;
-            case '*/15 * * * *':
-                ctx.waitUntil(runSentinel(env));
-                break;
-            case '*/1 * * * *':
-                // 切换至 D1 任务中心处理器
-                ctx.waitUntil(processSyncJobs(env));
-                break;
-            default:
-                console.warn(`[Scheduled] Unknown cron: "${event.cron}"`);
-        }
-    },
-};
-
-/**
- * D1 任务中心处理器
- * 采用原子锁定模式：通过 CTE 锁定任务并立即标记为 processing，防止多实例重复执行
- */
-async function processSyncJobs(env) {
-    const DB = env.DB;
-    if (!DB) return;
-
-    const BATCH_SIZE = 20; // 调大批处理量，支持高频分时同步
-    try {
-        const { results: jobs } = await DB.prepare(`
-            UPDATE sync_jobs 
-            SET status = 'processing', updated_at = CURRENT_TIMESTAMP 
-            WHERE id IN (
-                SELECT id FROM sync_jobs 
-                WHERE status = 'pending' 
-                   OR (status = 'processing' AND updated_at < datetime('now', '-10 minutes'))
-                ORDER BY created_at ASC 
-                LIMIT ?
-            )
-            RETURNING *
-        `).bind(BATCH_SIZE).all();
-
-        if (!jobs || jobs.length === 0) return;
-
-        console.log(`[Queue:D1] Atomic lock: ${jobs.length} jobs`);
-
-        const VALID_ASSET_TYPES = new Set(['stock', 'fund']);
-
-        await Promise.allSettled(jobs.map(async (job) => {
-            try {
-                // ── 分时数据同步（针对 realtimeSync 投递的任务） ──────────────────────────────
-                if (job.type === 'intraday_sync') {
-                    const { fetchSingleIntraday } = await import('./lib/services/assetSyncService.js');
-                    const { updateIntradayJson } = await import('./lib/storage/intradayRepo.js');
-                    const { getBeijingTodayStr } = await import('./lib/utils.js');
-
-                    const data = await fetchSingleIntraday(job.code);
-
-                    if (data?.points?.length > 0) {
-                        await updateIntradayJson([{
-                            code: job.code,
-                            date: getBeijingTodayStr(),
-                            points: data.points,
-                            price: data.price,
-                            prevClose: data.prevClose
-                        }], env);
-                    }
-
-                    await DB.prepare(
-                        "UPDATE sync_jobs SET status = 'completed', updated_at = CURRENT_TIMESTAMP WHERE id = ?"
-                    ).bind(job.id).run();
-
-                    // ── 历史数据同步（原有逻辑） ──────────────────────
-                } else if (job.type === 'fund_history' || job.type === 'asset_history_sync') {
-                    const { syncHistoryBulk } = await import('./lib/services/assetSyncService.js');
-
-                    const payload = JSON.parse(job.payload || '{}');
-                    const assetType = VALID_ASSET_TYPES.has(payload.type)
-                        ? payload.type
-                        : (job.type === 'fund_history' ? 'fund' : 'stock');
-
-                    await syncHistoryBulk([{ code: job.code, type: assetType }], 250, true, env);
-
-                    await DB.prepare(
-                        "UPDATE sync_jobs SET status = 'completed', updated_at = CURRENT_TIMESTAMP WHERE id = ?"
-                    ).bind(job.id).run();
-
-                } else {
-                    console.warn(`[Queue:D1] Unsupported job type: ${job.type}`);
-                    await DB.prepare(
-                        "UPDATE sync_jobs SET status = 'failed', error_msg = 'Unsupported type', updated_at = CURRENT_TIMESTAMP WHERE id = ?"
-                    ).bind(job.id).run();
-                }
-
-            } catch (jobErr) {
-                console.error(`[Queue:D1] Job ${job.id} failed:`, jobErr.message);
-                await DB.prepare(`
-                    UPDATE sync_jobs 
-                    SET status = CASE WHEN retry_count + 1 < 3 THEN 'pending' ELSE 'failed' END,
-                        error_msg = ?, 
-                        retry_count = retry_count + 1, 
-                        updated_at = CURRENT_TIMESTAMP 
-                    WHERE id = ?
-                `).bind(jobErr.message, job.id).run();
-            }
-        }));
-
-        // 处理后清理：仅保留最近一天的记录
-        await DB.prepare(
-            "DELETE FROM sync_jobs WHERE status IN ('completed', 'failed') AND updated_at < datetime('now', '-1 day')"
-        ).run();
-
-    } catch (e) {
-        console.error('[Queue:Critical] Batch process failure:', e.message);
     }
 }
 </file>
@@ -7968,6 +7835,149 @@ export function useAdminData(secretKey, showToast, onAuthFailure) {
         assetStatusLoading,
         fetchAssetStatus,
     };
+}
+</file>
+
+<file path="worker-entry.js">
+/**
+ * worker-entry.js
+ * 
+ * Cloudflare Workers 统一入口 (Refactored for D1 Task Queue)
+ */
+
+import openNextWorker from './.open-next/worker.js';
+import { runHistorySync } from './lib/cron/historySync.js';
+import { runRealtimeSync } from './lib/cron/realtimeSync.js';
+import { runSentinel } from './lib/cron/sentinel.js';
+
+export default {
+    fetch(request, env, ctx) {
+        return openNextWorker.fetch(request, env, ctx);
+    },
+
+    async scheduled(event, env, ctx) {
+        switch (event.cron) {
+            case '15 14 * * 1-5': // Beijing 22:15
+            case '0 19 * * 1-6':  // Beijing 03:00
+                ctx.waitUntil(runHistorySync(env));
+                break;
+            case '*/5 1-7 * * 1-5':
+                ctx.waitUntil(runRealtimeSync(env));
+                break;
+            case '*/15 * * * *':
+                ctx.waitUntil(runSentinel(env));
+                break;
+            case '*/1 * * * *':
+                // 切换至 D1 任务中心处理器
+                ctx.waitUntil(processSyncJobs(env));
+                break;
+            default:
+                console.warn(`[Scheduled] Unknown cron: "${event.cron}"`);
+        }
+    },
+};
+
+/**
+ * D1 任务中心处理器
+ * 采用原子锁定模式：通过 CTE 锁定任务并立即标记为 processing，防止多实例重复执行
+ */
+async function processSyncJobs(env) {
+    const DB = env.DB;
+    if (!DB) return;
+
+    const BATCH_SIZE = 20; // 调大批处理量，支持高频分时同步
+    try {
+        const { results: jobs } = await DB.prepare(`
+            UPDATE sync_jobs 
+            SET status = 'processing', updated_at = CURRENT_TIMESTAMP 
+            WHERE id IN (
+                SELECT id FROM sync_jobs 
+                WHERE status = 'pending' 
+                   OR (status = 'processing' AND updated_at < datetime('now', '-10 minutes'))
+                ORDER BY created_at ASC 
+                LIMIT ?
+            )
+            RETURNING *
+        `).bind(BATCH_SIZE).all();
+
+        if (!jobs || jobs.length === 0) return;
+
+        console.log(`[Queue:D1] Atomic lock: ${jobs.length} jobs`);
+
+        const VALID_ASSET_TYPES = new Set(['stock', 'fund']);
+
+        await Promise.allSettled(jobs.map(async (job) => {
+            try {
+                // ── 分时数据同步（针对 realtimeSync 投递的任务） ──────────────────────────────
+                if (job.type === 'intraday_sync') {
+                    const { fetchSingleIntraday } = await import('./lib/services/assetSyncService.js');
+                    const { getBeijingTodayStr } = await import('./lib/utils.js');
+
+                    const data = await fetchSingleIntraday(job.code);
+
+                    if (data?.points?.length > 0) {
+                        const db = env.DB;
+                        const today = getBeijingTodayStr();
+                        const jsonData = JSON.stringify({
+                            code: job.code,
+                            points: data.points,
+                            price: data.price,
+                            prevClose: data.prevClose
+                        });
+                        // 性能优化：直接全量覆盖写入结果。不再调用 updateIntradayJson 做冗余的“先读再合并”操作。
+                        await db.prepare(
+                            'INSERT OR REPLACE INTO asset_intraday (code, record_date, data, updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)'
+                        ).bind(job.code, today, jsonData).run();
+                    }
+
+                    await DB.prepare(
+                        "UPDATE sync_jobs SET status = 'completed', updated_at = CURRENT_TIMESTAMP WHERE id = ?"
+                    ).bind(job.id).run();
+
+                    // ── 历史数据同步（原有逻辑） ──────────────────────
+                } else if (job.type === 'fund_history' || job.type === 'asset_history_sync') {
+                    const { syncHistoryBulk } = await import('./lib/services/assetSyncService.js');
+
+                    const payload = JSON.parse(job.payload || '{}');
+                    const assetType = VALID_ASSET_TYPES.has(payload.type)
+                        ? payload.type
+                        : (job.type === 'fund_history' ? 'fund' : 'stock');
+
+                    await syncHistoryBulk([{ code: job.code, type: assetType }], 250, true, env);
+
+                    await DB.prepare(
+                        "UPDATE sync_jobs SET status = 'completed', updated_at = CURRENT_TIMESTAMP WHERE id = ?"
+                    ).bind(job.id).run();
+
+                } else {
+                    console.warn(`[Queue:D1] Unsupported job type: ${job.type}`);
+                    await DB.prepare(
+                        "UPDATE sync_jobs SET status = 'failed', error_msg = 'Unsupported type', updated_at = CURRENT_TIMESTAMP WHERE id = ?"
+                    ).bind(job.id).run();
+                }
+
+            } catch (jobErr) {
+                console.error(`[Queue:D1] Job ${job.id} failed:`, jobErr.message);
+                await DB.prepare(`
+                    UPDATE sync_jobs 
+                    SET status = CASE WHEN retry_count + 1 < 3 THEN 'pending' ELSE 'failed' END,
+                        error_msg = ?, 
+                        retry_count = retry_count + 1, 
+                        updated_at = CURRENT_TIMESTAMP 
+                    WHERE id = ?
+                `).bind(jobErr.message, job.id).run();
+            }
+        }));
+
+        // 3. 自动清理机制：仅在每小时整点左右触发一次，防止表膨胀，同时减少 D1 扫描频率
+        const minute = new Date().getMinutes();
+        if (minute === 0) {
+            await DB.prepare("DELETE FROM sync_jobs WHERE status IN ('completed', 'failed') AND updated_at < datetime('now', '-1 day')").run();
+        }
+
+    } catch (e) {
+        console.error('[Queue:Critical] Batch process failure:', e.message);
+    }
 }
 </file>
 
