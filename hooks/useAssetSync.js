@@ -133,6 +133,11 @@ export function useAssetSync({ userId, isLogged }) {
     }, [userId, refreshAssets]);
 
 
+    const assetsRef = useRef(assets);
+    useEffect(() => {
+        assetsRef.current = assets;
+    }, [assets]);
+
     const syncingItemsRef = useRef(new Set());
 
     // [Feature: Client-side Offloading] 
@@ -181,10 +186,7 @@ export function useAssetSync({ userId, isLogged }) {
     }, [assets, isSessionReady, isSyncing, refreshAssets]);
 
 
-    const assetsRef = useRef(assets);
-    useEffect(() => {
-        assetsRef.current = assets;
-    }, [assets]);
+
 
     // 数据变化后同步到服务端（暴露给外部主动调用）
     const syncAssetsToServer = useCallback(async (currentAssets) => {
