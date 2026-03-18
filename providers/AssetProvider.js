@@ -84,9 +84,9 @@ function AssetsStructureProvider({ children }) {
     const value = useMemo(() => ({
         assets, setAssets, isSyncing, setIsSyncing, assetsRef,
         addAsset, removeAsset,
-        refreshAssets: (list) => refreshAssets(list || assets.map(a => ({ code: a.code, type: a.type }))),
+        refreshAssets: (list) => refreshAssets(list ?? assets.map(a => ({ code: a.code, type: a.type }))),
         syncAssetsToServer
-    }), [assets, isSyncing, addAsset, removeAsset, syncAssetsToServer]); // refreshAssets 移出依赖，因为其内部逻辑已稳定
+    }), [assets, isSyncing, addAsset, removeAsset, refreshAssets, syncAssetsToServer]); // ✅ 补充 refreshAssets 依赖，消除隐性闭包风险
 
     return <AssetsStructureContext.Provider value={value}>{children}</AssetsStructureContext.Provider>;
 }
