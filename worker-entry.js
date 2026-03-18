@@ -76,13 +76,18 @@ async function processSyncJobs(env) {
                     const data = await fetchSingleIntraday(job.code);
 
                     if (data?.points?.length > 0) {
-                        await updateIntradayJson([{
+                        const db = env.DB;
+                        const today = getBeijingTodayStr();
+                        const jsonData = JSON.stringify({
                             code: job.code,
-                            date: getBeijingTodayStr(),
                             points: data.points,
                             price: data.price,
                             prevClose: data.prevClose
-                        }], env);
+                        });
+                        // 性能优化：直接全量覆盖写入结果。不再调用 updateIntradayJson 做冗余的“先读再合并”操作。
+                        await db.prepare(
+                            'INSERT OR REPLACE INTO asset_intraday (code, record_date, data, updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)'
+                        ).bind(job.code, today, jsonData).run();
                     }
 
                     await DB.prepare(

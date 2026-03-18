@@ -1052,6 +1052,59 @@ export function useAuthSession() {
 }
 </file>
 
+<file path="lib/auth.js">
+/**
+ * lib/auth.js
+ * 
+ * 基于 WebCrypto 的安全认证逻辑 (Cloudflare Workers 原生支持)
+ */
+
+export async function hashPassword(password) {
+    const salt = crypto.getRandomValues(new Uint8Array(16));
+    const keyMaterial = await crypto.subtle.importKey(
+        'raw', new TextEncoder().encode(password),
+        'PBKDF2', false, ['deriveBits']
+    );
+    const bits = await crypto.subtle.deriveBits(
+        { name: 'PBKDF2', salt, iterations: 10000, hash: 'SHA-256' },
+        keyMaterial, 256
+    );
+    const saltHex = Array.from(salt).map(b => b.toString(16).padStart(2, '0')).join('');
+    const hashHex = Array.from(new Uint8Array(bits)).map(b => b.toString(16).padStart(2, '0')).join('');
+    return `pbkdf2:${saltHex}:${hashHex}`;
+}
+
+export async function verifyPassword(password, stored) {
+    if (!stored || !stored.includes(':')) return false;
+    const [, saltHex, hashHex] = stored.split(':');
+    if (!saltHex || !hashHex) return false;
+
+    const salt = new Uint8Array(saltHex.match(/.{2}/g).map(b => parseInt(b, 16)));
+    const keyMaterial = await crypto.subtle.importKey(
+        'raw', new TextEncoder().encode(password),
+        'PBKDF2', false, ['deriveBits']
+    );
+    const bits = await crypto.subtle.deriveBits(
+        { name: 'PBKDF2', salt, iterations: 10000, hash: 'SHA-256' },
+        keyMaterial, 256
+    );
+    const candidate = Array.from(new Uint8Array(bits)).map(b => b.toString(16).padStart(2, '0')).join('');
+
+    // 常量时间比较防止时序攻击 (Manual XOR loop for Workers)
+    if (candidate.length !== hashHex.length) return false;
+    let diff = 0;
+    for (let i = 0; i < candidate.length; i++) {
+        diff |= candidate.charCodeAt(i) ^ hashHex.charCodeAt(i);
+    }
+    return diff === 0;
+}
+
+export function generateToken() {
+    return Array.from(crypto.getRandomValues(new Uint8Array(32)))
+        .map(b => b.toString(16).padStart(2, '0')).join('');
+}
+</file>
+
 <file path="lib/auth/requireUser.js">
 /**
  * lib/auth/requireUser.js
@@ -2261,6 +2314,46 @@ export async function POST(request) {
 }
 </file>
 
+<file path="app/api/auth/register/route.js">
+/**
+ * app/api/auth/register/route.js
+ * 
+ * 用户注册接口
+ */
+
+import { NextResponse } from 'next/server';
+import { isUsernameTaken, registerUser, SESSION_COOKIE_OPTIONS } from '@/lib/storage/authRepo';
+
+export async function POST(request) {
+    try {
+        const { username, password } = await request.json();
+
+        // 格式校验
+        if (!/^[a-zA-Z0-9_-]{3,30}$/.test(username)) {
+            return NextResponse.json({ error: 'Username must be 3-30 chars (letters/numbers/_/-)' }, { status: 400 });
+        }
+
+        if (!password || password.length < 8) {
+            return NextResponse.json({ error: 'Password must be at least 8 characters' }, { status: 400 });
+        }
+
+        if (await isUsernameTaken(username)) {
+            return NextResponse.json({ error: 'Username already taken' }, { status: 409 });
+        }
+
+        const { userId, token } = await registerUser(username, password);
+
+        const res = NextResponse.json({ success: true, userId });
+        res.cookies.set('session', token, SESSION_COOKIE_OPTIONS);
+
+        return res;
+    } catch (e) {
+        console.error('[Auth:Register] Error:', e);
+        return NextResponse.json({ error: 'Registration failed' }, { status: 500 });
+    }
+}
+</file>
+
 <file path="app/api/names/bulk/route.js">
 import { NextResponse } from 'next/server';
 import { syncNamesBulk } from '@/lib/services/assetSyncService';
@@ -2868,59 +2961,6 @@ export default function WatchlistSidebar({ assets, mode = 'volatility', selected
 }
 </file>
 
-<file path="lib/auth.js">
-/**
- * lib/auth.js
- * 
- * 基于 WebCrypto 的安全认证逻辑 (Cloudflare Workers 原生支持)
- */
-
-export async function hashPassword(password) {
-    const salt = crypto.getRandomValues(new Uint8Array(16));
-    const keyMaterial = await crypto.subtle.importKey(
-        'raw', new TextEncoder().encode(password),
-        'PBKDF2', false, ['deriveBits']
-    );
-    const bits = await crypto.subtle.deriveBits(
-        { name: 'PBKDF2', salt, iterations: 10000, hash: 'SHA-256' },
-        keyMaterial, 256
-    );
-    const saltHex = Array.from(salt).map(b => b.toString(16).padStart(2, '0')).join('');
-    const hashHex = Array.from(new Uint8Array(bits)).map(b => b.toString(16).padStart(2, '0')).join('');
-    return `pbkdf2:${saltHex}:${hashHex}`;
-}
-
-export async function verifyPassword(password, stored) {
-    if (!stored || !stored.includes(':')) return false;
-    const [, saltHex, hashHex] = stored.split(':');
-    if (!saltHex || !hashHex) return false;
-
-    const salt = new Uint8Array(saltHex.match(/.{2}/g).map(b => parseInt(b, 16)));
-    const keyMaterial = await crypto.subtle.importKey(
-        'raw', new TextEncoder().encode(password),
-        'PBKDF2', false, ['deriveBits']
-    );
-    const bits = await crypto.subtle.deriveBits(
-        { name: 'PBKDF2', salt, iterations: 10000, hash: 'SHA-256' },
-        keyMaterial, 256
-    );
-    const candidate = Array.from(new Uint8Array(bits)).map(b => b.toString(16).padStart(2, '0')).join('');
-
-    // 常量时间比较防止时序攻击 (Manual XOR loop for Workers)
-    if (candidate.length !== hashHex.length) return false;
-    let diff = 0;
-    for (let i = 0; i < candidate.length; i++) {
-        diff |= candidate.charCodeAt(i) ^ hashHex.charCodeAt(i);
-    }
-    return diff === 0;
-}
-
-export function generateToken() {
-    return Array.from(crypto.getRandomValues(new Uint8Array(32)))
-        .map(b => b.toString(16).padStart(2, '0')).join('');
-}
-</file>
-
 <file path="lib/proxy/fetcher.js">
 /**
  * lib/proxy/fetcher.js
@@ -3499,46 +3539,6 @@ export async function GET(request) {
     } catch (e) {
         console.error('[AdminStats] Global Critical Failure:', e.message);
         return NextResponse.json({ error: 'INTERNAL_SERVER_ERROR' }, { status: 500 });
-    }
-}
-</file>
-
-<file path="app/api/auth/register/route.js">
-/**
- * app/api/auth/register/route.js
- * 
- * 用户注册接口
- */
-
-import { NextResponse } from 'next/server';
-import { isUsernameTaken, registerUser, SESSION_COOKIE_OPTIONS } from '@/lib/storage/authRepo';
-
-export async function POST(request) {
-    try {
-        const { username, password } = await request.json();
-
-        // 格式校验
-        if (!/^[a-zA-Z0-9_-]{3,30}$/.test(username)) {
-            return NextResponse.json({ error: 'Username must be 3-30 chars (letters/numbers/_/-)' }, { status: 400 });
-        }
-
-        if (!password || password.length < 8) {
-            return NextResponse.json({ error: 'Password must be at least 8 characters' }, { status: 400 });
-        }
-
-        if (await isUsernameTaken(username)) {
-            return NextResponse.json({ error: 'Username already taken' }, { status: 409 });
-        }
-
-        const { userId, token } = await registerUser(username, password);
-
-        const res = NextResponse.json({ success: true, userId });
-        res.cookies.set('session', token, SESSION_COOKIE_OPTIONS);
-
-        return res;
-    } catch (e) {
-        console.error('[Auth:Register] Error:', e);
-        return NextResponse.json({ error: 'Registration failed' }, { status: 500 });
     }
 }
 </file>
@@ -4809,244 +4809,6 @@ export async function POST(request) {
 }
 </file>
 
-<file path="lib/storage/intradayRepo.js">
-import { queryOne, queryAll, runSql, getD1Storage, getRequiredDb } from './d1Client';
-import { memoryCache } from './memoryCache';
-import { chunkArray, getBeijingDate } from '../utils';
-
-/**
- * 从 D1 或内存获取分时数据
- */
-export async function getIntraday(code, date, fallbackToLatest = false, env = null) {
-    const memKey = `intra:${code}:${date}`;
-    const cached = memoryCache.get(memKey);
-    if (cached) return cached;
-
-    try {
-        let row = await queryOne('SELECT data FROM asset_intraday WHERE code = ? AND record_date = ?', [code, date], env);
-
-        if (!row && fallbackToLatest) {
-            // 尝试获取最近 3 天的数据作为兜底
-            row = await queryOne(
-                'SELECT data FROM asset_intraday WHERE code = ? AND record_date < ? ORDER BY record_date DESC LIMIT 1',
-                [code, date],
-                env
-            );
-        }
-
-        if (row && row.data) {
-            const data = JSON.parse(row.data);
-            return data;
-        }
-    } catch (e) {
-        console.error(`[IntradayRepo] getIntraday failed for ${code}:`, e.message);
-    }
-    return null;
-}
-
-/**
- * 保存分时数据到 D1
- */
-export async function saveIntraday(code, date, data, forcePersist = false, env = null) {
-    const memKey = `intra:${code}:${date}`;
-
-    try {
-        // 使用统一的 getBeijingDate 获取稳健的北京时间
-        const bjNow = getBeijingDate();
-        const timeValue = bjNow.getHours() * 100 + bjNow.getMinutes();
-        const isMarketClosed = timeValue >= 1515 || timeValue < 900;
-
-        if (isMarketClosed || forcePersist) {
-            await runSql(
-                'INSERT OR REPLACE INTO asset_intraday (code, record_date, data, updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)',
-                [code, date, JSON.stringify(data)],
-                env
-            );
-            memoryCache.delete(memKey);
-        } else {
-            memoryCache.set(memKey, data);
-        }
-    } catch (e) {
-        console.error(`[IntradayRepo] saveIntraday failed for ${code}:`, e.message);
-    }
-}
-
-/**
- * 批量获取分时数据
- */
-export async function getBulkIntraday(items, date, env = null) {
-    if (!items || items.length === 0) return {};
-
-    const result = {};
-    const toQuery = [];
-
-    for (const it of items) {
-        const cached = memoryCache.get(`intra:${it.code}:${date}`);
-        if (cached) {
-            result[it.code] = cached;
-        } else {
-            toQuery.push(it.code);
-        }
-    }
-
-    if (toQuery.length > 0) {
-        const groups = chunkArray(toQuery, 30);
-        for (const codes of groups) {
-            try {
-                const placeholders = codes.map(() => '?').join(',');
-                const sql = `SELECT code, data FROM asset_intraday WHERE record_date = ? AND code IN (${placeholders})`;
-                const rows = await queryAll(sql, [date, ...codes], env);
-                for (const row of rows) {
-                    result[row.code] = JSON.parse(row.data);
-                }
-            } catch (e) {
-                console.error('[IntradayRepo] getBulkIntraday group failed:', e.message);
-            }
-        }
-    }
-
-    return result;
-}
-
-/**
- * 批量保存分时数据到 D1
- */
-export async function saveIntradayBatch(records, env = null) {
-    if (!records || records.length === 0) return;
-    const db = await getRequiredDb(env);
-
-    try {
-        const statements = records.map(r =>
-            db.prepare('INSERT OR REPLACE INTO asset_intraday (code, record_date, data, updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)')
-                .bind(r.code, r.date, JSON.stringify(r.data))
-        );
-
-        const CHUNK = 50;
-        for (let i = 0; i < statements.length; i += CHUNK) {
-            await db.batch(statements.slice(i, i + CHUNK));
-        }
-
-        for (const r of records) {
-            memoryCache.set(`intra:${r.code}:${r.date}`, r.data);
-        }
-    } catch (e) {
-        console.error(`[IntradayRepo] saveIntradayBatch failed:`, e.message);
-    }
-}
-
-/**
- * 原子化更新分时数据 JSON (Cron 专用)
- * 职责：读取现有 JSON，将新点位追加/覆盖，再写回。
- * 解决了 Cron 写 Points 表而前端读 Intraday 表的断层问题。
- */
-export async function updateIntradayJson(records, env = null) {
-    if (!records || records.length === 0) return;
-    const db = await getRequiredDb(env);
-    const today = records[0].date;
-
-    try {
-        // 1. 批量读取当前库中的数据
-        const codes = records.map(r => r.code);
-        const currentDataMap = await getBulkIntraday(records.map(r => ({ code: r.code })), today, env);
-
-        // 2. 准备更新语句
-        const statements = records.map(r => {
-            const current = currentDataMap[r.code] || { code: r.code, points: [], prevClose: 0 };
-
-            // 合并逻辑：如果已存在相同时间点的点位，则覆盖；否则追加。
-            const newPoints = [...current.points];
-            r.points.forEach(newP => {
-                const idx = newPoints.findIndex(p => p.time === newP.time);
-                if (idx > -1) {
-                    newPoints[idx] = newP;
-                } else {
-                    newPoints.push(newP);
-                }
-            });
-
-            // 保持时间有序
-            newPoints.sort((a, b) => a.time.localeCompare(b.time));
-
-            const updatedData = {
-                ...current,
-                points: newPoints,
-                price: r.price || current.price,
-                prevClose: r.prevClose || current.prevClose
-            };
-
-            return db.prepare('INSERT OR REPLACE INTO asset_intraday (code, record_date, data, updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)')
-                .bind(r.code, today, JSON.stringify(updatedData));
-        });
-
-        const CHUNK = 50;
-        for (let i = 0; i < statements.length; i += CHUNK) {
-            await db.batch(statements.slice(i, i + CHUNK));
-        }
-
-        // 清理缓存
-        for (const r of records) {
-            memoryCache.delete(`intra:${r.code}:${today}`);
-        }
-    } catch (e) {
-        console.error(`[IntradayRepo] updateIntradayJson failed:`, e.message);
-    }
-}
-
-/**
- * [DEPRECATED] 拼装巨型 SQL 批量插入分时点 (不再建议使用，请改用 updateIntradayJson)
- */
-export async function saveIntradayPointsBulk(points, env = null) {
-    if (!points || points.length === 0) return;
-
-    // 维度 4 优化：循环外提取 DB 绑定，减少重复获取开销
-    const db = await getRequiredDb(env);
-
-    try {
-        const CHUNK = 25; // D1 每个 prepare() 最多绑定 100 个参数。每行 4 个参数，25 * 4 = 100。
-        for (let i = 0; i < points.length; i += CHUNK) {
-            const chunk = points.slice(i, i + CHUNK);
-            const placeholders = chunk.map(() => '(?, ?, ?, ?)').join(',');
-
-            // 使用 flatMap 使代码更简洁
-            const flatParams = chunk.flatMap(p => [p.code, p.time, p.price, p.vol || 0]);
-
-            await db.prepare(`INSERT OR REPLACE INTO asset_intraday_points (code, time, price, vol) VALUES ${placeholders}`)
-                .bind(...flatParams)
-                .run();
-        }
-    } catch (e) {
-        console.error(`[IntradayRepo] saveIntradayPointsBulk failed:`, e.message);
-    }
-}
-
-/**
- * [DEPRECATED] 清理分时点位数据 (不再建议使用)
- */
-export async function pruneIntradayPoints(env = null) {
-    try {
-        const codes = await queryAll('SELECT DISTINCT code FROM asset_intraday_points', [], env);
-        const db = await getRequiredDb(env);
-
-        const statements = codes.map(c =>
-            db.prepare(`
-                DELETE FROM asset_intraday_points 
-                WHERE code = ? AND ROWID NOT IN (
-                    SELECT ROWID FROM asset_intraday_points 
-                    WHERE code = ? 
-                    ORDER BY ROWID DESC LIMIT 480
-                )
-            `).bind(c.code, c.code)
-        );
-
-        for (let i = 0; i < statements.length; i += 50) {
-            await db.batch(statements.slice(i, i + 50));
-        }
-    } catch (e) {
-        console.error(`[IntradayRepo] pruneIntradayPoints failed:`, e.message);
-    }
-}
-</file>
-
 <file path="lib/storage/kvClient.js">
 import { memoryCache } from './memoryCache';
 import { getKvStorage as getBaseKv } from './d1Client';
@@ -5527,6 +5289,250 @@ export async function batchSql(statements, env = null) {
         e.d1Source = 'batchSql'; // 溯源标记
         console.error(`[D1Client] batchSql failed: ${e.message}`);
         throw e;
+    }
+}
+</file>
+
+<file path="lib/storage/intradayRepo.js">
+import { queryOne, queryAll, runSql, getD1Storage, getRequiredDb } from './d1Client';
+import { memoryCache } from './memoryCache';
+import { chunkArray, getBeijingDate } from '../utils';
+
+/**
+ * 从 D1 或内存获取分时数据
+ */
+export async function getIntraday(code, date, fallbackToLatest = false, env = null) {
+    const memKey = `intra:${code}:${date}`;
+    const cached = memoryCache.get(memKey);
+    if (cached) return cached;
+
+    try {
+        let row = await queryOne('SELECT data FROM asset_intraday WHERE code = ? AND record_date = ?', [code, date], env);
+
+        if (!row && fallbackToLatest) {
+            // 尝试获取最近 3 天的数据作为兜底
+            row = await queryOne(
+                'SELECT data FROM asset_intraday WHERE code = ? AND record_date < ? ORDER BY record_date DESC LIMIT 1',
+                [code, date],
+                env
+            );
+        }
+
+        if (row && row.data) {
+            const data = JSON.parse(row.data);
+            return data;
+        }
+    } catch (e) {
+        console.error(`[IntradayRepo] getIntraday failed for ${code}:`, e.message);
+    }
+    return null;
+}
+
+/**
+ * 保存分时数据到 D1
+ */
+export async function saveIntraday(code, date, data, forcePersist = false, env = null) {
+    const memKey = `intra:${code}:${date}`;
+
+    try {
+        // 使用统一的 getBeijingDate 获取稳健的北京时间
+        const bjNow = getBeijingDate();
+        const timeValue = bjNow.getHours() * 100 + bjNow.getMinutes();
+        const isMarketClosed = timeValue >= 1515 || timeValue < 900;
+
+        if (isMarketClosed || forcePersist) {
+            await runSql(
+                'INSERT OR REPLACE INTO asset_intraday (code, record_date, data, updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)',
+                [code, date, JSON.stringify(data)],
+                env
+            );
+            memoryCache.delete(memKey);
+        } else {
+            memoryCache.set(memKey, data);
+        }
+    } catch (e) {
+        console.error(`[IntradayRepo] saveIntraday failed for ${code}:`, e.message);
+    }
+}
+
+/**
+ * 批量获取分时数据
+ */
+export async function getBulkIntraday(items, date, env = null) {
+    if (!items || items.length === 0) return {};
+
+    const result = {};
+    const toQuery = [];
+
+    for (const it of items) {
+        const cached = memoryCache.get(`intra:${it.code}:${date}`);
+        if (cached) {
+            result[it.code] = cached;
+        } else {
+            toQuery.push(it.code);
+        }
+    }
+
+    if (toQuery.length > 0) {
+        const groups = chunkArray(toQuery, 30);
+        for (const codes of groups) {
+            try {
+                const placeholders = codes.map(() => '?').join(',');
+                const sql = `SELECT code, data, record_date, updated_at FROM asset_intraday WHERE record_date = ? AND code IN (${placeholders})`;
+                const rows = await queryAll(sql, [date, ...codes], env);
+                for (const row of rows) {
+                    const parsed = JSON.parse(row.data);
+                    // 注入 DB 元数据，供 isDbDataFresh 进行新鲜度判定
+                    result[row.code] = {
+                        ...parsed,
+                        record_date: row.record_date,
+                        updated_at: row.updated_at
+                    };
+                }
+            } catch (e) {
+                console.error('[IntradayRepo] getBulkIntraday group failed:', e.message);
+            }
+        }
+    }
+
+    return result;
+}
+
+/**
+ * 批量保存分时数据到 D1
+ */
+export async function saveIntradayBatch(records, env = null) {
+    if (!records || records.length === 0) return;
+    const db = await getRequiredDb(env);
+
+    try {
+        const statements = records.map(r =>
+            db.prepare('INSERT OR REPLACE INTO asset_intraday (code, record_date, data, updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)')
+                .bind(r.code, r.date, JSON.stringify(r.data))
+        );
+
+        const CHUNK = 50;
+        for (let i = 0; i < statements.length; i += CHUNK) {
+            await db.batch(statements.slice(i, i + CHUNK));
+        }
+
+        for (const r of records) {
+            memoryCache.set(`intra:${r.code}:${r.date}`, r.data);
+        }
+    } catch (e) {
+        console.error(`[IntradayRepo] saveIntradayBatch failed:`, e.message);
+    }
+}
+
+/**
+ * 原子化更新分时数据 JSON (Cron 专用)
+ * 职责：读取现有 JSON，将新点位追加/覆盖，再写回。
+ * 解决了 Cron 写 Points 表而前端读 Intraday 表的断层问题。
+ */
+export async function updateIntradayJson(records, env = null) {
+    if (!records || records.length === 0) return;
+    const db = await getRequiredDb(env);
+    const today = records[0].date;
+
+    try {
+        // 1. 批量读取当前库中的数据
+        const codes = records.map(r => r.code);
+        const currentDataMap = await getBulkIntraday(records.map(r => ({ code: r.code })), today, env);
+
+        // 2. 准备更新语句
+        const statements = records.map(r => {
+            const current = currentDataMap[r.code] || { code: r.code, points: [], prevClose: 0 };
+
+            // 合并逻辑：如果已存在相同时间点的点位，则覆盖；否则追加。
+            const newPoints = [...current.points];
+            r.points.forEach(newP => {
+                const idx = newPoints.findIndex(p => p.time === newP.time);
+                if (idx > -1) {
+                    newPoints[idx] = newP;
+                } else {
+                    newPoints.push(newP);
+                }
+            });
+
+            // 保持时间有序
+            newPoints.sort((a, b) => a.time.localeCompare(b.time));
+
+            const updatedData = {
+                ...current,
+                points: newPoints,
+                price: r.price || current.price,
+                prevClose: r.prevClose || current.prevClose
+            };
+
+            return db.prepare('INSERT OR REPLACE INTO asset_intraday (code, record_date, data, updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)')
+                .bind(r.code, today, JSON.stringify(updatedData));
+        });
+
+        const CHUNK = 50;
+        for (let i = 0; i < statements.length; i += CHUNK) {
+            await db.batch(statements.slice(i, i + CHUNK));
+        }
+
+        // 清理缓存
+        for (const r of records) {
+            memoryCache.delete(`intra:${r.code}:${today}`);
+        }
+    } catch (e) {
+        console.error(`[IntradayRepo] updateIntradayJson failed:`, e.message);
+    }
+}
+
+/**
+ * [DEPRECATED] 拼装巨型 SQL 批量插入分时点 (不再建议使用，请改用 updateIntradayJson)
+ */
+export async function saveIntradayPointsBulk(points, env = null) {
+    if (!points || points.length === 0) return;
+
+    // 维度 4 优化：循环外提取 DB 绑定，减少重复获取开销
+    const db = await getRequiredDb(env);
+
+    try {
+        const CHUNK = 25; // D1 每个 prepare() 最多绑定 100 个参数。每行 4 个参数，25 * 4 = 100。
+        for (let i = 0; i < points.length; i += CHUNK) {
+            const chunk = points.slice(i, i + CHUNK);
+            const placeholders = chunk.map(() => '(?, ?, ?, ?)').join(',');
+
+            // 使用 flatMap 使代码更简洁
+            const flatParams = chunk.flatMap(p => [p.code, p.time, p.price, p.vol || 0]);
+
+            await db.prepare(`INSERT OR REPLACE INTO asset_intraday_points (code, time, price, vol) VALUES ${placeholders}`)
+                .bind(...flatParams)
+                .run();
+        }
+    } catch (e) {
+        console.error(`[IntradayRepo] saveIntradayPointsBulk failed:`, e.message);
+    }
+}
+
+/**
+ * [DEPRECATED] 清理分时点位数据 (不再建议使用)
+ */
+export async function pruneIntradayPoints(env = null) {
+    try {
+        const codes = await queryAll('SELECT DISTINCT code FROM asset_intraday_points', [], env);
+        const db = await getRequiredDb(env);
+
+        const statements = codes.map(c =>
+            db.prepare(`
+                DELETE FROM asset_intraday_points 
+                WHERE code = ? AND ROWID NOT IN (
+                    SELECT ROWID FROM asset_intraday_points 
+                    WHERE code = ? 
+                    ORDER BY ROWID DESC LIMIT 480
+                )
+            `).bind(c.code, c.code)
+        );
+
+        for (let i = 0; i < statements.length; i += 50) {
+            await db.batch(statements.slice(i, i + 50));
+        }
+    } catch (e) {
+        console.error(`[IntradayRepo] pruneIntradayPoints failed:`, e.message);
     }
 }
 </file>
@@ -7102,171 +7108,6 @@ async function _log(db, level, source, message) {
 }
 </file>
 
-<file path="lib/cron/realtimeSync.js">
-/**
- * src/lib/cron/realtimeSync.js
- *
- * 盘中实时行情抓取，每 5 分钟由 scheduled handler 调用。
- * 触发窗口：周一到周五 UTC 01:00-07:55 = 北京时间 09:00-15:55。
- *
- * 对齐 intradayRepo.js 的实际存储结构：
- *   主表  asset_intraday_points (code, time, price, vol)  — 逐点存储，供分时图使用
- *   日表  asset_intraday (code, record_date, data)        — JSON 全天数据，供收盘后归档
- *
- * intradayRepo 说明：
- *   - saveIntraday 有盘中/收盘自动切换逻辑，但依赖 memoryCache。
- *     scheduled handler 每次都是全新 Worker 实例，内存不持久，
- *     因此盘中 cron 直接写 asset_intraday_points（持久化），不依赖内存缓存。
- *   - saveIntradayPointsBulk / pruneIntradayPoints 是专为 cron 设计的接口，直接使用。
- *
- * 流程：
- *   1. 判断当前是否在交易时段（09:30-11:30 / 13:00-15:00），非交易时段静默跳过
- *   2. 从 user_assets 读取所有股票资产（基金无盘中分时，跳过）
- *   3. 分批并发拉取实时行情（每批 BATCH_SIZE 条）
- *   4. 调用 saveIntradayPointsBulk 写入 asset_intraday_points
- *   5. 每隔 PRUNE_EVERY_N 次触发一次 pruneIntradayPoints，防止无限增长
- *   6. 失败时写 system_logs，成功时仅打 console（盘中高频，避免刷爆日志）
- *
- * pruneIntradayPoints 说明：
- *   每只股票保留最近 480 个分时点（约 4 天 × 每天 48 个5分钟K线），
- *   每次全部 cron 触发都清理成本较高，故每 6 次（约 30 分钟）触发一次。
- */
-
-import { fetchStockQuote } from '@/lib/services/quoteFetcher';
-import { updateIntradayJson } from '@/lib/storage/intradayRepo';
-import { getBeijingDate, getBeijingTodayStr } from '@/lib/utils';
-
-// ── 常量 ────────────────────────────────────────────────────────────────────
-
-const BATCH_SIZE = 1;
-const BATCH_DELAY_MS = 100;
-const SUBREQ_BUDGET = 45;
-const FETCH_TIMEOUT = 5000;
-
-// ── 交易时段（北京时间）──────────────────────────────────────────────────────
-
-const TRADING_SESSIONS = [
-    { open: '09:30', close: '11:40' }, // 稍微多跑几分钟以确保收盘点被抓到
-    { open: '13:00', close: '15:10' },
-];
-
-function _isTradingHour() {
-    const bjNow = getBeijingDate();
-    const h = bjNow.getHours();
-    const m = bjNow.getMinutes();
-    const hhmm = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
-    return TRADING_SESSIONS.some(s => hhmm >= s.open && hhmm <= s.close);
-}
-
-// ── 主入口 ──────────────────────────────────────────────────────────────────
-
-const TENCENT_BATCH_SIZE = 20;
-
-export async function runRealtimeSync(env) {
-    if (!_isTradingHour()) return;
-
-    const t0 = Date.now();
-    let ok = 0;
-    let subreqCount = 1;
-    const logBuffer = [];
-    const today = getBeijingTodayStr();
-
-    try {
-        const { results: assets } = await env.DB
-            .prepare("SELECT DISTINCT code FROM user_assets WHERE type = 'stock'")
-            .all();
-        subreqCount += 1; // DB List 消耗一个子请求
-
-        if (!assets?.length) return;
-
-        const codes = assets.map(a => a.code);
-        const updateRecords = [];
-        const bjNow = getBeijingDate();
-        const timeStr = `${String(bjNow.getHours()).padStart(2, '0')}:${String(bjNow.getMinutes()).padStart(2, '0')}`;
-
-        // 1. 批量抓取实时数据
-        for (let i = 0; i < codes.length; i += TENCENT_BATCH_SIZE) {
-            if (subreqCount >= SUBREQ_BUDGET) break;
-
-            const batch = codes.slice(i, i + TENCENT_BATCH_SIZE);
-            try {
-                const ctrl = new AbortController();
-                const tid = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT);
-
-                const url = `https://qt.gtimg.cn/q=${batch.join(',')}`;
-                const res = await fetch(url, {
-                    headers: { 'Referer': 'https://gu.qq.com/' },
-                    signal: ctrl.signal
-                });
-                clearTimeout(tid);
-                subreqCount += 1;
-
-                if (!res.ok) throw new Error(`HTTP ${res.status}`);
-
-                const ab = await res.arrayBuffer();
-                const text = new TextDecoder('gbk').decode(ab);
-
-                for (const line of text.split(';').filter(l => l.trim())) {
-                    const m = line.match(/v_([^=]+)="([^"]+)"/);
-                    if (!m) continue;
-                    const parts = m[2].split('~');
-                    if (parts.length < 37) continue;
-
-                    const code = m[1].toLowerCase();
-                    const price = parseFloat(parts[3]) || 0;
-                    const prevClose = parseFloat(parts[4]) || 0;
-
-                    updateRecords.push({
-                        code,
-                        date: today,
-                        points: [{ time: timeStr, value: price }],
-                        price,
-                        prevClose
-                    });
-                    ok++;
-                }
-            } catch (e) {
-                logBuffer.push({ level: 'ERROR', msg: `Batch fetch failed: ${e.message}` });
-            }
-        }
-
-        // 2. 将点位原子化合并进 asset_intraday (JSON)
-        if (updateRecords.length > 0) {
-            await updateIntradayJson(updateRecords, env);
-            subreqCount += 1; // 2. DB Batch Write 消耗一个子请求
-        }
-
-        const elapsed = Math.round((Date.now() - t0) / 1000);
-        console.log(`[RealtimeSync] Done: ${ok} stocks updated in ${elapsed}s. Subreqs: ${subreqCount}/${SUBREQ_BUDGET}`);
-
-        if (logBuffer.length > 0) {
-            await _flushLogs(env, logBuffer);
-        }
-
-    } catch (e) {
-        console.error('[RealtimeSync] Error:', e.message);
-        await _flushLogs(env, [{ level: 'FATAL', msg: e.message }]);
-    }
-}
-
-// ── 聚合日志写入 ────────────────────────────────────────────────────────────
-
-async function _flushLogs(env, buffer) {
-    if (!buffer || buffer.length === 0) return;
-    try {
-        const summary = buffer.map(item => `[${item.level}] ${item.msg}`).join(' | ');
-        await env.DB
-            .prepare('INSERT INTO system_logs (level, module, message, timestamp) VALUES (?, ?, ?, CURRENT_TIMESTAMP)')
-            .bind('INFO', 'RealtimeSync', summary)
-            .run();
-    } catch (e) {
-        console.error('[RealtimeSync] flush logs failed:', e.message);
-    }
-}
-
-const _sleep = ms => new Promise(r => setTimeout(r, ms));
-</file>
-
 <file path="app/api/admin/refetch-fund-history/route.js">
 /**
  * src/app/api/admin/refetch-fund-history/route.js
@@ -7572,6 +7413,57 @@ export default memo(AssetCardComponent, (prev, next) => {
 });
 </file>
 
+<file path="lib/cron/realtimeSync.js">
+import { getBeijingDate } from '@/lib/utils';
+
+const TRADING_SESSIONS = [
+    { open: '09:30', close: '15:30' },
+];
+
+function _isTradingHour() {
+    const bjNow = getBeijingDate();
+    const h = bjNow.getHours();
+    const m = bjNow.getMinutes();
+    const hhmm = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+    return TRADING_SESSIONS.some(s => hhmm >= s.open && hhmm <= s.close);
+}
+
+export async function runRealtimeSync(env) {
+    if (!_isTradingHour()) {
+        console.log('[RealtimeSync] Outside trading hours, skipped.');
+        return;
+    }
+
+    try {
+        const { results: assets } = await env.DB
+            .prepare("SELECT DISTINCT code FROM user_assets WHERE type = 'stock'")
+            .all();
+
+        if (!assets?.length) {
+            console.log('[RealtimeSync] No stock assets, skipped.');
+            return;
+        }
+
+        // 只投任务，不做任何外部请求
+        // ON CONFLICT 依赖 idx_sync_jobs_code_type_pending 唯一索引实现去重
+        const stmts = assets.map(a =>
+            env.DB.prepare(`
+                INSERT INTO sync_jobs (type, code, payload, status)
+                VALUES ('intraday_sync', ?, '{}', 'pending')
+                ON CONFLICT(code, type) WHERE status = 'pending'
+                DO UPDATE SET updated_at = CURRENT_TIMESTAMP
+            `).bind(a.code)
+        );
+
+        await env.DB.batch(stmts);
+
+        console.log(`[RealtimeSync] Enqueued ${assets.length} intraday_sync jobs.`);
+    } catch (e) {
+        console.error('[RealtimeSync] Fatal:', e.message);
+    }
+}
+</file>
+
 <file path="lib/cron/historySync.js">
 /**
  * src/lib/cron/historySync.js
@@ -7709,10 +7601,8 @@ async function processSyncJobs(env) {
     const DB = env.DB;
     if (!DB) return;
 
-    const BATCH_SIZE = 5;
+    const BATCH_SIZE = 20; // 调大批处理量，支持高频分时同步
     try {
-        // 1. 绝对原子锁定：将“复位过期任务”与“锁定新任务”合并为单条事务级 SQL
-        // WHERE 子句同时匹配待处理(pending)和卡死超过10分钟(stuck)的任务
         const { results: jobs } = await DB.prepare(`
             UPDATE sync_jobs 
             SET status = 'processing', updated_at = CURRENT_TIMESTAMP 
@@ -7730,37 +7620,56 @@ async function processSyncJobs(env) {
 
         console.log(`[Queue:D1] Atomic lock: ${jobs.length} jobs`);
 
-        // 2. 并发执行
         const VALID_ASSET_TYPES = new Set(['stock', 'fund']);
 
         await Promise.allSettled(jobs.map(async (job) => {
             try {
-                if (job.type === 'fund_history' || job.type === 'asset_history_sync') {
-                    const { syncHistoryBulk } = await import('./lib/services/assetSyncService');
+                // ── 分时数据同步（针对 realtimeSync 投递的任务） ──────────────────────────────
+                if (job.type === 'intraday_sync') {
+                    const { fetchSingleIntraday } = await import('./lib/services/assetSyncService.js');
+                    const { updateIntradayJson } = await import('./lib/storage/intradayRepo.js');
+                    const { getBeijingTodayStr } = await import('./lib/utils.js');
+
+                    const data = await fetchSingleIntraday(job.code);
+
+                    if (data?.points?.length > 0) {
+                        await updateIntradayJson([{
+                            code: job.code,
+                            date: getBeijingTodayStr(),
+                            points: data.points,
+                            price: data.price,
+                            prevClose: data.prevClose
+                        }], env);
+                    }
+
+                    await DB.prepare(
+                        "UPDATE sync_jobs SET status = 'completed', updated_at = CURRENT_TIMESTAMP WHERE id = ?"
+                    ).bind(job.id).run();
+
+                    // ── 历史数据同步（原有逻辑） ──────────────────────
+                } else if (job.type === 'fund_history' || job.type === 'asset_history_sync') {
+                    const { syncHistoryBulk } = await import('./lib/services/assetSyncService.js');
 
                     const payload = JSON.parse(job.payload || '{}');
-
-                    // 类型推断
-                    let assetType = VALID_ASSET_TYPES.has(payload.type)
+                    const assetType = VALID_ASSET_TYPES.has(payload.type)
                         ? payload.type
                         : (job.type === 'fund_history' ? 'fund' : 'stock');
 
-                    // 执行同步（Service 内部已移除 forceRefresh 参数）
                     await syncHistoryBulk([{ code: job.code, type: assetType }], 250, true, env);
 
-                    // 任务归档
-                    await DB.prepare("UPDATE sync_jobs SET status = 'completed', updated_at = CURRENT_TIMESTAMP WHERE id = ?")
-                        .bind(job.id)
-                        .run();
+                    await DB.prepare(
+                        "UPDATE sync_jobs SET status = 'completed', updated_at = CURRENT_TIMESTAMP WHERE id = ?"
+                    ).bind(job.id).run();
+
                 } else {
                     console.warn(`[Queue:D1] Unsupported job type: ${job.type}`);
-                    await DB.prepare("UPDATE sync_jobs SET status = 'failed', error_msg = 'Unsupported type', updated_at = CURRENT_TIMESTAMP WHERE id = ?")
-                        .bind(job.id)
-                        .run();
+                    await DB.prepare(
+                        "UPDATE sync_jobs SET status = 'failed', error_msg = 'Unsupported type', updated_at = CURRENT_TIMESTAMP WHERE id = ?"
+                    ).bind(job.id).run();
                 }
+
             } catch (jobErr) {
-                console.error(`[Queue:D1] Job ${job.id} execution failed:`, jobErr.message);
-                // 指数级重试逻辑
+                console.error(`[Queue:D1] Job ${job.id} failed:`, jobErr.message);
                 await DB.prepare(`
                     UPDATE sync_jobs 
                     SET status = CASE WHEN retry_count + 1 < 3 THEN 'pending' ELSE 'failed' END,
@@ -7768,14 +7677,14 @@ async function processSyncJobs(env) {
                         retry_count = retry_count + 1, 
                         updated_at = CURRENT_TIMESTAMP 
                     WHERE id = ?
-                `)
-                    .bind(jobErr.message, job.id)
-                    .run();
+                `).bind(jobErr.message, job.id).run();
             }
         }));
 
-        // 3. 自动清理机制：每次处理后顺便清理超过 1 天的已完成或失败任务，防止表膨胀
-        await DB.prepare("DELETE FROM sync_jobs WHERE status IN ('completed', 'failed') AND updated_at < datetime('now', '-1 day')").run();
+        // 处理后清理：仅保留最近一天的记录
+        await DB.prepare(
+            "DELETE FROM sync_jobs WHERE status IN ('completed', 'failed') AND updated_at < datetime('now', '-1 day')"
+        ).run();
 
     } catch (e) {
         console.error('[Queue:Critical] Batch process failure:', e.message);
