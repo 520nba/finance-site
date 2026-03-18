@@ -8,7 +8,7 @@ import { fetchBulkHistory } from '@/services/api/historyService';
  * 职责：封装所有会改变 assets 列表的用户操作，
  * 让 AssetProvider 回归到纯粹的状态聚合层。
  */
-export function useAssetActions({ activeTab, setAssets, setIsSyncing, showToast, selectedCode, setSelectedCode, syncAssetsToServer, assetsRef }) {
+export function useAssetActions({ activeTabRef, setAssets, setIsSyncing, showToast, selectedCodeRef, setSelectedCode, syncAssetsToServer, assetsRef }) {
 
     // 内部辅助：获取单个资产的完整描述信息（名称 + 实时报价）
     const getAssetDetails = useCallback(async (code, type) => {
@@ -38,9 +38,10 @@ export function useAssetActions({ activeTab, setAssets, setIsSyncing, showToast,
     const addAsset = useCallback(async (rawCode, typeHint) => {
         setIsSyncing(true);
         const code = rawCode.trim().toLowerCase();
+        const currentTab = activeTabRef.current;
 
         // 格式校验
-        if (typeHint === 'stock' || activeTab === 'watchlist') {
+        if (typeHint === 'stock' || currentTab === 'watchlist') {
             if (!/^[a-zA-Z]{2}\d{6}$/i.test(code)) {
                 showToast('股票代码必须包含市场前缀 (如 sh600036)');
                 setIsSyncing(false);
@@ -68,20 +69,18 @@ export function useAssetActions({ activeTab, setAssets, setIsSyncing, showToast,
             showToast('加载失败，可能代码无效');
         }
         setIsSyncing(false);
-    }, [activeTab, getAssetDetails, setIsSyncing, setAssets, showToast, assetsRef, syncAssetsToServer]);
+    }, [activeTabRef, getAssetDetails, setIsSyncing, setAssets, showToast, assetsRef, syncAssetsToServer]);
 
     /**
      * 从自选列表移除资产
      * 同步清除侧边栏选中状态
      */
     const removeAsset = useCallback((code) => {
-        // React 要求 setState updater 是纯函数，副作用必须在外部执行
-        // 先计算新列表，再分步执行状态更新和服务端同步
         const newList = assetsRef.current.filter(a => a.code !== code);
         setAssets(newList);
         syncAssetsToServer(newList);
-        if (selectedCode === code) setSelectedCode(null);
-    }, [selectedCode, assetsRef, setAssets, setSelectedCode, syncAssetsToServer]);
+        if (selectedCodeRef.current === code) setSelectedCode(null);
+    }, [selectedCodeRef, setSelectedCode, assetsRef, setAssets, syncAssetsToServer]);
 
     return { addAsset, removeAsset };
 }

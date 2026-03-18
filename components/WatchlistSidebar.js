@@ -4,8 +4,9 @@ import { useState, useMemo, useEffect } from 'react';
 import { ChevronDown, ChevronUp, ChevronsUpDown } from 'lucide-react';
 import { calculatePerformance } from '@/lib/utils';
 import { fetchBulkHistory } from '@/services/api/historyService';
+import { useQuotes } from '@/providers/AssetProvider';
 
-// 从历史数据计算最终涨跌幅（单个数字）
+// ── 辅助函数 ──────────────────────────────────────────────────────
 function lastPerf(history, days) {
     if (!history || history.length === 0) return null;
     const curve = calculatePerformance(history, days);
@@ -23,12 +24,6 @@ function PerfCell({ value }) {
     );
 }
 
-const COLS = [
-    { key: 'd5', label: '5日' },
-    { key: 'd22', label: '22日' },
-    { key: 'd250', label: '250日' },
-];
-
 function SortIcon({ colKey, sortKey, sortDesc }) {
     if (sortKey !== colKey) return <ChevronsUpDown size={10} className="opacity-30" />;
     return sortDesc
@@ -36,42 +31,105 @@ function SortIcon({ colKey, sortKey, sortDesc }) {
         : <ChevronUp size={10} className="text-cyan-400" />;
 }
 
-export default function WatchlistSidebar({ assets, mode = 'volatility', selectedCode, onSelect }) {
+const COLS = [
+    { key: 'd5', label: '5日' },
+    { key: 'd22', label: '22日' },
+    { key: 'd250', label: '250日' },
+];
+
+/**
+ * ── 1. 实时监控模式组件 (订阅高频 QuotesContext) ──────────────────────────
+ */
+function WatchlistRealtimeMode({ assets, selectedCode, onSelect, scrollToAsset }) {
+    const { quotesMap } = useQuotes();
+    const [sortKey, setSortKey] = useState('changePercent');
+    const [sortDesc, setSortDesc] = useState(true);
+
+    const rows = useMemo(() => assets.map(asset => {
+        const q = quotesMap[asset.code.toLowerCase()];
+        return {
+            ...asset,
+            price: q ? q.price : asset.price,
+            changePercent: q ? q.changePercent : asset.changePercent
+        };
+    }), [assets, quotesMap]);
+
+    const sorted = useMemo(() => {
+        return [...rows].sort((a, b) => {
+            const av = a[sortKey] ?? null;
+            const bv = b[sortKey] ?? null;
+            if (av === null && bv === null) return 0;
+            if (av === null) return 1;
+            if (bv === null) return -1;
+            return sortDesc ? bv - av : av - bv;
+        });
+    }, [rows, sortKey, sortDesc]);
+
+    return (
+        <div className="border-t border-white/5">
+            <div className="flex items-center px-4 py-1.5 border-b border-white/5 gap-3">
+                <span className="flex-1 text-[10px] font-bold uppercase tracking-widest opacity-25">名称</span>
+                <span className="w-20 text-right text-[10px] font-bold uppercase tracking-widest opacity-25">现价</span>
+                <button
+                    onClick={() => { if (sortKey === 'changePercent') setSortDesc(!sortDesc); else { setSortKey('changePercent'); setSortDesc(true); } }}
+                    className="w-16 flex items-center justify-end gap-0.5 text-right text-[10px] font-bold uppercase tracking-widest opacity-40 hover:opacity-80 transition-opacity cursor-pointer"
+                >
+                    涨跌幅
+                    <SortIcon colKey="changePercent" sortKey={sortKey} sortDesc={sortDesc} />
+                </button>
+            </div>
+            <div className="max-h-[300px] lg:max-h-[75vh] overflow-y-auto custom-scrollbar">
+                {sorted.map(row => {
+                    const isSelected = row.code === selectedCode;
+                    return (
+                        <button
+                            key={row.code}
+                            onClick={() => scrollToAsset(row.code)}
+                            className={`w-full flex items-center gap-3 px-4 py-2 border-b border-white/5 last:border-0 hover:bg-white/5 active:bg-white/10 transition-all text-left ${isSelected ? 'bg-blue-600/20 border-l-2 border-l-blue-500' : ''}`}
+                        >
+                            <div className="flex-1 min-w-0">
+                                <p className="text-sm font-bold leading-tight truncate">{row.name}</p>
+                            </div>
+                            <div className="w-20 text-right">
+                                <p className="text-sm font-mono font-bold leading-tight">
+                                    {row.price?.toFixed(row.type === 'fund' ? 4 : 2)}
+                                </p>
+                            </div>
+                            <div className="w-16 text-right">
+                                <PerfCell value={row.changePercent ?? null} />
+                            </div>
+                        </button>
+                    );
+                })}
+            </div>
+        </div>
+    );
+}
+
+/**
+ * ── 2. 波动率分析模式组件 (不订阅 QuotesContext，完全不受高频报价影响) ──────────────
+ */
+function WatchlistVolatilityMode({ assets, scrollToAsset }) {
     const [sortKey, setSortKey] = useState('d5');
     const [sortDesc, setSortDesc] = useState(true);
     const [statsData, setStatsData] = useState({});
 
-    // ── 1. 稳定性优化：生成稳定的依赖 Key (High Prio Fix) ──────────────────
     const assetKeys = useMemo(() =>
         assets.map(a => `${a.type}:${a.code}`).sort().join(','),
         [assets]);
 
-    // 每次 assets 变化或进入 volatility 模式时，批量拉取缓存
     useEffect(() => {
-        if (mode !== 'volatility' || assets.length === 0) return;
+        if (assets.length === 0) return;
         const itemsToFetch = assets.map(a => ({ code: a.code, type: a.type }));
         fetchBulkHistory(itemsToFetch, false).then(res => {
             const newStats = {};
             for (const key in res) {
-                if (res[key]?.summary) {
-                    newStats[key] = res[key].summary;
-                }
+                if (res[key]?.summary) newStats[key] = res[key].summary;
             }
-            // 使用完全替换而非增量合并，防止内存泄漏 (Mid Prio Fix)
             setStatsData(newStats);
         }).catch(e => console.error("Sidebar bulk fetch failed:", e));
-    }, [assetKeys, mode]);
+    }, [assetKeys]);
 
-    const handleSort = (key) => {
-        if (sortKey === key) {
-            setSortDesc(v => !v);
-        } else {
-            setSortKey(key);
-            setSortDesc(true);
-        }
-    };
-
-    // 预计算每个资产的涨跌幅，并进行字段归一化 (High Prio Fix)
     const rows = useMemo(() => assets.map(asset => {
         const key = `${asset.type}:${asset.code}`;
         const summary = statsData[key] || asset.summary;
@@ -81,11 +139,20 @@ export default function WatchlistSidebar({ assets, mode = 'volatility', selected
             d5: summary?.perf5d ?? lastPerf(h, 5),
             d22: summary?.perf22d ?? lastPerf(h, 22),
             d250: summary?.perf250d ?? lastPerf(h, 250),
-            changePercent: asset.changePercent ?? null // 归一化以支持排序
         };
     }), [assets, statsData]);
 
-    // ── 3. 性能优化：缓存日期计算 (Mid Prio Fix) ──────────────────────────
+    const sorted = useMemo(() => {
+        return [...rows].sort((a, b) => {
+            const av = a[sortKey] ?? null;
+            const bv = b[sortKey] ?? null;
+            if (av === null && bv === null) return 0;
+            if (av === null) return 1;
+            if (bv === null) return -1;
+            return sortDesc ? bv - av : av - bv;
+        });
+    }, [rows, sortKey, sortDesc]);
+
     const latestDateStr = useMemo(() => {
         let latest = '';
         assets.forEach(a => {
@@ -101,127 +168,94 @@ export default function WatchlistSidebar({ assets, mode = 'volatility', selected
         return `(更新至${parseInt(m)}月${parseInt(d)}日)`;
     }, [assets, statsData]);
 
-    // 排序：null 值排最后
-    const sorted = useMemo(() => {
-        return [...rows].sort((a, b) => {
-            const av = a[sortKey] ?? null;
-            const bv = b[sortKey] ?? null;
-            if (av === null && bv === null) return 0;
-            if (av === null) return 1;
-            if (bv === null) return -1;
-            return sortDesc ? bv - av : av - bv;
-        });
-    }, [rows, sortKey, sortDesc]);
+    return (
+        <>
+            <div className="px-4 py-2.5 border-b border-white/5 flex items-center gap-2">
+                <div className="w-1.5 h-1.5 rounded-full bg-cyan-400 opacity-40" />
+                <span className="text-xs font-bold uppercase tracking-widest opacity-40">自选清单分析</span>
+                <span className="text-[10px] font-bold text-cyan-400/60 uppercase tracking-tighter ml-1">
+                    {latestDateStr}
+                </span>
+            </div>
+            <div className="flex items-center px-4 py-1.5 border-b border-white/5 gap-3">
+                <span className="flex-1 text-[10px] font-bold uppercase tracking-widest opacity-25">名称</span>
+                {COLS.map(col => (
+                    <button
+                        key={col.key}
+                        onClick={() => { if (sortKey === col.key) setSortDesc(!sortDesc); else { setSortKey(col.key); setSortDesc(true); } }}
+                        className="w-16 flex items-center justify-end gap-0.5 text-[10px] font-bold uppercase tracking-widest opacity-40 hover:opacity-80 transition-opacity cursor-pointer"
+                    >
+                        {col.label}
+                        <SortIcon colKey={col.key} sortKey={sortKey} sortDesc={sortDesc} />
+                    </button>
+                ))}
+            </div>
+            <div className="max-h-[300px] lg:max-h-[75vh] overflow-y-auto custom-scrollbar">
+                {sorted.map(row => (
+                    <button
+                        key={row.code}
+                        onClick={() => scrollToAsset(row.code)}
+                        className="w-full flex items-center gap-3 px-4 py-2 border-b border-white/5 last:border-0 hover:bg-white/5 active:bg-white/10 transition-all text-left"
+                    >
+                        <div className="flex-1 min-w-0">
+                            <p className="text-sm font-bold leading-tight truncate">{row.name}</p>
+                        </div>
+                        <PerfCell value={row.d5} />
+                        <PerfCell value={row.d22} />
+                        <PerfCell value={row.d250} />
+                    </button>
+                ))}
+            </div>
+        </>
+    );
+}
+
+/**
+ * ── 3. 主出口组件：实现按需分包渲染 ────────────────────────────────────
+ */
+export default function WatchlistSidebar({ assets, mode = 'volatility', selectedCode, onSelect }) {
+    if (!assets || assets.length === 0) return null;
 
     const scrollToAsset = (code) => {
         if (typeof window === 'undefined' || typeof document === 'undefined') return;
-
-        if (mode === 'realtime') {
-            if (onSelect) onSelect(code);
-        }
+        if (mode === 'realtime' && onSelect) onSelect(code);
 
         const el = document.getElementById(`asset-${code}`);
         if (el) {
-            const offset = 20; // 顶部预留一点距离
+            const offset = 20;
             const bodyRect = document.body.getBoundingClientRect().top;
             const elementRect = el.getBoundingClientRect().top;
             const elementPosition = elementRect - bodyRect;
             const offsetPosition = elementPosition - offset;
-
-            window.scrollTo({
-                top: offsetPosition,
-                behavior: 'smooth'
-            });
+            window.scrollTo({ top: offsetPosition, behavior: 'smooth' });
         }
     };
-
-    if (!assets || assets.length === 0) return null;
 
     return (
         <aside className="w-full lg:w-[380px] lg:flex-shrink-0 lg:sticky lg:top-4 lg:self-start">
             <div className="glass-effect border-white/10 overflow-hidden">
-                {/* Header */}
-                <div className="px-4 py-2.5 border-b border-white/5 flex items-center gap-2">
-                    <div className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
-                    <span className="text-xs font-bold uppercase tracking-widest opacity-40">
-                        {mode === 'realtime' ? '实时监控' : '自选清单'}
-                    </span>
-                    {mode !== 'realtime' && (
-                        <span className="text-[10px] font-bold text-cyan-400/60 uppercase tracking-tighter ml-1">
-                            {latestDateStr}
-                        </span>
-                    )}
-                    <span className="ml-auto text-xs font-mono opacity-20">{assets.length}</span>
-                </div>
-
-                {/* Column headers (only in volatility mode) */}
-                {mode === 'volatility' && (
-                    <div className="flex items-center px-4 py-1.5 border-b border-white/5 gap-3">
-                        <span className="flex-1 text-[10px] font-bold uppercase tracking-widest opacity-25">名称</span>
-                        {COLS.map(col => (
-                            <button
-                                key={col.key}
-                                onClick={() => handleSort(col.key)}
-                                className="w-16 flex items-center justify-end gap-0.5 text-[10px] font-bold uppercase tracking-widest opacity-40 hover:opacity-80 transition-opacity cursor-pointer"
-                            >
-                                {col.label}
-                                <SortIcon colKey={col.key} sortKey={sortKey} sortDesc={sortDesc} />
-                            </button>
-                        ))}
-                    </div>
+                {mode === 'realtime' ? (
+                    <>
+                        <div className="px-4 py-2.5 border-b border-white/5 flex items-center gap-2">
+                            <div className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
+                            <span className="text-xs font-bold uppercase tracking-widest opacity-40">实时监控</span>
+                            <span className="ml-auto text-xs font-mono opacity-20">{assets.length}</span>
+                        </div>
+                        <WatchlistRealtimeMode
+                            assets={assets}
+                            selectedCode={selectedCode}
+                            onSelect={onSelect}
+                            scrollToAsset={scrollToAsset}
+                        />
+                    </>
+                ) : (
+                    <WatchlistVolatilityMode
+                        assets={assets}
+                        scrollToAsset={scrollToAsset}
+                    />
                 )}
-
-                {/* Row Header for realtime mode */}
-                {mode === 'realtime' && (
-                    <div className="flex items-center px-4 py-1.5 border-b border-white/5 gap-3">
-                        <span className="flex-1 text-[10px] font-bold uppercase tracking-widest opacity-25">名称</span>
-                        <span className="w-20 text-right text-[10px] font-bold uppercase tracking-widest opacity-25">现价</span>
-                        <button
-                            onClick={() => handleSort('changePercent')}
-                            className="w-16 flex items-center justify-end gap-0.5 text-right text-[10px] font-bold uppercase tracking-widest opacity-40 hover:opacity-80 transition-opacity cursor-pointer"
-                        >
-                            涨跌幅
-                            <SortIcon colKey="changePercent" sortKey={sortKey} sortDesc={sortDesc} />
-                        </button>
-                    </div>
-                )}
-
-                {/* Asset rows */}
-                <div className="max-h-[300px] lg:max-h-[75vh] overflow-y-auto custom-scrollbar">
-                    {sorted.map(row => {
-                        const isSelected = mode === 'realtime' && row.code === selectedCode;
-                        return (
-                            <button
-                                key={row.code}
-                                onClick={() => scrollToAsset(row.code)}
-                                className={`w-full flex items-center gap-3 px-4 py-2 border-b border-white/5 last:border-0 hover:bg-white/5 active:bg-white/10 transition-all text-left ${isSelected ? 'bg-blue-600/20 border-l-2 border-l-blue-500' : ''}`}
-                            >
-                                <div className="flex-1 min-w-0">
-                                    <p className="text-sm font-bold leading-tight truncate">{row.name}</p>
-                                </div>
-                                {mode === 'volatility' ? (
-                                    <>
-                                        <PerfCell value={row.d5} />
-                                        <PerfCell value={row.d22} />
-                                        <PerfCell value={row.d250} />
-                                    </>
-                                ) : (
-                                    <>
-                                        <div className="w-20 text-right">
-                                            <p className="text-sm font-mono font-bold leading-tight">
-                                                {row.price?.toFixed(row.type === 'fund' ? 4 : 2)}
-                                            </p>
-                                        </div>
-                                        <div className="w-16 text-right">
-                                            <PerfCell value={row.changePercent ?? null} />
-                                        </div>
-                                    </>
-                                )}
-                            </button>
-                        );
-                    })}
-                </div>
             </div>
         </aside>
     );
 }
+

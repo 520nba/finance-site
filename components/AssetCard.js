@@ -8,7 +8,7 @@ import VolatilityChart from './VolatilityChart';
 import IntradayChart from './IntradayChart';
 import { calculatePerformance } from '@/lib/utils';
 import { fetchBulkHistory } from '@/services/api/historyService';
-import { fetchBulkIntradayData } from '@/services/api/intradayService';
+import { useQuotes } from '@/providers/AssetProvider';
 
 // 独立子组件，展示具体时段的表现
 function MetricPanel({ label, value, history = [], days }) {
@@ -52,11 +52,99 @@ function MetricPanel({ label, value, history = [], days }) {
     );
 }
 
+// ── 1. 实时模式内核：唯一订阅 QuotesContext 的地方 ─────────────────────
+function RealtimeLayer({ asset }) {
+    const { quotesMap, intradayMap } = useQuotes();
+    const quote = quotesMap[asset.code.toLowerCase()];
+    const intradayData = intradayMap[asset.code];
+
+    const displayChange = quote?.changePercent ?? asset.changePercent;
+    const isPositiveChange = (displayChange ?? 0) >= 0;
+    const intraPoints = intradayData?.points ?? [];
+
+    return (
+        <div className="mt-2 text-right">
+            <div className="flex flex-col items-end mb-4 absolute top-4 right-4 group-hover:top-3 transition-all">
+                <div className={`text-2xl font-black italic shadow-text leading-none font-mono ${isPositiveChange ? 'text-red-400' : 'text-green-400'}`}>
+                    {isPositiveChange ? '+' : ''}{displayChange?.toFixed(1)}%
+                </div>
+            </div>
+
+            <div className="mt-2">
+                {asset.type === 'fund' ? (
+                    <div className="h-[120px] flex items-center justify-center text-white/20 text-sm bg-white/5 rounded-xl border border-white/5">
+                        <span className="italic">场外基金不支持分时数据</span>
+                    </div>
+                ) : (intraPoints.length > 0 && (asset.prevClose || intradayData?.prevClose)) ? (
+                    <IntradayChart
+                        data={intraPoints}
+                        prevClose={asset.prevClose || intradayData?.prevClose}
+                        height={120}
+                    />
+                ) : (
+                    <div className="h-[120px] flex items-center justify-center text-white/20 text-sm bg-white/5 rounded-xl border border-white/5">
+                        <span className="italic">今日暂无分时交易数据</span>
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+}
+
+// ── 2. 波动率内核：完全不建立 QuotesContext 订阅 ──────────────────────────
+function VolatilityLayer({ asset, isVisible }) {
+    // 取得 localStorage 中的缓存作为首屏 fallback
+    const cachedHistory = useMemo(() => {
+        try { return JSON.parse(localStorage.getItem(`tracker_cache_hist:${asset.type}:${asset.code}`)) }
+        catch { return undefined }
+    }, [asset.type, asset.code]);
+
+    // 历史数据获取 (仅在可见时启用)
+    const { data: historyData } = useSWR(
+        isVisible ? `hist:${asset.type}:${asset.code}` : null,
+        () => fetchBulkHistory([{ code: asset.code, type: asset.type }], false).then(res => res[`${asset.type}:${asset.code}`]),
+        {
+            fallbackData: cachedHistory,
+            revalidateOnFocus: false,
+            onSuccess: (data) => {
+                if (data) localStorage.setItem(`tracker_cache_hist:${asset.type}:${asset.code}`, JSON.stringify(data));
+            }
+        }
+    );
+
+    const history = (historyData?.history?.length > 0) ? historyData.history : (asset.history ?? []);
+    const summary = (historyData?.summary) ?? (asset.summary ?? { perf5d: null, perf22d: null, perf250d: null });
+    const isHistorySyncing = historyData?.status === 'syncing';
+
+    if (isHistorySyncing) {
+        return (
+            <div className="h-[100px] flex flex-col items-center justify-center gap-3 bg-white/5 rounded-xl border border-dashed border-white/10 mt-2">
+                <motion.div
+                    animate={{ rotate: 360 }}
+                    transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
+                    className="w-5 h-5 border-2 border-cyan-500/20 border-t-cyan-500 rounded-full"
+                />
+                <span className="text-xs font-bold text-cyan-500/60 uppercase tracking-widest italic animate-pulse">
+                    历史行情同步中 (后台任务)...
+                </span>
+            </div>
+        );
+    }
+
+    return (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 pt-2 border-t border-white/5 mt-2">
+            <MetricPanel label="5日" value={summary.perf5d} history={history} days={5} />
+            <MetricPanel label="22日" value={summary.perf22d} history={history} days={22} />
+            <MetricPanel label="250日" value={summary.perf250d} history={history} days={250} />
+        </div>
+    );
+}
+
 function AssetCardComponent({ asset, onRemove, mode = 'volatility' }) {
     const [isVisible, setIsVisible] = useState(false);
     const containerRef = useRef(null);
 
-    // 监听进入视口，实现延迟实例化与数据拉取
+    // 监听进入视口，实现延迟实例化
     useEffect(() => {
         if (!containerRef.current) return;
         const obs = new IntersectionObserver(([entry]) => {
@@ -70,51 +158,6 @@ function AssetCardComponent({ asset, onRemove, mode = 'volatility' }) {
         return () => obs.disconnect();
     }, []);
 
-    // 取得 localStorage 中的缓存作为首屏 fallback
-    const cachedHistory = useMemo(() => {
-        try { return JSON.parse(localStorage.getItem(`tracker_cache_hist:${asset.type}:${asset.code}`)) }
-        catch { return undefined }
-    }, [asset.type, asset.code]);
-
-    const cachedIntraday = useMemo(() => {
-        try { return JSON.parse(localStorage.getItem(`tracker_cache_intra:${asset.type}:${asset.code}`)) }
-        catch { return undefined }
-    }, [asset.type, asset.code]);
-
-    // 1. 历史数据获取 (仅在 volatility 模式且可见时启用)
-    const { data: historyData } = useSWR(
-        isVisible && mode === 'volatility' ? `hist:${asset.type}:${asset.code}` : null,
-        () => fetchBulkHistory([{ code: asset.code, type: asset.type }], false).then(res => res[`${asset.type}:${asset.code}`]),
-        {
-            fallbackData: cachedHistory,
-            revalidateOnFocus: false, // 历史数据不随切换 Tab 刷新
-            onSuccess: (data) => {
-                if (data) localStorage.setItem(`tracker_cache_hist:${asset.type}:${asset.code}`, JSON.stringify(data));
-            }
-        }
-    );
-
-    // 2. 分时数据获取 (仅在 realtime 模式且可见时启用，自动轮询 2 分钟)
-    const { data: intradayData, isValidating: isIntraValidating } = useSWR(
-        isVisible && mode === 'realtime' ? `intra:${asset.type}:${asset.code}` : null,
-        () => fetchBulkIntradayData([{ code: asset.code, type: asset.type }], true).then(res => res[asset.code]),
-        {
-            fallbackData: cachedIntraday,
-            refreshInterval: 120000,
-            onSuccess: (data) => {
-                if (data) localStorage.setItem(`tracker_cache_intra:${asset.type}:${asset.code}`, JSON.stringify(data));
-            }
-        }
-    );
-
-    const history = (historyData?.history?.length > 0) ? historyData.history : (asset.history ?? []);
-    // 修改：初始值设为 null，防止 +0.00% 的误导 (High Prio Fix)
-    const summary = (historyData?.summary) ?? (asset.summary ?? { perf5d: null, perf22d: null, perf250d: null });
-    const isHistorySyncing = historyData?.status === 'syncing';
-
-    const intraPoints = intradayData?.points ?? [];
-    const isPositiveChange = (asset.changePercent ?? 0) >= 0;
-
     return (
         <motion.div
             ref={containerRef}
@@ -122,8 +165,8 @@ function AssetCardComponent({ asset, onRemove, mode = 'volatility' }) {
             id={`asset-${asset.code}`}
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0 }} // 移除 scale 以防止 layout 动画抖动 (Low Prio Fix)
-            className="glass-effect p-4 lg:p-5 group"
+            exit={{ opacity: 0 }}
+            className="glass-effect p-4 lg:p-5 group relative"
         >
             <div className="flex justify-between items-start mb-4">
                 <div className="flex-1 min-w-0 mr-4">
@@ -132,84 +175,46 @@ function AssetCardComponent({ asset, onRemove, mode = 'volatility' }) {
                     </h3>
                     <p className="text-[10px] font-bold opacity-20 uppercase tracking-[0.2em] mt-1 font-mono">{asset.code}</p>
                 </div>
-                <div className="flex flex-col items-end gap-1">
-                    {mode === 'realtime' && (
-                        <div className={`text-2xl font-black italic leading-none font-mono ${isPositiveChange ? 'text-red-400' : 'text-green-400'}`}>
-                            {isPositiveChange ? '+' : ''}{asset.changePercent?.toFixed(1)}%
-                        </div>
-                    )}
+                <div className="flex flex-col items-end gap-1 z-10">
                     <button
                         onClick={() => onRemove(asset.code)}
                         aria-label="删除资产"
-                        className="p-1.5 bg-white/5 hover:bg-red-500/20 hover:text-red-400 rounded-lg transition-all opacity-0 group-hover:opacity-100 mt-1"
+                        className="p-1.5 bg-white/5 hover:bg-red-500/20 hover:text-red-400 rounded-lg transition-all opacity-0 group-hover:opacity-100"
                     >
                         <Trash2 size={14} />
                     </button>
                 </div>
             </div>
 
+            {/* 核心内容：按模式分发子组件，实现 Context 订阅物理隔离 */}
             {mode === 'realtime' ? (
-                <div className="mt-2">
-
-                    <div className="flex-1">
-                        {asset.type === 'fund' ? (
-                            <div className="h-[120px] flex items-center justify-center text-white/20 text-sm bg-white/5 rounded-xl border border-white/5">
-                                <span className="italic">场外基金不支持分时数据</span>
-                            </div>
-                        ) : (intraPoints.length > 0 && (asset.prevClose || intradayData?.prevClose)) ? (
-                            <IntradayChart
-                                data={intraPoints}
-                                // 修复：移除 asset.price 强制回退，防止误导性的分时渲染 (Mid Prio Fix)
-                                prevClose={asset.prevClose || intradayData?.prevClose}
-                                height={120}
-                            />
-                        ) : isIntraValidating ? (
-                            <div className="h-[120px] flex flex-col items-center justify-center text-white/20 text-sm gap-2 bg-white/5 rounded-xl border border-white/5">
-                                <motion.div
-                                    animate={{ rotate: 360 }}
-                                    transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
-                                    className="w-5 h-5 border-2 border-white/10 border-t-white/40 rounded-full"
-                                />
-                                <span className="italic">行情数据同步中，请稍候...</span>
-                            </div>
-                        ) : (
-                            <div className="h-[120px] flex items-center justify-center text-white/20 text-sm bg-white/5 rounded-xl border border-white/5">
-                                <span className="italic">今日暂无分时交易数据</span>
-                            </div>
-                        )}
-                    </div>
-                </div>
-            ) : isHistorySyncing ? (
-                <div className="h-[100px] flex flex-col items-center justify-center gap-3 bg-white/5 rounded-xl border border-dashed border-white/10">
-                    <motion.div
-                        animate={{ rotate: 360 }}
-                        transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
-                        className="w-5 h-5 border-2 border-cyan-500/20 border-t-cyan-500 rounded-full"
-                    />
-                    <span className="text-xs font-bold text-cyan-500/60 uppercase tracking-widest italic animate-pulse">
-                        历史行情同步中 (后台任务)...
-                    </span>
-                </div>
+                <RealtimeLayer asset={asset} />
             ) : (
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6 pt-2 border-t border-white/5">
-                    <MetricPanel label="5日" value={summary.perf5d} history={history} days={5} />
-                    <MetricPanel label="22日" value={summary.perf22d} history={history} days={22} />
-                    <MetricPanel label="250日" value={summary.perf250d} history={history} days={250} />
-                </div>
+                <VolatilityLayer asset={asset} isVisible={isVisible} />
             )}
         </motion.div>
     );
 }
 
 export default memo(AssetCardComponent, (prev, next) => {
-    return (
-        prev.mode === next.mode &&
-        prev.onRemove === next.onRemove && // 接入函数比对，防止闭包失效 (High Prio Fix)
-        prev.asset.code === next.asset.code &&
-        prev.asset.name === next.asset.name &&
-        prev.asset.price === next.asset.price &&
-        prev.asset.changePercent === next.asset.changePercent &&
-        prev.asset.history?.[prev.asset.history.length - 1]?.date === next.asset.history?.[next.asset.history.length - 1]?.date &&
-        prev.asset.intraday?.price === next.asset.intraday?.price
-    );
+    // 基础变更判定
+    if (prev.mode !== next.mode) return false;
+    if (prev.asset.code !== next.asset.code) return false;
+    if (prev.asset.name !== next.asset.name) return false;
+    if (prev.onRemove !== next.onRemove) return false;
+
+    // 波动率模式：仅比对历史数据的最后一条日期（通常一天变一次）
+    if (prev.mode === 'volatility') {
+        const prevDate = prev.asset.history?.at(-1)?.date;
+        const nextDate = next.asset.history?.at(-1)?.date;
+        return prevDate === nextDate;
+    }
+
+    /* 
+       实时模式备注：
+       价格和分时数据现在由 QuotesContext 注入，不在 props.asset 中。
+       AssetCard 内部会通过 useQuotes() 自动重渲染该卡片。
+       因此 memo 只需要保证资产结构本身没变即可。
+    */
+    return true;
 });

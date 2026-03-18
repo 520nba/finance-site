@@ -7,36 +7,33 @@ import SearchBar from '@/components/SearchBar';
 import AssetCard from '@/components/AssetCard';
 import WatchlistSidebar from '@/components/WatchlistSidebar';
 import LogsModal from '@/components/LogsModal';
-import { useAsset } from '@/providers/AssetProvider';
+import { useAuth, useUI, useAssetsStructure } from '@/providers/AssetProvider';
 
 export default function DashboardClient() {
     const [showLogs, setShowLogs] = useState(false);
 
+    // 1. 认证状态 (低频)
     const {
-        userId,
-        isLogged,
-        loginInput,
-        setLoginInput,
-        passwordInput,
-        setPasswordInput,
-        isRegistering,
-        setIsRegistering,
-        isPending,
-        handleLogin,
-        handleRegister,
-        handleLogout,
-        assets,
-        isSyncing,
-        activeTab,
-        setActiveTab,
-        selectedCode,
-        setSelectedCode,
-        addAsset,
-        removeAsset,
-        refreshAssets,
-        toast,
-        setToast,
-    } = useAsset();
+        userId, isLogged, loginInput, setLoginInput,
+        passwordInput, setPasswordInput, isRegistering,
+        setIsRegistering, isPending, handleLogin,
+        handleRegister, handleLogout
+    } = useAuth();
+
+    // 2. UI 交互状态 (低频)
+    const {
+        activeTab, setActiveTab, selectedCode,
+        setSelectedCode, toast, setToast, showToast
+    } = useUI();
+
+    // 3. 资产列表结构 (低频)
+    const {
+        assets, isSyncing, addAsset,
+        removeAsset, refreshAssets
+    } = useAssetsStructure();
+
+    // ✅ DashboardClient 不调用 useQuotes()，彻底解除对高频行情 Context 的订阅
+
 
     const filteredAssets = assets.filter(a => activeTab === 'watchlist' ? a.type === 'stock' : a.type === activeTab);
 
