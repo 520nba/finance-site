@@ -7,7 +7,7 @@ import { getAllApiHealth } from '@/lib/storage/healthRepo';
 import { memoryCache } from '@/lib/storage/memoryCache';
 
 const STATS_CACHE_KEY = 'admin_stats_full';
-const CACHE_TTL = 10000; // 10s 缓存
+const CACHE_TTL = 10000; // 10s 缂撳瓨
 
 export async function GET(request) {
     if (!(await isAdminAuthorized(request))) {
