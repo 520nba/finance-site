@@ -2261,21 +2261,6 @@ export async function POST(request) {
 }
 </file>
 
-<file path="app/api/intraday/bulk/route.js">
-import { NextResponse } from 'next/server';
-import { syncIntradayBulk } from '@/lib/services/assetSyncService';
-
-export async function POST(request) {
-    try {
-        const { items, allowExternal = false } = await request.json();
-        const result = await syncIntradayBulk(items, allowExternal, request);
-        return NextResponse.json({ success: true, data: result });
-    } catch (e) {
-        return NextResponse.json({ success: false, error: e.message, code: 'INTERNAL_ERROR' }, { status: 500 });
-    }
-}
-</file>
-
 <file path="app/api/names/bulk/route.js">
 import { NextResponse } from 'next/server';
 import { syncNamesBulk } from '@/lib/services/assetSyncService';
@@ -2883,95 +2868,6 @@ export default function WatchlistSidebar({ assets, mode = 'volatility', selected
 }
 </file>
 
-<file path="hooks/useAssetActions.js">
-import { useCallback } from 'react';
-import { fetchBulkNames } from '@/services/api/namesService';
-import { fetchBulkStockQuotes } from '@/services/api/quotesService';
-import { fetchBulkHistory } from '@/services/api/historyService';
-
-/**
- * 资产写操作 Hook（addAsset / removeAsset）
- * 职责：封装所有会改变 assets 列表的用户操作，
- * 让 AssetProvider 回归到纯粹的状态聚合层。
- */
-export function useAssetActions({ activeTabRef, setAssets, setIsSyncing, showToast, selectedCodeRef, setSelectedCode, syncAssetsToServer, assetsRef }) {
-
-    // 内部辅助：获取单个资产的完整描述信息（名称 + 实时报价）
-    const getAssetDetails = useCallback(async (code, type) => {
-        try {
-            const nameMap = await fetchBulkNames([{ code, type }], true);
-            const name = nameMap[`${type}:${code}`] ?? (type === 'fund' ? `基金 ${code}` : `股票 ${code}`);
-
-            // 预加载历史数据（静默失败，不阻塞主流程）
-            fetchBulkHistory([{ code, type }], true, 250).catch(() => { });
-
-            if (type === 'stock') {
-                const quoteMap = await fetchBulkStockQuotes([{ code, type }], true);
-                const q = quoteMap[code.toLowerCase()] || quoteMap[code];
-                return { ...q, name: q?.name || name, code, type };
-            }
-            return { name, price: 0, code, type, history: [], changePercent: 0 };
-        } catch (e) {
-            console.error('[useAssetActions] Details fetch failed:', e);
-            return null;
-        }
-    }, []);
-
-    /**
-     * 添加资产到自选列表
-     * 包含格式校验 → 数据预加载 → 去重写入
-     */
-    const addAsset = useCallback(async (rawCode, typeHint) => {
-        setIsSyncing(true);
-        const code = rawCode.trim().toLowerCase();
-        const currentTab = activeTabRef.current;
-
-        // 格式校验
-        if (typeHint === 'stock' || currentTab === 'watchlist') {
-            if (!/^[a-zA-Z]{2}\d{6}$/i.test(code)) {
-                showToast('股票代码必须包含市场前缀 (如 sh600036)');
-                setIsSyncing(false);
-                return;
-            }
-        } else if (typeHint === 'fund') {
-            if (!/^\d{6}$/.test(code)) {
-                showToast('基金代码必须为 6 位数字');
-                setIsSyncing(false);
-                return;
-            }
-        }
-
-        const asset = await getAssetDetails(code, typeHint);
-        if (asset) {
-            const list = Array.isArray(assetsRef.current) ? assetsRef.current : [];
-            // 去重：已存在则不重复添加
-            if (!list.find(a => a.code === code)) {
-                const newList = [...list, asset];
-                setAssets(newList);
-                // 立即触发强制同步，避免依赖 useEffect 引发新旧状态竞态
-                syncAssetsToServer(newList);
-            }
-        } else {
-            showToast('加载失败，可能代码无效');
-        }
-        setIsSyncing(false);
-    }, [activeTabRef, getAssetDetails, setIsSyncing, setAssets, showToast, assetsRef, syncAssetsToServer]);
-
-    /**
-     * 从自选列表移除资产
-     * 同步清除侧边栏选中状态
-     */
-    const removeAsset = useCallback((code) => {
-        const newList = assetsRef.current.filter(a => a.code !== code);
-        setAssets(newList);
-        syncAssetsToServer(newList);
-        if (selectedCodeRef.current === code) setSelectedCode(null);
-    }, [selectedCodeRef, setSelectedCode, assetsRef, setAssets, syncAssetsToServer]);
-
-    return { addAsset, removeAsset };
-}
-</file>
-
 <file path="lib/auth.js">
 /**
  * lib/auth.js
@@ -3188,108 +3084,6 @@ export function validateProxyTarget(rawUrl) {
     }
 
     return { ok: true, urlObj };
-}
-</file>
-
-<file path="lib/storage/healthRepo.js">
-import { queryAll, runSql, queryOne, getRequiredDb } from './d1Client';
-import { addSystemLog } from './logRepo';
-
-/**
- * 内部辅助：构造 API 状态更新的 SQL 和参数
- */
-function prepareHealthUpsert(name, data) {
-    const isSuccess = data.isSuccess !== undefined ? data.isSuccess : data.status !== 'down';
-    const currentResult = isSuccess ? 'S' : 'F';
-
-    const sql = `
-        INSERT INTO api_health (
-            api_name, status, success_rate, avg_latency, 
-            success_count, fail_count, total_count,
-            recent_results,
-            last_check, heartbeat_ts, error_msg
-        ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, ?)
-        ON CONFLICT(api_name) DO UPDATE SET
-            status = excluded.status,
-            avg_latency = (avg_latency * 0.8) + (excluded.avg_latency * 0.2), -- 采用指数移动平均，更反映近况
-            success_count = success_count + excluded.success_count,
-            fail_count = fail_count + excluded.fail_count,
-            total_count = total_count + 1,
-            recent_results = substr(COALESCE(recent_results, '') || excluded.recent_results, -20),
-            success_rate = (
-                length(replace(substr(COALESCE(recent_results, '') || excluded.recent_results, -20), 'F', ''))
-            ) || '/' || length(substr(COALESCE(recent_results, '') || excluded.recent_results, -20)),
-            last_check = excluded.last_check,
-            heartbeat_ts = excluded.heartbeat_ts,
-            error_msg = excluded.error_msg
-    `;
-
-    const params = [
-        name,
-        data.status,
-        isSuccess ? "1/1" : "0/1",
-        data.avgLatency,
-        isSuccess ? 1 : 0,
-        isSuccess ? 0 : 1,
-        currentResult,
-        data.errorMsg || ''
-    ];
-
-    return { sql, params, isSuccess };
-}
-
-export async function updateApiHealth(name, data, env = null) {
-    try {
-        const { sql, params, isSuccess } = prepareHealthUpsert(name, data);
-        await runSql(sql, params, env);
-
-        if (!isSuccess) {
-            await addSystemLog('WARN', 'HealthRepo', `API Down: ${name} [${data.status}] - ${data.errorMsg}`, env);
-        }
-    } catch (e) {
-        console.error(`[HealthRepo] updateApiHealth failed for ${name}:`, e.message);
-    }
-}
-
-/**
- * 批量更新 API 健康现状 (原子事务)
- * @param {Array} results
- * @param {Object} env
- */
-export async function batchUpdateApiHealth(results, env = null) {
-    try {
-        const db = await getRequiredDb(env);
-
-        const statements = results.map(r => {
-            const { sql, params } = prepareHealthUpsert(r.name, r);
-            return db.prepare(sql).bind(...params);
-        });
-
-        await db.batch(statements);
-
-        // 批量记录日志：合并为一条聚合日志
-        const failures = results.filter(r => (r.isSuccess !== undefined ? !r.isSuccess : r.status === 'down'));
-        if (failures.length > 0) {
-            const failureDetail = failures.map(f => `${f.name}[${f.status}]`).join(', ');
-            await addSystemLog('WARN', 'HealthRepo', `API Batch Failure: ${failureDetail}`, env);
-        }
-    } catch (e) {
-        console.error('[HealthRepo] batchUpdateApiHealth failed:', e.message);
-    }
-}
-
-/**
- * 获取所有 API 状态
- * @param {Object} env
- */
-export async function getAllApiHealth(env = null) {
-    try {
-        const rows = await queryAll('SELECT * FROM api_health ORDER BY api_name ASC', [], env);
-        return rows || [];
-    } catch (e) {
-        console.error('[HealthRepo] getAllApiHealth failed:', e.message);
-        return [];
-    }
 }
 </file>
 
@@ -3577,120 +3371,6 @@ class MemoryCache {
 export const memoryCache = new MemoryCache(1500);
 </file>
 
-<file path="lib/storage/quoteRepo.js">
-import { queryAll, runSql, getD1Storage, batchSql } from './d1Client';
-import { memoryCache } from './memoryCache';
-
-/**
- * 将批量报价写入 D1 和内存缓存
- * @param {Object} quotesMap
- * @param {Object} env
- */
-export async function saveQuotes(quotesMap, env = null) {
-    const timeStr = new Date().toISOString();
-    const db = await getD1Storage(env);
-
-    const entries = Object.entries(quotesMap);
-    if (entries.length === 0) return;
-
-    const now = Date.now();
-
-    // 2. 无条件更新内存缓存 (确保 L1 永远是最新的)
-    for (const [code, q] of entries) {
-        const lowerCode = code.toLowerCase();
-        memoryCache.set(`quote:${lowerCode}`, { ...q, updated_at: timeStr, code: lowerCode });
-    }
-
-    // 3. 持久化到 D1 (实施物理写限流保护)
-    if (db) {
-        const WRITE_INTERVAL_MS = 30 * 60 * 1000; // 30 分钟同步一次 D1
-
-        try {
-            const statements = [];
-
-            for (const [code, q] of entries) {
-                const lowerCode = code.toLowerCase();
-
-                // 核心优化：使用内存缓存记录上次写入时间，不再读 D1 判定，省掉一次读操作
-                const cacheKey = `quote_write_ts:${lowerCode}`;
-                const lastWriteTs = memoryCache.get(cacheKey) || 0;
-
-                if (now - lastWriteTs >= WRITE_INTERVAL_MS) {
-                    statements.push(
-                        db.prepare(`
-                            INSERT OR REPLACE INTO asset_quotes 
-                            (code, name, price, change, changePercent, prevClose, updated_at) 
-                            VALUES (?, ?, ?, ?, ?, ?, ?)
-                        `).bind(
-                            lowerCode,
-                            q.name,
-                            q.price,
-                            q.change,
-                            q.changePercent,
-                            q.prevClose,
-                            timeStr
-                        )
-                    );
-                    // 更新写入时间戳缓存
-                    memoryCache.set(cacheKey, now);
-                }
-            }
-
-            if (statements.length > 0) {
-                // 分片执行批量持久化
-                const CHUNK_SIZE = 50;
-                for (let i = 0; i < statements.length; i += CHUNK_SIZE) {
-                    await db.batch(statements.slice(i, i + CHUNK_SIZE));
-                }
-                console.log(`[QuoteRepo] D1 persistent write: ${statements.length}/${entries.length} (30m throttled)`);
-            }
-        } catch (e) {
-            console.warn(`[QuoteRepo] D1 batch sync failed:`, e?.message);
-        }
-    }
-}
-
-/**
- * 批量从 D1 或内存获取报价
- * @param {Array} codes
- * @param {Object} env
- */
-export async function getBulkQuotes(codes, env = null) {
-    if (!codes || codes.length === 0) return {};
-
-    const result = {};
-    const toQuery = [];
-
-    // 1. 先查内存缓存
-    for (const code of codes) {
-        const lowerCode = code.toLowerCase();
-        const cached = memoryCache.get(`quote:${lowerCode}`);
-        if (cached) {
-            result[lowerCode] = cached;
-        } else {
-            toQuery.push(lowerCode);
-        }
-    }
-
-    if (toQuery.length === 0) return result;
-
-    // 2. 查 D1 数据库
-    try {
-        const sql = `SELECT * FROM asset_quotes WHERE code IN (${toQuery.map(() => '?').join(',')})`;
-        const rows = await queryAll(sql, toQuery, env);
-        for (const row of rows) {
-            result[row.code] = row;
-            // 回填内存缓存
-            memoryCache.set(`quote:${row.code}`, row);
-        }
-    } catch (e) {
-        console.error('[QuoteRepo] getBulkQuotes failed:', e.message);
-    }
-
-    return result;
-}
-</file>
-
 <file path="providers/contexts.js">
 import { createContext } from 'react';
 
@@ -3710,148 +3390,6 @@ export const QuotesContext = createContext(null);
 
 // 4. UI 交互层 (UIContext): 独立管理 Tab、弹窗等状态
 export const UIContext = createContext(null);
-</file>
-
-<file path="schema.sql">
--- 用户索引表
-CREATE TABLE IF NOT EXISTS users (
-    id          TEXT PRIMARY KEY,
-    password_hash TEXT,
-    email       TEXT UNIQUE,
-    created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
-    last_login  DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-
--- 会话表 (SaaS 认证)
-CREATE TABLE IF NOT EXISTS user_sessions (
-    token       TEXT PRIMARY KEY,
-    user_id     TEXT NOT NULL,
-    created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
-    expires_at  DATETIME NOT NULL,
-    FOREIGN KEY(user_id) REFERENCES users(id)
-);
-CREATE INDEX IF NOT EXISTS idx_sessions_user ON user_sessions(user_id);
-
--- 用户资产关联表
-CREATE TABLE IF NOT EXISTS user_assets (
-    user_id TEXT NOT NULL,
-    code TEXT NOT NULL,
-    type TEXT NOT NULL,
-    added_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY(user_id, code, type),
-    FOREIGN KEY(user_id) REFERENCES users(id)
-);
-
--- 资产基本信息 (名称库)
-CREATE TABLE IF NOT EXISTS asset_names (
-    code TEXT NOT NULL,
-    type TEXT NOT NULL,
-    name TEXT NOT NULL,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY(code, type)
-);
-
--- 历史价格
-CREATE TABLE IF NOT EXISTS asset_history (
-    code TEXT NOT NULL,
-    type TEXT NOT NULL,
-    price REAL NOT NULL,
-    record_date TEXT NOT NULL,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY(code, type, record_date)
-);
-
--- 分时数据 (按天存储的聚合 JSON)
-CREATE TABLE IF NOT EXISTS asset_intraday (
-    code TEXT NOT NULL,
-    record_date TEXT NOT NULL,
-    data TEXT NOT NULL,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY(code, record_date)
-);
-
--- [DEPRECATED] 分时数据点 (颗粒度到分钟) - 已被全 JSON 模式取代
--- CREATE TABLE IF NOT EXISTS asset_intraday_points (
---     code TEXT NOT NULL,
---     time DATETIME NOT NULL,
---     price REAL NOT NULL,
---     vol REAL NOT NULL,
---     PRIMARY KEY(code, time)
--- );
--- CREATE INDEX IF NOT EXISTS idx_intra_points_code_time ON asset_intraday_points(code, time DESC);
-
--- 报价缓存 (D1 历史缓存表)
-CREATE TABLE IF NOT EXISTS asset_quotes (
-    code TEXT PRIMARY KEY,
-    name TEXT,
-    price REAL,
-    change REAL,
-    changePercent REAL,
-    prevClose REAL,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-
--- 系统日志 (按计划禁用或存入 D1)
-CREATE TABLE IF NOT EXISTS system_logs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    level TEXT NOT NULL,
-    module TEXT,
-    message TEXT NOT NULL,
-    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-
--- 管理员会话表
-CREATE TABLE IF NOT EXISTS admin_sessions (
-    token TEXT PRIMARY KEY,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    expires_at DATETIME NOT NULL
-);
-
--- 外部 API 健康监控
-CREATE TABLE IF NOT EXISTS api_health (
-    api_name TEXT PRIMARY KEY,
-    status TEXT DEFAULT 'unknown',
-    success_rate TEXT DEFAULT '0/0',
-    avg_latency INTEGER DEFAULT 0,
-    success_count INTEGER DEFAULT 0,
-    fail_count INTEGER DEFAULT 0,
-    total_count INTEGER DEFAULT 0,
-    recent_results TEXT DEFAULT '',
-    last_check DATETIME DEFAULT CURRENT_TIMESTAMP,
-    heartbeat_ts DATETIME DEFAULT CURRENT_TIMESTAMP,
-    error_msg TEXT
-);
-
--- 计数器表 (维度 3 优化: 将 O(N) 统计降为 O(1))
-CREATE TABLE IF NOT EXISTS system_stats (
-    key TEXT PRIMARY KEY,
-    value INTEGER DEFAULT 0,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX IF NOT EXISTS idx_logs_timestamp ON system_logs(timestamp);
-
--- [Optimization] 提升近期统计查询速度 (用于 recent_growth)
-CREATE INDEX IF NOT EXISTS idx_asset_history_created_at ON asset_history (created_at);
-
--- 异步同步任务
-CREATE TABLE IF NOT EXISTS sync_jobs (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    type        TEXT NOT NULL,
-    code        TEXT NOT NULL,
-    payload     TEXT,
-    status      TEXT DEFAULT 'pending',
-    retry_count INTEGER DEFAULT 0,
-    error_msg   TEXT,
-    created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-CREATE INDEX IF NOT EXISTS idx_sync_jobs_status ON sync_jobs(status, updated_at);
-CREATE INDEX IF NOT EXISTS idx_sync_jobs_code ON sync_jobs(code);
-
--- 核心修复：添加部分唯一索引，使 ON CONFLICT(code, type) WHERE status = 'pending' 生效
-CREATE UNIQUE INDEX IF NOT EXISTS idx_sync_jobs_upsert 
-ON sync_jobs(code, type) WHERE status = 'pending';
 </file>
 
 <file path="services/apiClient.js">
@@ -4005,43 +3543,107 @@ export async function POST(request) {
 }
 </file>
 
-<file path="app/api/user/sync-asset/route.js">
+<file path="app/api/intraday/bulk/route.js">
 import { NextResponse } from 'next/server';
-import { requireUser } from '@/lib/auth/requireUser';
-import { syncNamesBulk, syncHistoryBulk } from '@/lib/services/assetSyncService';
-import { getCloudflareCtx } from '@/lib/storage/d1Client';
+import { syncIntradayBulk } from '@/lib/services/assetSyncService';
+
+export async function POST(request) {
+    try {
+        const { items } = await request.json();
+        // 核心变更：强制仅读 D1。Cron 负责背景更新 JSON，此处不再触发外部同步。
+        const result = await syncIntradayBulk(items, false, request);
+        return NextResponse.json({ success: true, data: result });
+    } catch (e) {
+        return NextResponse.json({ success: false, error: e.message, code: 'INTERNAL_ERROR' }, { status: 500 });
+    }
+}
+</file>
+
+<file path="hooks/useAssetActions.js">
+import { useCallback } from 'react';
+import { fetchBulkNames } from '@/services/api/namesService';
+import { fetchBulkStockQuotes } from '@/services/api/quotesService';
+import { fetchBulkHistory } from '@/services/api/historyService';
 
 /**
- * 前端分片同步接口：同步单只资产的名称与历史数据
- * 职责：被前端 useAssetSync Hook 循环调用，将原本后台的大任务拆分为轻量级的 HTTP 分片
+ * 资产写操作 Hook（addAsset / removeAsset）
+ * 职责：封装所有会改变 assets 列表的用户操作，
+ * 让 AssetProvider 回归到纯粹的状态聚合层。
  */
-export async function POST(request) {
-    const userId = await requireUser(request);
-    if (!userId) {
-        return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
-    }
+export function useAssetActions({ activeTabRef, setAssets, setIsSyncing, showToast, selectedCodeRef, setSelectedCode, syncAssetsToServer, assetsRef }) {
 
-    try {
-        const { code, type } = await request.json();
-        if (!code || !type) {
-            return NextResponse.json({ success: false, error: 'Invalid parameters' }, { status: 400 });
+    // 内部辅助：获取单个资产的完整描述信息（名称 + 实时报价）
+    const getAssetDetails = useCallback(async (code, type) => {
+        try {
+            const nameMap = await fetchBulkNames([{ code, type }], true);
+            const name = nameMap[`${type}:${code}`] ?? (type === 'fund' ? `基金 ${code}` : `股票 ${code}`);
+
+            // 历史数据现在由后台定时任务补全，不再由前端新增时刻触发异步请求
+
+            if (type === 'stock') {
+                const quoteMap = await fetchBulkStockQuotes([{ code, type }], true);
+                const q = quoteMap[code.toLowerCase()] || quoteMap[code];
+                return { ...q, name: q?.name || name, code, type };
+            }
+            return { name, price: 0, code, type, history: [], changePercent: 0 };
+        } catch (e) {
+            console.error('[useAssetActions] Details fetch failed:', e);
+            return null;
+        }
+    }, []);
+
+    /**
+     * 添加资产到自选列表
+     * 包含格式校验 → 数据预加载 → 去重写入
+     */
+    const addAsset = useCallback(async (rawCode, typeHint) => {
+        setIsSyncing(true);
+        const code = rawCode.trim().toLowerCase();
+        const currentTab = activeTabRef.current;
+
+        // 格式校验
+        if (typeHint === 'stock' || currentTab === 'watchlist') {
+            if (!/^[a-zA-Z]{2}\d{6}$/i.test(code)) {
+                showToast('股票代码必须包含市场前缀 (如 sh600036)');
+                setIsSyncing(false);
+                return;
+            }
+        } else if (typeHint === 'fund') {
+            if (!/^\d{6}$/.test(code)) {
+                showToast('基金代码必须为 6 位数字');
+                setIsSyncing(false);
+                return;
+            }
         }
 
-        const cfCtx = await getCloudflareCtx();
-        const env = cfCtx?.env || null;
-        const items = [{ code, type }];
+        const asset = await getAssetDetails(code, typeHint);
+        if (asset) {
+            const list = Array.isArray(assetsRef.current) ? assetsRef.current : [];
+            // 去重：已存在则不重复添加
+            if (!list.find(a => a.code === code)) {
+                const newList = [...list, asset];
+                setAssets(newList);
+                // 立即触发强制同步，避免依赖 useEffect 引发新旧状态竞态
+                syncAssetsToServer(newList);
+            }
+        } else {
+            showToast('加载失败，可能代码无效');
+        }
+        setIsSyncing(false);
+    }, [activeTabRef, getAssetDetails, setIsSyncing, setAssets, showToast, assetsRef, syncAssetsToServer]);
 
-        // 1. 同步名称 (禁用外部抓取，仅读 D1)
-        await syncNamesBulk(items, false);
+    /**
+     * 从自选列表移除资产
+     * 同步清除侧边栏选中状态
+     */
+    const removeAsset = useCallback((code) => {
+        const newList = assetsRef.current.filter(a => a.code !== code);
+        setAssets(newList);
+        syncAssetsToServer(newList);
+        if (selectedCodeRef.current === code) setSelectedCode(null);
+    }, [selectedCodeRef, setSelectedCode, assetsRef, setAssets, syncAssetsToServer]);
 
-        // 2. 同步 250 天历史数据 (禁用外部抓取，仅读 D1)
-        await syncHistoryBulk(items, 250, false, env);
-
-        return NextResponse.json({ success: true, code, type });
-    } catch (e) {
-        console.error(`[SyncAsset] Failed for ${userId}:`, e.message);
-        return NextResponse.json({ success: false, error: e.message }, { status: 500 });
-    }
+    return { addAsset, removeAsset };
 }
 </file>
 
@@ -4435,6 +4037,778 @@ export const SESSION_COOKIE_OPTIONS = {
 };
 </file>
 
+<file path="lib/storage/healthRepo.js">
+import { queryAll, runSql, queryOne, getRequiredDb } from './d1Client';
+import { addSystemLog } from './logRepo';
+
+/**
+ * 内部辅助：构造 API 状态更新的 SQL 和参数
+ */
+function prepareHealthUpsert(name, data) {
+    const isSuccess = data.isSuccess !== undefined ? data.isSuccess : data.status !== 'down';
+    const currentResult = isSuccess ? 'S' : 'F';
+
+    const sql = `
+        INSERT INTO api_health (
+            api_name, status, success_rate, avg_latency, 
+            success_count, fail_count, total_count,
+            recent_results,
+            last_check, heartbeat_ts, error_msg
+        ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, ?)
+        ON CONFLICT(api_name) DO UPDATE SET
+            status = excluded.status,
+            avg_latency = (avg_latency * 0.8) + (excluded.avg_latency * 0.2), -- 采用指数移动平均，更反映近况
+            success_count = success_count + excluded.success_count,
+            fail_count = fail_count + excluded.fail_count,
+            total_count = total_count + 1,
+            recent_results = substr(COALESCE(recent_results, '') || excluded.recent_results, -20),
+            success_rate = (
+                length(replace(substr(COALESCE(recent_results, '') || excluded.recent_results, -20), 'F', ''))
+            ) || '/' || length(substr(COALESCE(recent_results, '') || excluded.recent_results, -20)),
+            last_check = excluded.last_check,
+            heartbeat_ts = excluded.heartbeat_ts,
+            error_msg = excluded.error_msg
+    `;
+
+    const params = [
+        name,
+        data.status,
+        isSuccess ? "1/1" : "0/1",
+        data.avgLatency,
+        isSuccess ? 1 : 0,
+        isSuccess ? 0 : 1,
+        currentResult,
+        data.errorMsg || ''
+    ];
+
+    return { sql, params, isSuccess };
+}
+
+export async function updateApiHealth(name, data, env = null) {
+    try {
+        const { sql, params, isSuccess } = prepareHealthUpsert(name, data);
+        await runSql(sql, params, env);
+
+        if (!isSuccess) {
+            await addSystemLog('WARN', 'HealthRepo', `API Down: ${name} [${data.status}] - ${data.errorMsg}`, env);
+        }
+    } catch (e) {
+        console.error(`[HealthRepo] updateApiHealth failed for ${name}:`, e.message);
+    }
+}
+
+/**
+ * 批量更新 API 健康现状 (原子事务)
+ * @param {Array} results
+ * @param {Object} env
+ */
+export async function batchUpdateApiHealth(results, env = null) {
+    try {
+        const db = await getRequiredDb(env);
+
+        const statements = results.map(r => {
+            const { sql, params } = prepareHealthUpsert(r.name, r);
+            return db.prepare(sql).bind(...params);
+        });
+
+        await db.batch(statements);
+
+        // 批量记录日志：合并为一条聚合日志
+        const failures = results.filter(r => (r.isSuccess !== undefined ? !r.isSuccess : r.status === 'down'));
+        if (failures.length > 0) {
+            const failureDetail = failures.map(f => `${f.name}[${f.status}]`).join(', ');
+            await addSystemLog('WARN', 'HealthRepo', `API Batch Failure: ${failureDetail}`, env);
+        }
+    } catch (e) {
+        console.error('[HealthRepo] batchUpdateApiHealth failed:', e.message);
+    }
+}
+
+/**
+ * 获取所有 API 状态
+ * @param {Object} env
+ */
+export async function getAllApiHealth(env = null) {
+    try {
+        const rows = await queryAll('SELECT * FROM api_health ORDER BY api_name ASC', [], env);
+        return rows || [];
+    } catch (e) {
+        console.error('[HealthRepo] getAllApiHealth failed:', e.message);
+        return [];
+    }
+}
+</file>
+
+<file path="lib/storage/logRepo.js">
+import { runSql, queryAll } from './d1Client';
+
+/**
+ * 系统日志存储仓库
+ * 用于记录关键业务逻辑，如外部接口抓取记录。
+ */
+
+/**
+ * 添加系统日志
+ * 将日志保存到 D1 数据库 system_logs 表。
+ * @param {string} level
+ * @param {string} module
+ * @param {string} message
+ * @param {Object} env
+ */
+export async function addSystemLog(level, module, message, env = null) {
+    // 智能写策略：WARN/ERROR 必写；核心调度模块(Cron/Sentinel)的 INFO 也写，方便追踪执行记录
+    const levelUp = level?.toUpperCase();
+    const isCoreModule = ['SyncCron', 'DailyCron', 'Sentinel', 'HealthCron'].includes(module);
+    const shouldPersist = ['WARN', 'ERROR'].includes(levelUp) || (levelUp === 'INFO' && isCoreModule);
+
+    try {
+        if (shouldPersist) {
+            await runSql(
+                'INSERT INTO system_logs (level, module, message, timestamp) VALUES (?, ?, ?, CURRENT_TIMESTAMP)',
+                [levelUp, module, message],
+                env
+            );
+        }
+        console.log(`[LOG][${level}][${module}] ${message}${shouldPersist ? ' (PERSISTED)' : ''}`);
+    } catch (e) {
+        console.warn('[LogRepo] Failed to save log to D1:', e.message);
+        // Fallback to console only
+        console.log(`[LOG-FALLBACK][${level}][${module}] ${message}`);
+    }
+}
+
+/**
+ * 获取系统日志
+ * 从 D1 读取最近 N 小时的日志。
+ * @param {number} hours
+ * @param {Object} env
+ */
+export async function getSystemLogs(hours = 72, env = null) {
+    try {
+        return await queryAll(
+            'SELECT * FROM system_logs WHERE timestamp >= datetime("now", "-" || ? || " hours") ORDER BY timestamp DESC',
+            [hours],
+            env
+        );
+    } catch (e) {
+        console.error('[LogRepo] getSystemLogs failed:', e.message);
+        return [];
+    }
+}
+</file>
+
+<file path="lib/storage/quoteRepo.js">
+import { queryAll, runSql, getD1Storage, batchSql } from './d1Client';
+import { memoryCache } from './memoryCache';
+
+/**
+ * 将批量报价写入 D1 和内存缓存
+ * @param {Object} quotesMap
+ * @param {Object} env
+ */
+export async function saveQuotes(quotesMap, env = null) {
+    const timeStr = new Date().toISOString();
+    const db = await getD1Storage(env);
+
+    const entries = Object.entries(quotesMap);
+    if (entries.length === 0) return;
+
+    const now = Date.now();
+
+    // 2. 无条件更新内存缓存 (确保 L1 永远是最新的)
+    for (const [code, q] of entries) {
+        const lowerCode = code.toLowerCase();
+        memoryCache.set(`quote:${lowerCode}`, { ...q, updated_at: timeStr, code: lowerCode });
+    }
+
+    // 3. 持久化到 D1 (实施物理写限流保护)
+    if (db) {
+        const WRITE_INTERVAL_MS = 30 * 60 * 1000; // 30 分钟同步一次 D1
+
+        try {
+            const statements = [];
+
+            for (const [code, q] of entries) {
+                const lowerCode = code.toLowerCase();
+
+                // 核心优化：使用内存缓存记录上次写入时间，不再读 D1 判定，省掉一次读操作
+                const cacheKey = `quote_write_ts:${lowerCode}`;
+                const lastWriteTs = memoryCache.get(cacheKey) || 0;
+
+                if (now - lastWriteTs >= WRITE_INTERVAL_MS) {
+                    statements.push(
+                        db.prepare(`
+                            INSERT OR REPLACE INTO asset_quotes 
+                            (code, name, price, change, changePercent, prevClose, updated_at) 
+                            VALUES (?, ?, ?, ?, ?, ?, ?)
+                        `).bind(
+                            lowerCode,
+                            q.name,
+                            q.price,
+                            q.change,
+                            q.changePercent,
+                            q.prevClose,
+                            timeStr
+                        )
+                    );
+                    // 更新写入时间戳缓存
+                    memoryCache.set(cacheKey, now);
+                }
+            }
+
+            if (statements.length > 0) {
+                // 分片执行批量持久化
+                const CHUNK_SIZE = 50;
+                for (let i = 0; i < statements.length; i += CHUNK_SIZE) {
+                    await db.batch(statements.slice(i, i + CHUNK_SIZE));
+                }
+                console.log(`[QuoteRepo] D1 persistent write: ${statements.length}/${entries.length} (30m throttled)`);
+            }
+        } catch (e) {
+            console.warn(`[QuoteRepo] D1 batch sync failed:`, e?.message);
+        }
+    }
+}
+
+/**
+ * 批量从 D1 或内存获取报价
+ * @param {Array} codes
+ * @param {Object} env
+ */
+export async function getBulkQuotes(codes, env = null) {
+    if (!codes || codes.length === 0) return {};
+
+    const result = {};
+    const toQuery = [];
+
+    // 1. 先查内存缓存
+    for (const code of codes) {
+        const lowerCode = code.toLowerCase();
+        const cached = memoryCache.get(`quote:${lowerCode}`);
+        if (cached) {
+            result[lowerCode] = cached;
+        } else {
+            toQuery.push(lowerCode);
+        }
+    }
+
+    if (toQuery.length === 0) return result;
+
+    // 2. 查 D1 数据库
+    try {
+        const sql = `SELECT * FROM asset_quotes WHERE code IN (${toQuery.map(() => '?').join(',')})`;
+        const rows = await queryAll(sql, toQuery, env);
+        for (const row of rows) {
+            result[row.code] = row;
+            // 回填内存缓存
+            memoryCache.set(`quote:${row.code}`, row);
+        }
+    } catch (e) {
+        console.error('[QuoteRepo] getBulkQuotes failed:', e.message);
+    }
+
+    return result;
+}
+</file>
+
+<file path="lib/storage/statsRepo.js">
+import { runSql, queryOne, queryAll } from './d1Client';
+
+/**
+ * 维度 3 优化: 计数器模式 (Counter Pattern)
+ * 用于将 O(N) 的 COUNT(*) 统计降为 O(1) 的点查询
+ */
+
+/**
+ * 增加计数
+ */
+export async function incrementCounter(key, delta = 1, env = null) {
+    try {
+        await runSql(
+            `INSERT INTO system_stats (key, value) VALUES (?, ?) 
+             ON CONFLICT(key) DO UPDATE SET value = value + ?, updated_at = CURRENT_TIMESTAMP`,
+            [key, delta, delta],
+            env
+        );
+    } catch (e) {
+        console.error(`[StatsRepo] Failed to increment ${key}:`, e.message);
+    }
+}
+
+/**
+ * 减少计数
+ */
+export async function decrementCounter(key, delta = 1, env = null) {
+    try {
+        await runSql(
+            `UPDATE system_stats SET value = MAX(0, value - ?), updated_at = CURRENT_TIMESTAMP WHERE key = ?`,
+            [delta, key],
+            env
+        );
+    } catch (e) {
+        console.error(`[StatsRepo] Failed to decrement ${key}:`, e.message);
+    }
+}
+
+/**
+ * 获取计数
+ */
+export async function getCounter(key, env = null) {
+    try {
+        const row = await queryOne('SELECT value FROM system_stats WHERE key = ?', [key], env);
+        return row?.value || 0;
+    } catch (e) {
+        return 0;
+    }
+}
+
+/**
+ * 批量获取计数 (维度 3 优化: 单次 IN 查询)
+ */
+export async function getCounters(keys, env = null) {
+    if (!keys || keys.length === 0) return {};
+    try {
+        const placeholders = keys.map(() => '?').join(',');
+        const rows = await queryAll(
+            `SELECT key, value FROM system_stats WHERE key IN (${placeholders})`,
+            keys,
+            env
+        );
+        return Object.fromEntries(rows.map(r => [r.key, r.value]));
+    } catch (e) {
+        console.error('[StatsRepo] getCounters failed:', e.message);
+        return {};
+    }
+}
+
+const ALLOWED_TABLES = new Set([
+    'users', 'user_assets', 'asset_history',
+    'asset_intraday', 'asset_quotes', 'system_logs', 'sync_jobs', 'asset_names'
+]);
+
+/**
+ * 全量修正计数 (昂贵操作，仅在初始化或检测到偏差时运行)
+ * 安全性：通过白名单与正则过滤防止 SQL 注入
+ */
+export async function syncCounterFromTable(key, table, where = '', env = null) {
+    // 1. 白名单验证，防止表名注入
+    if (!ALLOWED_TABLES.has(table)) {
+        console.error(`[StatsRepo] Rejected unknown table: "${table}"`);
+        return 0;
+    }
+
+    // 2. 简单的 Where 子句安全校验 (只允许简单的属性等于值，禁止子查询或复杂逻辑拼接)
+    if (where && !/^[\w\.]+ = '[\w\-]+'$/.test(where)) {
+        console.error(`[StatsRepo] Rejected unsafe where clause: "${where}"`);
+        return 0;
+    }
+
+    try {
+        const sql = `SELECT COUNT(*) as count FROM ${table} ${where ? 'WHERE ' + where : ''}`;
+        const row = await queryOne(sql, [], env);
+        const count = row?.count || 0;
+
+        await runSql(
+            `INSERT OR REPLACE INTO system_stats (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)`,
+            [key, count],
+            env
+        );
+        return count;
+    } catch (e) {
+        console.error(`[StatsRepo] Sync failed for ${key}:`, e.message);
+        return 0;
+    }
+}
+
+/**
+ * 获取所有资产的同步状态与统计信息
+ */
+export async function getAssetSyncStatus(env = null) {
+    try {
+        const sql = `
+            SELECT 
+                an.code, 
+                an.type, 
+                an.name,
+                COUNT(ah.record_date) as history_count,
+                MAX(ah.created_at) as last_sync,
+                (
+                    SELECT status FROM sync_jobs 
+                    WHERE code = lower(an.code) 
+                    ORDER BY updated_at DESC LIMIT 1
+                ) as sync_status
+            FROM asset_names an
+            LEFT JOIN asset_history ah ON an.code = ah.code AND an.type = ah.type
+            GROUP BY an.code, an.type, an.name
+            ORDER BY an.type ASC, an.code ASC
+        `;
+        return await queryAll(sql, [], env);
+    } catch (e) {
+        console.error('[StatsRepo] getAssetSyncStatus failed:', e.message);
+        return [];
+    }
+}
+</file>
+
+<file path="lib/utils/stockCode.js">
+/**
+ * lib/utils/stockCode.js
+ * 
+ * 股票代码解析工具库
+ * 
+ * 职责：
+ * 1. 统一解析带市场前缀的代码 (如 sh600036, sz000001)。
+ * 2. 构造东方财富 secid 格式 (market.cleanCode)。
+ */
+
+/**
+ * 解析股票代码
+ * 
+ * @param {string} code 带前缀的代码，如 'sh600036', 'sz000001', 'SH600036'
+ * @returns {{ market: '0'|'1', clean: string, prefix: 'sh'|'sz' } | null}
+ */
+export function parseStockCode(code) {
+    if (!code || code.length !== 8) return null;
+    const match = code.match(/^([a-zA-Z]{2})(\d{6})$/i);
+    if (!match) return null;
+
+    const prefix = match[1].toLowerCase();
+    const clean = match[2];
+
+    // 东方财富格式: 1 为上交所 (sh/bj), 0 为深交所 (sz)
+    // 注意: 这里暂不处理北交所等更复杂的市场，目前项目主要涉及 sh/sz
+    const market = (prefix === 'sz') ? '0' : '1';
+
+    return { market, clean, prefix };
+}
+
+/**
+ * 构造东方财富 secid
+ * 
+ * @param {string} code 代码
+ * @returns {string|null} 如 '1.600036', '0.000001'
+ */
+export function toSecid(code) {
+    const parsed = parseStockCode(code);
+    if (!parsed) return null;
+    return `${parsed.market}.${parsed.clean}`;
+}
+</file>
+
+<file path="schema.sql">
+-- 用户索引表
+CREATE TABLE IF NOT EXISTS users (
+    id          TEXT PRIMARY KEY,
+    password_hash TEXT,
+    email       TEXT UNIQUE,
+    created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+    last_login  DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 会话表 (SaaS 认证)
+CREATE TABLE IF NOT EXISTS user_sessions (
+    token       TEXT PRIMARY KEY,
+    user_id     TEXT NOT NULL,
+    created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+    expires_at  DATETIME NOT NULL,
+    FOREIGN KEY(user_id) REFERENCES users(id)
+);
+CREATE INDEX IF NOT EXISTS idx_sessions_user ON user_sessions(user_id);
+
+-- 用户资产关联表
+CREATE TABLE IF NOT EXISTS user_assets (
+    user_id TEXT NOT NULL,
+    code TEXT NOT NULL,
+    type TEXT NOT NULL,
+    added_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY(user_id, code, type),
+    FOREIGN KEY(user_id) REFERENCES users(id)
+);
+
+-- 资产基本信息 (名称库)
+CREATE TABLE IF NOT EXISTS asset_names (
+    code TEXT NOT NULL,
+    type TEXT NOT NULL,
+    name TEXT NOT NULL,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY(code, type)
+);
+
+-- 历史价格
+CREATE TABLE IF NOT EXISTS asset_history (
+    code TEXT NOT NULL,
+    type TEXT NOT NULL,
+    price REAL NOT NULL,
+    record_date TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY(code, type, record_date)
+);
+
+-- 分时数据 (按天存储的聚合 JSON)
+CREATE TABLE IF NOT EXISTS asset_intraday (
+    code TEXT NOT NULL,
+    record_date TEXT NOT NULL,
+    data TEXT NOT NULL,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY(code, record_date)
+);
+
+-- [DEPRECATED] 分时数据点 (颗粒度到分钟) - 已被全 JSON 模式取代
+-- CREATE TABLE IF NOT EXISTS asset_intraday_points (
+--     code TEXT NOT NULL,
+--     time DATETIME NOT NULL,
+--     price REAL NOT NULL,
+--     vol REAL NOT NULL,
+--     PRIMARY KEY(code, time)
+-- );
+-- CREATE INDEX IF NOT EXISTS idx_intra_points_code_time ON asset_intraday_points(code, time DESC);
+
+-- 报价缓存 (D1 历史缓存表)
+CREATE TABLE IF NOT EXISTS asset_quotes (
+    code TEXT PRIMARY KEY,
+    name TEXT,
+    price REAL,
+    change REAL,
+    changePercent REAL,
+    prevClose REAL,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 系统日志 (按计划禁用或存入 D1)
+CREATE TABLE IF NOT EXISTS system_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    level TEXT NOT NULL,
+    module TEXT,
+    message TEXT NOT NULL,
+    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 管理员会话表
+CREATE TABLE IF NOT EXISTS admin_sessions (
+    token TEXT PRIMARY KEY,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    expires_at DATETIME NOT NULL
+);
+
+-- 外部 API 健康监控
+CREATE TABLE IF NOT EXISTS api_health (
+    api_name TEXT PRIMARY KEY,
+    status TEXT DEFAULT 'unknown',
+    success_rate TEXT DEFAULT '0/0',
+    avg_latency INTEGER DEFAULT 0,
+    success_count INTEGER DEFAULT 0,
+    fail_count INTEGER DEFAULT 0,
+    total_count INTEGER DEFAULT 0,
+    recent_results TEXT DEFAULT '',
+    last_check DATETIME DEFAULT CURRENT_TIMESTAMP,
+    heartbeat_ts DATETIME DEFAULT CURRENT_TIMESTAMP,
+    error_msg TEXT
+);
+
+-- 计数器表 (维度 3 优化: 将 O(N) 统计降为 O(1))
+CREATE TABLE IF NOT EXISTS system_stats (
+    key TEXT PRIMARY KEY,
+    value INTEGER DEFAULT 0,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_logs_timestamp ON system_logs(timestamp);
+
+-- [Optimization] 提升近期统计查询速度 (用于 recent_growth)
+CREATE INDEX IF NOT EXISTS idx_asset_history_created_at ON asset_history (created_at);
+
+-- 异步同步任务
+CREATE TABLE IF NOT EXISTS sync_jobs (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    type        TEXT NOT NULL,
+    code        TEXT NOT NULL,
+    payload     TEXT,
+    status      TEXT DEFAULT 'pending',
+    retry_count INTEGER DEFAULT 0,
+    error_msg   TEXT,
+    created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_sync_jobs_status ON sync_jobs(status, updated_at);
+CREATE INDEX IF NOT EXISTS idx_sync_jobs_code ON sync_jobs(code);
+
+-- 核心修复：添加部分唯一索引，使 ON CONFLICT(code, type) WHERE status = 'pending' 生效
+CREATE UNIQUE INDEX IF NOT EXISTS idx_sync_jobs_upsert 
+ON sync_jobs(code, type) WHERE status = 'pending';
+</file>
+
+<file path="app/admin/_components/AppShell.js">
+'use client';
+
+import { useState, useEffect } from 'react';
+import {
+    LayoutGrid, Wifi, RefreshCcw, Users, FileText, Code,
+    LogOut, TrendingUp, PieChart, Zap,
+} from 'lucide-react';
+
+const NAV_ITEMS = [
+    { id: 'overview', icon: <LayoutGrid size={20} />, label: '概览面板' },
+    { id: 'health', icon: <Wifi size={20} />, label: '接口哨兵' },
+    { id: 'queue', icon: <RefreshCcw size={20} />, label: '同步队列' },
+    { id: 'users', icon: <Users size={20} />, label: '用户审计' },
+    { id: 'logs', icon: <FileText size={20} />, label: '系统日志' },
+    { id: 'assets', icon: <TrendingUp size={20} />, label: '资产监控' },
+];
+
+export function AppShell({ activeSection, onNavigate, onLogout, loading, onRefresh, onForceSync, onCleanup, children }) {
+    const [currentTime, setCurrentTime] = useState(null);
+
+    useEffect(() => {
+        setCurrentTime(new Date());
+        const timer = setInterval(() => setCurrentTime(new Date()), 1000);
+        return () => clearInterval(timer);
+    }, []);
+
+    return (
+        <main className="min-h-screen bg-[#050510] relative text-white selection:bg-cyan-500/30 font-sans overflow-x-hidden">
+            {/* 背景装饰 */}
+            <div className="fixed inset-0 overflow-hidden pointer-events-none">
+                <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-blue-600/10 blur-[120px] rounded-full" />
+                <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-cyan-600/10 blur-[120px] rounded-full" />
+            </div>
+
+            <div className="flex h-screen overflow-hidden relative z-10">
+                {/* Sidebar */}
+                <aside className="w-20 md:w-72 border-r border-white/5 bg-black/20 backdrop-blur-xl flex flex-col pt-10">
+                    <div className="px-6 mb-12 flex items-center gap-4">
+                        <div className="w-10 h-10 bg-cyan-600 rounded-xl flex items-center justify-center shadow-[0_0_20px_rgba(8,145,178,0.4)]">
+                            <Code size={20} className="text-white" />
+                        </div>
+                        <div className="hidden md:block">
+                            <h1 className="text-xl font-black italic tracking-tighter uppercase leading-none">Command</h1>
+                            <p className="text-[11px] font-bold opacity-30 uppercase tracking-[0.2em] mt-1">控制中心 v2.0</p>
+                        </div>
+                    </div>
+                    <nav className="flex-1 px-4 space-y-2">
+                        {NAV_ITEMS.map(item => (
+                            <button
+                                key={item.id}
+                                onClick={() => onNavigate(item.id)}
+                                className={`w-full flex items-center gap-4 px-4 py-4 rounded-2xl transition-all group
+                                    ${activeSection === item.id
+                                        ? 'bg-cyan-600 text-white shadow-lg shadow-cyan-600/20'
+                                        : 'text-white/40 hover:bg-white/5 hover:text-white/80'}`}
+                            >
+                                <div className={activeSection === item.id ? 'text-white' : 'text-white/20 group-hover:text-white/60'}>
+                                    {item.icon}
+                                </div>
+                                <span className="hidden md:block font-bold text-sm tracking-tight">{item.label}</span>
+                            </button>
+                        ))}
+                    </nav>
+                    <div className="p-4 border-t border-white/5 mb-6">
+                        <button
+                            onClick={onLogout}
+                            className="w-full flex items-center gap-4 px-4 py-4 rounded-2xl text-red-500/50 hover:bg-red-500/10 hover:text-red-500 transition-all font-bold"
+                        >
+                            <LogOut size={20} />
+                            <span className="hidden md:block text-sm">注销通信</span>
+                        </button>
+                    </div>
+                </aside>
+
+                {/* Content */}
+                <div className="flex-1 overflow-y-auto bg-[#050510] custom-scrollbar">
+                    <header className="sticky top-0 z-50 flex items-center justify-between px-10 py-6 bg-[#050510]/80 backdrop-blur-md border-b border-white/5">
+                        <div className="flex items-center gap-4">
+                            <div className="p-2 bg-emerald-500/10 rounded-full">
+                                <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse" />
+                            </div>
+                            <span className="text-xs font-mono font-black uppercase tracking-widest text-white/40">节点状态: 正常运行</span>
+                        </div>
+                        <div className="flex items-center gap-4">
+                            <div className="hidden lg:flex items-center gap-1 border border-white/5 px-4 py-2 rounded-xl bg-white/[0.02]">
+                                <span className="text-[11px] font-black uppercase tracking-widest text-white/20 mr-2">快速操作:</span>
+                                <button onClick={onRefresh} title="刷新并校准计数器" className={`p-1.5 hover:text-cyan-400 transition-colors ${loading ? 'animate-spin opacity-50' : ''}`}>
+                                    <RefreshCcw size={16} />
+                                </button>
+                                <div className="w-px h-3 bg-white/10 mx-1" />
+                                <button onClick={() => onForceSync('stock')} disabled={loading} title="重刷所有股票历史数据" className="p-1.5 hover:text-emerald-400 disabled:opacity-30 transition-colors flex items-center gap-1.5 group/btn">
+                                    <TrendingUp size={16} className="group-hover/btn:scale-110 transition-transform" />
+                                    <span className="text-[11px] font-black uppercase tracking-tighter hidden xl:inline">股票重刷</span>
+                                </button>
+                                <div className="w-px h-3 bg-white/10 mx-1" />
+                                <button onClick={() => onForceSync('fund')} disabled={loading} title="重刷所有基金历史数据" className="p-1.5 hover:text-blue-400 disabled:opacity-30 transition-colors flex items-center gap-1.5 group/btn">
+                                    <PieChart size={16} className="group-hover/btn:scale-110 transition-transform" />
+                                    <span className="text-[11px] font-black uppercase tracking-tighter hidden xl:inline">基金重刷</span>
+                                </button>
+                                <div className="w-px h-3 bg-white/10 mx-1" />
+                                <button onClick={onCleanup} title="全量环境洗消" className="p-1.5 hover:text-orange-400 transition-colors">
+                                    <Zap size={16} />
+                                </button>
+                            </div>
+                            <div className="text-xs font-mono font-bold text-white/40 bg-white/5 px-4 py-2 rounded-xl border border-white/5 min-w-[200px] text-center">
+                                {currentTime
+                                    ? currentTime.toLocaleString('zh-CN', {
+                                        timeZone: 'Asia/Shanghai',
+                                        hour12: false,
+                                        year: 'numeric',
+                                        month: '2-digit',
+                                        day: '2-digit',
+                                        hour: '2-digit',
+                                        minute: '2-digit',
+                                        second: '2-digit'
+                                    })
+                                    : '--:--:--'}
+                            </div>
+                        </div>
+                    </header>
+
+                    <div className="p-10 max-w-[1200px] mx-auto">
+                        {children}
+                    </div>
+                </div>
+            </div>
+        </main>
+    );
+}
+</file>
+
+<file path="app/api/user/sync-asset/route.js">
+import { NextResponse } from 'next/server';
+import { requireUser } from '@/lib/auth/requireUser';
+import { syncNamesBulk, syncHistoryBulk } from '@/lib/services/assetSyncService';
+import { getCloudflareCtx } from '@/lib/storage/d1Client';
+
+/**
+ * 前端分片同步接口：同步单只资产的名称与历史数据
+ * 职责：被前端 useAssetSync Hook 循环调用，将原本后台的大任务拆分为轻量级的 HTTP 分片
+ */
+export async function POST(request) {
+    const userId = await requireUser(request);
+    if (!userId) {
+        return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+    }
+
+    try {
+        const { code, type } = await request.json();
+        if (!code || !type) {
+            return NextResponse.json({ success: false, error: 'Invalid parameters' }, { status: 400 });
+        }
+
+        const cfCtx = await getCloudflareCtx();
+        const env = cfCtx?.env || null;
+        const items = [{ code, type }];
+
+        // 1. 同步名称 (禁用外部抓取，仅读 D1)
+        await syncNamesBulk(items, false);
+
+        // 2. 同步 250 天历史数据 (禁用外部抓取，仅读 D1)
+        await syncHistoryBulk(items, 250, false, env);
+
+        return NextResponse.json({ success: true, code, type });
+    } catch (e) {
+        console.error(`[SyncAsset] Failed for ${userId}:`, e.message);
+        return NextResponse.json({ success: false, error: e.message }, { status: 500 });
+    }
+}
+</file>
+
 <file path="lib/storage/intradayRepo.js">
 import { queryOne, queryAll, runSql, getD1Storage, getRequiredDb } from './d1Client';
 import { memoryCache } from './memoryCache';
@@ -4670,380 +5044,6 @@ export async function pruneIntradayPoints(env = null) {
     } catch (e) {
         console.error(`[IntradayRepo] pruneIntradayPoints failed:`, e.message);
     }
-}
-</file>
-
-<file path="lib/storage/logRepo.js">
-import { runSql, queryAll } from './d1Client';
-
-/**
- * 系统日志存储仓库
- * 用于记录关键业务逻辑，如外部接口抓取记录。
- */
-
-/**
- * 添加系统日志
- * 将日志保存到 D1 数据库 system_logs 表。
- * @param {string} level
- * @param {string} module
- * @param {string} message
- * @param {Object} env
- */
-export async function addSystemLog(level, module, message, env = null) {
-    // 智能写策略：WARN/ERROR 必写；核心调度模块(Cron/Sentinel)的 INFO 也写，方便追踪执行记录
-    const levelUp = level?.toUpperCase();
-    const isCoreModule = ['SyncCron', 'DailyCron', 'Sentinel', 'HealthCron'].includes(module);
-    const shouldPersist = ['WARN', 'ERROR'].includes(levelUp) || (levelUp === 'INFO' && isCoreModule);
-
-    try {
-        if (shouldPersist) {
-            await runSql(
-                'INSERT INTO system_logs (level, module, message, timestamp) VALUES (?, ?, ?, CURRENT_TIMESTAMP)',
-                [levelUp, module, message],
-                env
-            );
-        }
-        console.log(`[LOG][${level}][${module}] ${message}${shouldPersist ? ' (PERSISTED)' : ''}`);
-    } catch (e) {
-        console.warn('[LogRepo] Failed to save log to D1:', e.message);
-        // Fallback to console only
-        console.log(`[LOG-FALLBACK][${level}][${module}] ${message}`);
-    }
-}
-
-/**
- * 获取系统日志
- * 从 D1 读取最近 N 小时的日志。
- * @param {number} hours
- * @param {Object} env
- */
-export async function getSystemLogs(hours = 72, env = null) {
-    try {
-        return await queryAll(
-            'SELECT * FROM system_logs WHERE timestamp >= datetime("now", "-" || ? || " hours") ORDER BY timestamp DESC',
-            [hours],
-            env
-        );
-    } catch (e) {
-        console.error('[LogRepo] getSystemLogs failed:', e.message);
-        return [];
-    }
-}
-</file>
-
-<file path="lib/storage/statsRepo.js">
-import { runSql, queryOne, queryAll } from './d1Client';
-
-/**
- * 维度 3 优化: 计数器模式 (Counter Pattern)
- * 用于将 O(N) 的 COUNT(*) 统计降为 O(1) 的点查询
- */
-
-/**
- * 增加计数
- */
-export async function incrementCounter(key, delta = 1, env = null) {
-    try {
-        await runSql(
-            `INSERT INTO system_stats (key, value) VALUES (?, ?) 
-             ON CONFLICT(key) DO UPDATE SET value = value + ?, updated_at = CURRENT_TIMESTAMP`,
-            [key, delta, delta],
-            env
-        );
-    } catch (e) {
-        console.error(`[StatsRepo] Failed to increment ${key}:`, e.message);
-    }
-}
-
-/**
- * 减少计数
- */
-export async function decrementCounter(key, delta = 1, env = null) {
-    try {
-        await runSql(
-            `UPDATE system_stats SET value = MAX(0, value - ?), updated_at = CURRENT_TIMESTAMP WHERE key = ?`,
-            [delta, key],
-            env
-        );
-    } catch (e) {
-        console.error(`[StatsRepo] Failed to decrement ${key}:`, e.message);
-    }
-}
-
-/**
- * 获取计数
- */
-export async function getCounter(key, env = null) {
-    try {
-        const row = await queryOne('SELECT value FROM system_stats WHERE key = ?', [key], env);
-        return row?.value || 0;
-    } catch (e) {
-        return 0;
-    }
-}
-
-/**
- * 批量获取计数 (维度 3 优化: 单次 IN 查询)
- */
-export async function getCounters(keys, env = null) {
-    if (!keys || keys.length === 0) return {};
-    try {
-        const placeholders = keys.map(() => '?').join(',');
-        const rows = await queryAll(
-            `SELECT key, value FROM system_stats WHERE key IN (${placeholders})`,
-            keys,
-            env
-        );
-        return Object.fromEntries(rows.map(r => [r.key, r.value]));
-    } catch (e) {
-        console.error('[StatsRepo] getCounters failed:', e.message);
-        return {};
-    }
-}
-
-const ALLOWED_TABLES = new Set([
-    'users', 'user_assets', 'asset_history',
-    'asset_intraday', 'asset_quotes', 'system_logs', 'sync_jobs', 'asset_names'
-]);
-
-/**
- * 全量修正计数 (昂贵操作，仅在初始化或检测到偏差时运行)
- * 安全性：通过白名单与正则过滤防止 SQL 注入
- */
-export async function syncCounterFromTable(key, table, where = '', env = null) {
-    // 1. 白名单验证，防止表名注入
-    if (!ALLOWED_TABLES.has(table)) {
-        console.error(`[StatsRepo] Rejected unknown table: "${table}"`);
-        return 0;
-    }
-
-    // 2. 简单的 Where 子句安全校验 (只允许简单的属性等于值，禁止子查询或复杂逻辑拼接)
-    if (where && !/^[\w\.]+ = '[\w\-]+'$/.test(where)) {
-        console.error(`[StatsRepo] Rejected unsafe where clause: "${where}"`);
-        return 0;
-    }
-
-    try {
-        const sql = `SELECT COUNT(*) as count FROM ${table} ${where ? 'WHERE ' + where : ''}`;
-        const row = await queryOne(sql, [], env);
-        const count = row?.count || 0;
-
-        await runSql(
-            `INSERT OR REPLACE INTO system_stats (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)`,
-            [key, count],
-            env
-        );
-        return count;
-    } catch (e) {
-        console.error(`[StatsRepo] Sync failed for ${key}:`, e.message);
-        return 0;
-    }
-}
-
-/**
- * 获取所有资产的同步状态与统计信息
- */
-export async function getAssetSyncStatus(env = null) {
-    try {
-        const sql = `
-            SELECT 
-                an.code, 
-                an.type, 
-                an.name,
-                COUNT(ah.record_date) as history_count,
-                MAX(ah.created_at) as last_sync,
-                (
-                    SELECT status FROM sync_jobs 
-                    WHERE code = lower(an.code) 
-                    ORDER BY updated_at DESC LIMIT 1
-                ) as sync_status
-            FROM asset_names an
-            LEFT JOIN asset_history ah ON an.code = ah.code AND an.type = ah.type
-            GROUP BY an.code, an.type, an.name
-            ORDER BY an.type ASC, an.code ASC
-        `;
-        return await queryAll(sql, [], env);
-    } catch (e) {
-        console.error('[StatsRepo] getAssetSyncStatus failed:', e.message);
-        return [];
-    }
-}
-</file>
-
-<file path="lib/utils/stockCode.js">
-/**
- * lib/utils/stockCode.js
- * 
- * 股票代码解析工具库
- * 
- * 职责：
- * 1. 统一解析带市场前缀的代码 (如 sh600036, sz000001)。
- * 2. 构造东方财富 secid 格式 (market.cleanCode)。
- */
-
-/**
- * 解析股票代码
- * 
- * @param {string} code 带前缀的代码，如 'sh600036', 'sz000001', 'SH600036'
- * @returns {{ market: '0'|'1', clean: string, prefix: 'sh'|'sz' } | null}
- */
-export function parseStockCode(code) {
-    if (!code || code.length !== 8) return null;
-    const match = code.match(/^([a-zA-Z]{2})(\d{6})$/i);
-    if (!match) return null;
-
-    const prefix = match[1].toLowerCase();
-    const clean = match[2];
-
-    // 东方财富格式: 1 为上交所 (sh/bj), 0 为深交所 (sz)
-    // 注意: 这里暂不处理北交所等更复杂的市场，目前项目主要涉及 sh/sz
-    const market = (prefix === 'sz') ? '0' : '1';
-
-    return { market, clean, prefix };
-}
-
-/**
- * 构造东方财富 secid
- * 
- * @param {string} code 代码
- * @returns {string|null} 如 '1.600036', '0.000001'
- */
-export function toSecid(code) {
-    const parsed = parseStockCode(code);
-    if (!parsed) return null;
-    return `${parsed.market}.${parsed.clean}`;
-}
-</file>
-
-<file path="app/admin/_components/AppShell.js">
-'use client';
-
-import { useState, useEffect } from 'react';
-import {
-    LayoutGrid, Wifi, RefreshCcw, Users, FileText, Code,
-    LogOut, TrendingUp, PieChart, Zap,
-} from 'lucide-react';
-
-const NAV_ITEMS = [
-    { id: 'overview', icon: <LayoutGrid size={20} />, label: '概览面板' },
-    { id: 'health', icon: <Wifi size={20} />, label: '接口哨兵' },
-    { id: 'queue', icon: <RefreshCcw size={20} />, label: '同步队列' },
-    { id: 'users', icon: <Users size={20} />, label: '用户审计' },
-    { id: 'logs', icon: <FileText size={20} />, label: '系统日志' },
-    { id: 'assets', icon: <TrendingUp size={20} />, label: '资产监控' },
-];
-
-export function AppShell({ activeSection, onNavigate, onLogout, loading, onRefresh, onForceSync, onCleanup, children }) {
-    const [currentTime, setCurrentTime] = useState(null);
-
-    useEffect(() => {
-        setCurrentTime(new Date());
-        const timer = setInterval(() => setCurrentTime(new Date()), 1000);
-        return () => clearInterval(timer);
-    }, []);
-
-    return (
-        <main className="min-h-screen bg-[#050510] relative text-white selection:bg-cyan-500/30 font-sans overflow-x-hidden">
-            {/* 背景装饰 */}
-            <div className="fixed inset-0 overflow-hidden pointer-events-none">
-                <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-blue-600/10 blur-[120px] rounded-full" />
-                <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-cyan-600/10 blur-[120px] rounded-full" />
-            </div>
-
-            <div className="flex h-screen overflow-hidden relative z-10">
-                {/* Sidebar */}
-                <aside className="w-20 md:w-72 border-r border-white/5 bg-black/20 backdrop-blur-xl flex flex-col pt-10">
-                    <div className="px-6 mb-12 flex items-center gap-4">
-                        <div className="w-10 h-10 bg-cyan-600 rounded-xl flex items-center justify-center shadow-[0_0_20px_rgba(8,145,178,0.4)]">
-                            <Code size={20} className="text-white" />
-                        </div>
-                        <div className="hidden md:block">
-                            <h1 className="text-xl font-black italic tracking-tighter uppercase leading-none">Command</h1>
-                            <p className="text-[11px] font-bold opacity-30 uppercase tracking-[0.2em] mt-1">控制中心 v2.0</p>
-                        </div>
-                    </div>
-                    <nav className="flex-1 px-4 space-y-2">
-                        {NAV_ITEMS.map(item => (
-                            <button
-                                key={item.id}
-                                onClick={() => onNavigate(item.id)}
-                                className={`w-full flex items-center gap-4 px-4 py-4 rounded-2xl transition-all group
-                                    ${activeSection === item.id
-                                        ? 'bg-cyan-600 text-white shadow-lg shadow-cyan-600/20'
-                                        : 'text-white/40 hover:bg-white/5 hover:text-white/80'}`}
-                            >
-                                <div className={activeSection === item.id ? 'text-white' : 'text-white/20 group-hover:text-white/60'}>
-                                    {item.icon}
-                                </div>
-                                <span className="hidden md:block font-bold text-sm tracking-tight">{item.label}</span>
-                            </button>
-                        ))}
-                    </nav>
-                    <div className="p-4 border-t border-white/5 mb-6">
-                        <button
-                            onClick={onLogout}
-                            className="w-full flex items-center gap-4 px-4 py-4 rounded-2xl text-red-500/50 hover:bg-red-500/10 hover:text-red-500 transition-all font-bold"
-                        >
-                            <LogOut size={20} />
-                            <span className="hidden md:block text-sm">注销通信</span>
-                        </button>
-                    </div>
-                </aside>
-
-                {/* Content */}
-                <div className="flex-1 overflow-y-auto bg-[#050510] custom-scrollbar">
-                    <header className="sticky top-0 z-50 flex items-center justify-between px-10 py-6 bg-[#050510]/80 backdrop-blur-md border-b border-white/5">
-                        <div className="flex items-center gap-4">
-                            <div className="p-2 bg-emerald-500/10 rounded-full">
-                                <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse" />
-                            </div>
-                            <span className="text-xs font-mono font-black uppercase tracking-widest text-white/40">节点状态: 正常运行</span>
-                        </div>
-                        <div className="flex items-center gap-4">
-                            <div className="hidden lg:flex items-center gap-1 border border-white/5 px-4 py-2 rounded-xl bg-white/[0.02]">
-                                <span className="text-[11px] font-black uppercase tracking-widest text-white/20 mr-2">快速操作:</span>
-                                <button onClick={onRefresh} title="刷新并校准计数器" className={`p-1.5 hover:text-cyan-400 transition-colors ${loading ? 'animate-spin opacity-50' : ''}`}>
-                                    <RefreshCcw size={16} />
-                                </button>
-                                <div className="w-px h-3 bg-white/10 mx-1" />
-                                <button onClick={() => onForceSync('stock')} disabled={loading} title="重刷所有股票历史数据" className="p-1.5 hover:text-emerald-400 disabled:opacity-30 transition-colors flex items-center gap-1.5 group/btn">
-                                    <TrendingUp size={16} className="group-hover/btn:scale-110 transition-transform" />
-                                    <span className="text-[11px] font-black uppercase tracking-tighter hidden xl:inline">股票重刷</span>
-                                </button>
-                                <div className="w-px h-3 bg-white/10 mx-1" />
-                                <button onClick={() => onForceSync('fund')} disabled={loading} title="重刷所有基金历史数据" className="p-1.5 hover:text-blue-400 disabled:opacity-30 transition-colors flex items-center gap-1.5 group/btn">
-                                    <PieChart size={16} className="group-hover/btn:scale-110 transition-transform" />
-                                    <span className="text-[11px] font-black uppercase tracking-tighter hidden xl:inline">基金重刷</span>
-                                </button>
-                                <div className="w-px h-3 bg-white/10 mx-1" />
-                                <button onClick={onCleanup} title="全量环境洗消" className="p-1.5 hover:text-orange-400 transition-colors">
-                                    <Zap size={16} />
-                                </button>
-                            </div>
-                            <div className="text-xs font-mono font-bold text-white/40 bg-white/5 px-4 py-2 rounded-xl border border-white/5 min-w-[200px] text-center">
-                                {currentTime
-                                    ? currentTime.toLocaleString('zh-CN', {
-                                        timeZone: 'Asia/Shanghai',
-                                        hour12: false,
-                                        year: 'numeric',
-                                        month: '2-digit',
-                                        day: '2-digit',
-                                        hour: '2-digit',
-                                        minute: '2-digit',
-                                        second: '2-digit'
-                                    })
-                                    : '--:--:--'}
-                            </div>
-                        </div>
-                    </header>
-
-                    <div className="p-10 max-w-[1200px] mx-auto">
-                        {children}
-                    </div>
-                </div>
-            </div>
-        </main>
-    );
 }
 </file>
 
@@ -5390,103 +5390,6 @@ export async function POST(request) {
             code: 'INTERNAL_ERROR'
         }, { status: 500 });
     }
-}
-</file>
-
-<file path="hooks/useRealtimeQuotes.js">
-import { useEffect, useRef } from 'react';
-import { fetchBulkStockQuotes } from '@/services/api/quotesService';
-import { fetchBulkIntradayData } from '@/services/api/intradayService';
-
-export function useRealtimeQuotes({
-    activeTab, isLogged, assetsRef,
-    setQuotesMap,   // ← 现在写入独立的 quotesMap
-    setIntradayMap  // ← 分时数据同样独立
-}) {
-    // 1. 行情报价轮询 (1min/5min 动态)
-    useEffect(() => {
-        if (activeTab !== 'watchlist') return; // ✅ 仅在实时监控模式下激活高频轮询
-        if (!isLogged) return;
-
-        let timer;
-
-        const tick = async () => {
-            const stockItems = assetsRef.current.filter(a => a.type === 'stock');
-            if (stockItems.length === 0) return;
-
-            try {
-                // ✅ 写入独立的 quotesMap，不触碰被 AssetsStructureContext 管理s assets 数组
-                const quoteMap = await fetchBulkStockQuotes(stockItems, true);
-                if (Object.keys(quoteMap).length > 0) {
-                    setQuotesMap(prev => ({ ...prev, ...quoteMap }));
-                }
-            } catch (e) {
-                console.warn('[RealtimeQuotes] Tick failed:', e.message);
-            }
-        };
-
-        const getInterval = () => {
-            const hourStr = new Date().toLocaleString('zh-CN', {
-                timeZone: 'Asia/Shanghai', hour: 'numeric', hour12: false
-            });
-            const hour = parseInt(hourStr);
-            // 交易时段每分钟更新，非交易时段每 5 分钟更新
-            const isInSession = (hour >= 9 && hour < 12) || (hour >= 13 && hour < 15);
-            return isInSession ? 60000 : 300000;
-        };
-
-        const scheduleNext = () => {
-            timer = setTimeout(async () => {
-                await tick();
-                scheduleNext();
-            }, getInterval());
-        };
-
-        tick();
-        scheduleNext();
-
-        return () => clearTimeout(timer);
-    }, [activeTab, isLogged, assetsRef, setQuotesMap]);
-
-    // 2. 分时数据批量轮询 (固定 2 分钟)
-    const intradayMapRef = useRef({}); // 引入辅助 Ref 用于闭包内的最新状态对比
-
-    useEffect(() => {
-        if (activeTab !== 'watchlist') return;
-        if (!isLogged) return;
-
-        const tickIntraday = async () => {
-            const stockItems = assetsRef.current.filter(a => a.type === 'stock');
-            if (stockItems.length === 0) return;
-
-            try {
-                const result = await fetchBulkIntradayData(stockItems, true);
-                if (Object.keys(result).length > 0) {
-                    // ✅ 核心修复：合并而非覆盖，防止由于部分请求超时导致已有数据被抹除
-                    setIntradayMap(prev => {
-                        const next = { ...prev, ...result };
-                        intradayMapRef.current = next;
-                        return next;
-                    });
-                }
-            } catch (e) {
-                console.warn('[IntradayQuotes] Tick failed:', e.message);
-            }
-        };
-
-        // 首次加载补全策略：由于 sync-asset 可能还在后台，tickIntraday 可能因为后端 D1 没准备好而跳过。
-        // 为此增加一个 30s 后的“扫尾”异步任务。
-        tickIntraday().then(() => {
-            const missing = assetsRef.current.filter(a => a.type === 'stock' && !intradayMapRef.current[a.code]);
-            if (missing.length > 0) {
-                setTimeout(tickIntraday, 30000);
-            }
-        });
-
-        const intradayTimer = setInterval(tickIntraday, 120000);
-
-        return () => clearInterval(intradayTimer);
-    }, [activeTab, isLogged, assetsRef, setIntradayMap]);
 }
 </file>
 
@@ -6063,6 +5966,103 @@ export default function DashboardClient() {
             </footer>
         </main>
     );
+}
+</file>
+
+<file path="hooks/useRealtimeQuotes.js">
+import { useEffect, useRef } from 'react';
+import { fetchBulkStockQuotes } from '@/services/api/quotesService';
+import { fetchBulkIntradayData } from '@/services/api/intradayService';
+
+export function useRealtimeQuotes({
+    activeTab, isLogged, assetsRef,
+    setQuotesMap,   // ← 现在写入独立的 quotesMap
+    setIntradayMap  // ← 分时数据同样独立
+}) {
+    // 1. 行情报价轮询 (1min/5min 动态)
+    useEffect(() => {
+        if (activeTab !== 'watchlist') return; // ✅ 仅在实时监控模式下激活高频轮询
+        if (!isLogged) return;
+
+        let timer;
+
+        const tick = async () => {
+            const stockItems = assetsRef.current.filter(a => a.type === 'stock');
+            if (stockItems.length === 0) return;
+
+            try {
+                // ✅ 写入独立的 quotesMap，不触碰被 AssetsStructureContext 管理s assets 数组
+                const quoteMap = await fetchBulkStockQuotes(stockItems, true);
+                if (Object.keys(quoteMap).length > 0) {
+                    setQuotesMap(prev => ({ ...prev, ...quoteMap }));
+                }
+            } catch (e) {
+                console.warn('[RealtimeQuotes] Tick failed:', e.message);
+            }
+        };
+
+        const getInterval = () => {
+            const hourStr = new Date().toLocaleString('zh-CN', {
+                timeZone: 'Asia/Shanghai', hour: 'numeric', hour12: false
+            });
+            const hour = parseInt(hourStr);
+            // 交易时段每分钟更新，非交易时段每 5 分钟更新
+            const isInSession = (hour >= 9 && hour < 12) || (hour >= 13 && hour < 15);
+            return isInSession ? 60000 : 300000;
+        };
+
+        const scheduleNext = () => {
+            timer = setTimeout(async () => {
+                await tick();
+                scheduleNext();
+            }, getInterval());
+        };
+
+        tick();
+        scheduleNext();
+
+        return () => clearTimeout(timer);
+    }, [activeTab, isLogged, assetsRef, setQuotesMap]);
+
+    // 2. 分时数据批量轮询 (固定 2 分钟)
+    const intradayMapRef = useRef({}); // 引入辅助 Ref 用于闭包内的最新状态对比
+
+    useEffect(() => {
+        if (activeTab !== 'watchlist') return;
+        if (!isLogged) return;
+
+        const tickIntraday = async () => {
+            const stockItems = assetsRef.current.filter(a => a.type === 'stock');
+            if (stockItems.length === 0) return;
+
+            try {
+                const result = await fetchBulkIntradayData(stockItems, true);
+                if (Object.keys(result).length > 0) {
+                    // ✅ 核心修复：合并而非覆盖，防止由于部分请求超时导致已有数据被抹除
+                    setIntradayMap(prev => {
+                        const next = { ...prev, ...result };
+                        intradayMapRef.current = next;
+                        return next;
+                    });
+                }
+            } catch (e) {
+                console.warn('[IntradayQuotes] Tick failed:', e.message);
+            }
+        };
+
+        // 首次加载补全策略：由于 sync-asset 可能还在后台，tickIntraday 可能因为后端 D1 没准备好而跳过。
+        // 为此增加一个 30s 后的“扫尾”异步任务。
+        tickIntraday().then(() => {
+            const missing = assetsRef.current.filter(a => a.type === 'stock' && !intradayMapRef.current[a.code]);
+            if (missing.length > 0) {
+                setTimeout(tickIntraday, 30000);
+            }
+        });
+
+        const intradayTimer = setInterval(tickIntraday, 120000);
+
+        return () => clearInterval(intradayTimer);
+    }, [activeTab, isLogged, assetsRef, setIntradayMap]);
 }
 </file>
 
@@ -6904,171 +6904,6 @@ export async function fetchFundHistory(code, days, signal = null) {
 }
 </file>
 
-<file path="lib/cron/realtimeSync.js">
-/**
- * src/lib/cron/realtimeSync.js
- *
- * 盘中实时行情抓取，每 5 分钟由 scheduled handler 调用。
- * 触发窗口：周一到周五 UTC 01:00-07:55 = 北京时间 09:00-15:55。
- *
- * 对齐 intradayRepo.js 的实际存储结构：
- *   主表  asset_intraday_points (code, time, price, vol)  — 逐点存储，供分时图使用
- *   日表  asset_intraday (code, record_date, data)        — JSON 全天数据，供收盘后归档
- *
- * intradayRepo 说明：
- *   - saveIntraday 有盘中/收盘自动切换逻辑，但依赖 memoryCache。
- *     scheduled handler 每次都是全新 Worker 实例，内存不持久，
- *     因此盘中 cron 直接写 asset_intraday_points（持久化），不依赖内存缓存。
- *   - saveIntradayPointsBulk / pruneIntradayPoints 是专为 cron 设计的接口，直接使用。
- *
- * 流程：
- *   1. 判断当前是否在交易时段（09:30-11:30 / 13:00-15:00），非交易时段静默跳过
- *   2. 从 user_assets 读取所有股票资产（基金无盘中分时，跳过）
- *   3. 分批并发拉取实时行情（每批 BATCH_SIZE 条）
- *   4. 调用 saveIntradayPointsBulk 写入 asset_intraday_points
- *   5. 每隔 PRUNE_EVERY_N 次触发一次 pruneIntradayPoints，防止无限增长
- *   6. 失败时写 system_logs，成功时仅打 console（盘中高频，避免刷爆日志）
- *
- * pruneIntradayPoints 说明：
- *   每只股票保留最近 480 个分时点（约 4 天 × 每天 48 个5分钟K线），
- *   每次全部 cron 触发都清理成本较高，故每 6 次（约 30 分钟）触发一次。
- */
-
-import { fetchStockQuote } from '@/lib/services/quoteFetcher';
-import { updateIntradayJson } from '@/lib/storage/intradayRepo';
-import { getBeijingDate, getBeijingTodayStr } from '@/lib/utils';
-
-// ── 常量 ────────────────────────────────────────────────────────────────────
-
-const BATCH_SIZE = 1;
-const BATCH_DELAY_MS = 100;
-const SUBREQ_BUDGET = 45;
-const FETCH_TIMEOUT = 5000;
-
-// ── 交易时段（北京时间）──────────────────────────────────────────────────────
-
-const TRADING_SESSIONS = [
-    { open: '09:30', close: '11:40' }, // 稍微多跑几分钟以确保收盘点被抓到
-    { open: '13:00', close: '15:10' },
-];
-
-function _isTradingHour() {
-    const bjNow = getBeijingDate();
-    const h = bjNow.getHours();
-    const m = bjNow.getMinutes();
-    const hhmm = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
-    return TRADING_SESSIONS.some(s => hhmm >= s.open && hhmm <= s.close);
-}
-
-// ── 主入口 ──────────────────────────────────────────────────────────────────
-
-const TENCENT_BATCH_SIZE = 20;
-
-export async function runRealtimeSync(env) {
-    if (!_isTradingHour()) return;
-
-    const t0 = Date.now();
-    let ok = 0;
-    let subreqCount = 1;
-    const logBuffer = [];
-    const today = getBeijingTodayStr();
-
-    try {
-        const { results: assets } = await env.DB
-            .prepare("SELECT DISTINCT code FROM user_assets WHERE type = 'stock'")
-            .all();
-        subreqCount += 1; // DB List 消耗一个子请求
-
-        if (!assets?.length) return;
-
-        const codes = assets.map(a => a.code);
-        const updateRecords = [];
-        const bjNow = getBeijingDate();
-        const timeStr = `${String(bjNow.getHours()).padStart(2, '0')}:${String(bjNow.getMinutes()).padStart(2, '0')}`;
-
-        // 1. 批量抓取实时数据
-        for (let i = 0; i < codes.length; i += TENCENT_BATCH_SIZE) {
-            if (subreqCount >= SUBREQ_BUDGET) break;
-
-            const batch = codes.slice(i, i + TENCENT_BATCH_SIZE);
-            try {
-                const ctrl = new AbortController();
-                const tid = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT);
-
-                const url = `https://qt.gtimg.cn/q=${batch.join(',')}`;
-                const res = await fetch(url, {
-                    headers: { 'Referer': 'https://gu.qq.com/' },
-                    signal: ctrl.signal
-                });
-                clearTimeout(tid);
-                subreqCount += 1;
-
-                if (!res.ok) throw new Error(`HTTP ${res.status}`);
-
-                const ab = await res.arrayBuffer();
-                const text = new TextDecoder('gbk').decode(ab);
-
-                for (const line of text.split(';').filter(l => l.trim())) {
-                    const m = line.match(/v_([^=]+)="([^"]+)"/);
-                    if (!m) continue;
-                    const parts = m[2].split('~');
-                    if (parts.length < 37) continue;
-
-                    const code = m[1].toLowerCase();
-                    const price = parseFloat(parts[3]) || 0;
-                    const prevClose = parseFloat(parts[4]) || 0;
-
-                    updateRecords.push({
-                        code,
-                        date: today,
-                        points: [{ time: timeStr, value: price }],
-                        price,
-                        prevClose
-                    });
-                    ok++;
-                }
-            } catch (e) {
-                logBuffer.push({ level: 'ERROR', msg: `Batch fetch failed: ${e.message}` });
-            }
-        }
-
-        // 2. 将点位原子化合并进 asset_intraday (JSON)
-        if (updateRecords.length > 0) {
-            await updateIntradayJson(updateRecords, env);
-            subreqCount += 1; // 2. DB Batch Write 消耗一个子请求
-        }
-
-        const elapsed = Math.round((Date.now() - t0) / 1000);
-        console.log(`[RealtimeSync] Done: ${ok} stocks updated in ${elapsed}s. Subreqs: ${subreqCount}/${SUBREQ_BUDGET}`);
-
-        if (logBuffer.length > 0) {
-            await _flushLogs(env, logBuffer);
-        }
-
-    } catch (e) {
-        console.error('[RealtimeSync] Error:', e.message);
-        await _flushLogs(env, [{ level: 'FATAL', msg: e.message }]);
-    }
-}
-
-// ── 聚合日志写入 ────────────────────────────────────────────────────────────
-
-async function _flushLogs(env, buffer) {
-    if (!buffer || buffer.length === 0) return;
-    try {
-        const summary = buffer.map(item => `[${item.level}] ${item.msg}`).join(' | ');
-        await env.DB
-            .prepare('INSERT INTO system_logs (level, module, message, timestamp) VALUES (?, ?, ?, CURRENT_TIMESTAMP)')
-            .bind('INFO', 'RealtimeSync', summary)
-            .run();
-    } catch (e) {
-        console.error('[RealtimeSync] flush logs failed:', e.message);
-    }
-}
-
-const _sleep = ms => new Promise(r => setTimeout(r, ms));
-</file>
-
 <file path="lib/cron/sentinel.js">
 /**
  * src/lib/cron/sentinel.js
@@ -7267,6 +7102,233 @@ async function _log(db, level, source, message) {
 }
 </file>
 
+<file path="lib/cron/realtimeSync.js">
+/**
+ * src/lib/cron/realtimeSync.js
+ *
+ * 盘中实时行情抓取，每 5 分钟由 scheduled handler 调用。
+ * 触发窗口：周一到周五 UTC 01:00-07:55 = 北京时间 09:00-15:55。
+ *
+ * 对齐 intradayRepo.js 的实际存储结构：
+ *   主表  asset_intraday_points (code, time, price, vol)  — 逐点存储，供分时图使用
+ *   日表  asset_intraday (code, record_date, data)        — JSON 全天数据，供收盘后归档
+ *
+ * intradayRepo 说明：
+ *   - saveIntraday 有盘中/收盘自动切换逻辑，但依赖 memoryCache。
+ *     scheduled handler 每次都是全新 Worker 实例，内存不持久，
+ *     因此盘中 cron 直接写 asset_intraday_points（持久化），不依赖内存缓存。
+ *   - saveIntradayPointsBulk / pruneIntradayPoints 是专为 cron 设计的接口，直接使用。
+ *
+ * 流程：
+ *   1. 判断当前是否在交易时段（09:30-11:30 / 13:00-15:00），非交易时段静默跳过
+ *   2. 从 user_assets 读取所有股票资产（基金无盘中分时，跳过）
+ *   3. 分批并发拉取实时行情（每批 BATCH_SIZE 条）
+ *   4. 调用 saveIntradayPointsBulk 写入 asset_intraday_points
+ *   5. 每隔 PRUNE_EVERY_N 次触发一次 pruneIntradayPoints，防止无限增长
+ *   6. 失败时写 system_logs，成功时仅打 console（盘中高频，避免刷爆日志）
+ *
+ * pruneIntradayPoints 说明：
+ *   每只股票保留最近 480 个分时点（约 4 天 × 每天 48 个5分钟K线），
+ *   每次全部 cron 触发都清理成本较高，故每 6 次（约 30 分钟）触发一次。
+ */
+
+import { fetchStockQuote } from '@/lib/services/quoteFetcher';
+import { updateIntradayJson } from '@/lib/storage/intradayRepo';
+import { getBeijingDate, getBeijingTodayStr } from '@/lib/utils';
+
+// ── 常量 ────────────────────────────────────────────────────────────────────
+
+const BATCH_SIZE = 1;
+const BATCH_DELAY_MS = 100;
+const SUBREQ_BUDGET = 45;
+const FETCH_TIMEOUT = 5000;
+
+// ── 交易时段（北京时间）──────────────────────────────────────────────────────
+
+const TRADING_SESSIONS = [
+    { open: '09:30', close: '11:40' }, // 稍微多跑几分钟以确保收盘点被抓到
+    { open: '13:00', close: '15:10' },
+];
+
+function _isTradingHour() {
+    const bjNow = getBeijingDate();
+    const h = bjNow.getHours();
+    const m = bjNow.getMinutes();
+    const hhmm = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+    return TRADING_SESSIONS.some(s => hhmm >= s.open && hhmm <= s.close);
+}
+
+// ── 主入口 ──────────────────────────────────────────────────────────────────
+
+const TENCENT_BATCH_SIZE = 20;
+
+export async function runRealtimeSync(env) {
+    if (!_isTradingHour()) return;
+
+    const t0 = Date.now();
+    let ok = 0;
+    let subreqCount = 1;
+    const logBuffer = [];
+    const today = getBeijingTodayStr();
+
+    try {
+        const { results: assets } = await env.DB
+            .prepare("SELECT DISTINCT code FROM user_assets WHERE type = 'stock'")
+            .all();
+        subreqCount += 1; // DB List 消耗一个子请求
+
+        if (!assets?.length) return;
+
+        const codes = assets.map(a => a.code);
+        const updateRecords = [];
+        const bjNow = getBeijingDate();
+        const timeStr = `${String(bjNow.getHours()).padStart(2, '0')}:${String(bjNow.getMinutes()).padStart(2, '0')}`;
+
+        // 1. 批量抓取实时数据
+        for (let i = 0; i < codes.length; i += TENCENT_BATCH_SIZE) {
+            if (subreqCount >= SUBREQ_BUDGET) break;
+
+            const batch = codes.slice(i, i + TENCENT_BATCH_SIZE);
+            try {
+                const ctrl = new AbortController();
+                const tid = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT);
+
+                const url = `https://qt.gtimg.cn/q=${batch.join(',')}`;
+                const res = await fetch(url, {
+                    headers: { 'Referer': 'https://gu.qq.com/' },
+                    signal: ctrl.signal
+                });
+                clearTimeout(tid);
+                subreqCount += 1;
+
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+                const ab = await res.arrayBuffer();
+                const text = new TextDecoder('gbk').decode(ab);
+
+                for (const line of text.split(';').filter(l => l.trim())) {
+                    const m = line.match(/v_([^=]+)="([^"]+)"/);
+                    if (!m) continue;
+                    const parts = m[2].split('~');
+                    if (parts.length < 37) continue;
+
+                    const code = m[1].toLowerCase();
+                    const price = parseFloat(parts[3]) || 0;
+                    const prevClose = parseFloat(parts[4]) || 0;
+
+                    updateRecords.push({
+                        code,
+                        date: today,
+                        points: [{ time: timeStr, value: price }],
+                        price,
+                        prevClose
+                    });
+                    ok++;
+                }
+            } catch (e) {
+                logBuffer.push({ level: 'ERROR', msg: `Batch fetch failed: ${e.message}` });
+            }
+        }
+
+        // 2. 将点位原子化合并进 asset_intraday (JSON)
+        if (updateRecords.length > 0) {
+            await updateIntradayJson(updateRecords, env);
+            subreqCount += 1; // 2. DB Batch Write 消耗一个子请求
+        }
+
+        const elapsed = Math.round((Date.now() - t0) / 1000);
+        console.log(`[RealtimeSync] Done: ${ok} stocks updated in ${elapsed}s. Subreqs: ${subreqCount}/${SUBREQ_BUDGET}`);
+
+        if (logBuffer.length > 0) {
+            await _flushLogs(env, logBuffer);
+        }
+
+    } catch (e) {
+        console.error('[RealtimeSync] Error:', e.message);
+        await _flushLogs(env, [{ level: 'FATAL', msg: e.message }]);
+    }
+}
+
+// ── 聚合日志写入 ────────────────────────────────────────────────────────────
+
+async function _flushLogs(env, buffer) {
+    if (!buffer || buffer.length === 0) return;
+    try {
+        const summary = buffer.map(item => `[${item.level}] ${item.msg}`).join(' | ');
+        await env.DB
+            .prepare('INSERT INTO system_logs (level, module, message, timestamp) VALUES (?, ?, ?, CURRENT_TIMESTAMP)')
+            .bind('INFO', 'RealtimeSync', summary)
+            .run();
+    } catch (e) {
+        console.error('[RealtimeSync] flush logs failed:', e.message);
+    }
+}
+
+const _sleep = ms => new Promise(r => setTimeout(r, ms));
+</file>
+
+<file path="app/api/admin/refetch-fund-history/route.js">
+/**
+ * src/app/api/admin/refetch-fund-history/route.js
+ * 
+ * 专用基金重刷接口，采用 Streaming (NDJSON) 响应以防止超时及提供实时进度。
+ */
+
+import { NextResponse } from 'next/server';
+import { isAdminAuthorized } from '@/lib/storage/authRepo';
+import { getD1Storage } from '@/lib/storage/d1Client';
+
+export const dynamic = 'force-dynamic';
+export const maxDuration = 300; // 5分钟限时
+
+const HISTORY_DAYS = 250;
+
+export async function GET(request) {
+    // 1. 鉴权
+    if (!(await isAdminAuthorized(request))) {
+        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const { searchParams } = new URL(request.url);
+    const force = searchParams.get('force') === '1';
+
+    // 2. 准备数据库
+    const db = await getD1Storage();
+    if (!db) return NextResponse.json({ error: 'DB unavailable' }, { status: 500 });
+
+    // 4. 获取所有待重刷基金列表
+    const { results: funds } = await db
+        .prepare("SELECT DISTINCT code FROM user_assets WHERE type = 'fund'")
+        .all();
+
+    if (!funds?.length) return NextResponse.json({ ok: true, message: 'No funds found' });
+
+    // 5. 任务投递：写入 D1 sync_jobs 任务表
+    const t0 = Date.now();
+    try {
+        const stmts = funds.map(f =>
+            db.prepare(`
+                INSERT INTO sync_jobs (type, code, payload, status) 
+                VALUES (?, ?, ?, 'pending')
+            `).bind('fund_history', f.code.toLowerCase(), JSON.stringify({ force }))
+        );
+
+        await db.batch(stmts);
+
+        const elapsed = Date.now() - t0;
+        return NextResponse.json({
+            ok: true,
+            message: `已向任务中心投递 ${funds.length} 只基金的重刷请求`,
+            total: funds.length,
+            elapsed_ms: elapsed
+        });
+    } catch (e) {
+        console.error('[Admin:Refetch] Task injection failed:', e.message);
+        return NextResponse.json({ ok: false, error: '任务投递失败: ' + e.message }, { status: 500 });
+    }
+}
+</file>
+
 <file path="components/AssetCard.js">
 'use client';
 
@@ -7367,31 +7429,44 @@ function RealtimeLayer({ asset }) {
 
 // ── 2. 波动率内核：完全不建立 QuotesContext 订阅 ──────────────────────────
 function VolatilityLayer({ asset, isVisible }) {
-    // 取得 localStorage 中的缓存作为首屏 fallback (SSR 友好模式)
-    const [cachedHistory, setCachedHistory] = useState(undefined);
-    useEffect(() => {
-        try {
-            const val = localStorage.getItem(`tracker_cache_hist:${asset.type}:${asset.code}`);
-            if (val) setCachedHistory(JSON.parse(val));
-        } catch (e) { /* silent fail */ }
-    }, [asset.type, asset.code]);
+    // 1. 优先检查 Context 里是否已经有批量取回的历史数据
+    const hasContextHistory = asset.history?.length > 0;
 
-    // 历史数据获取 (仅在可见时启用)
+    // 2. 取得 localStorage 中的缓存 (同步方案，虽然可能导致首帧轻微阻塞，但能确保 fallbackData 正确初始化)
+    // 或者我们直接把这个逻辑放在 useSWR 外部
+    const storageKey = `tracker_cache_hist:${asset.type}:${asset.code}`;
+    const [initialCachedData] = useState(() => {
+        if (typeof window === 'undefined') return undefined;
+        try {
+            const val = localStorage.getItem(storageKey);
+            return val ? JSON.parse(val) : undefined;
+        } catch (e) { return undefined; }
+    });
+
+    // 3. 历史数据获取 (仅在可见且 Context 没数据时才发请求，实现 N+1 -> 1)
     const { data: historyData } = useSWR(
-        isVisible ? `hist:${asset.type}:${asset.code}` : null,
-        () => fetchBulkHistory([{ code: asset.code, type: asset.type }], false).then(res => res[`${asset.type}:${asset.code}`]),
+        isVisible && !hasContextHistory ? `hist:${asset.type}:${asset.code}` : null,
+        () => fetchBulkHistory([{ code: asset.code, type: asset.type }], false)
+            .then(res => res[`${asset.type}:${asset.code}`]),
         {
-            fallbackData: cachedHistory,
+            fallbackData: initialCachedData,
             revalidateOnFocus: false,
             onSuccess: (data) => {
-                if (data) localStorage.setItem(`tracker_cache_hist:${asset.type}:${asset.code}`, JSON.stringify(data));
+                if (data) localStorage.setItem(storageKey, JSON.stringify(data));
             }
         }
     );
 
-    const history = (historyData?.history?.length > 0) ? historyData.history : (asset.history ?? []);
-    const summary = (historyData?.summary) ?? (asset.summary ?? { perf5d: null, perf22d: null, perf250d: null });
-    const isHistorySyncing = historyData?.status === 'syncing';
+    // 4. 数据合并优先级：Context > SWR > 默认空架子
+    const history = hasContextHistory
+        ? asset.history
+        : (historyData?.history ?? []);
+
+    const summary = hasContextHistory
+        ? asset.summary
+        : (historyData?.summary ?? { perf5d: null, perf22d: null, perf250d: null });
+
+    const isHistorySyncing = (!hasContextHistory && historyData?.status === 'syncing');
 
     if (isHistorySyncing) {
         return (
@@ -7495,68 +7570,6 @@ export default memo(AssetCardComponent, (prev, next) => {
     */
     return true;
 });
-</file>
-
-<file path="app/api/admin/refetch-fund-history/route.js">
-/**
- * src/app/api/admin/refetch-fund-history/route.js
- * 
- * 专用基金重刷接口，采用 Streaming (NDJSON) 响应以防止超时及提供实时进度。
- */
-
-import { NextResponse } from 'next/server';
-import { isAdminAuthorized } from '@/lib/storage/authRepo';
-import { getD1Storage } from '@/lib/storage/d1Client';
-
-export const dynamic = 'force-dynamic';
-export const maxDuration = 300; // 5分钟限时
-
-const HISTORY_DAYS = 250;
-
-export async function GET(request) {
-    // 1. 鉴权
-    if (!(await isAdminAuthorized(request))) {
-        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
-    const { searchParams } = new URL(request.url);
-    const force = searchParams.get('force') === '1';
-
-    // 2. 准备数据库
-    const db = await getD1Storage();
-    if (!db) return NextResponse.json({ error: 'DB unavailable' }, { status: 500 });
-
-    // 4. 获取所有待重刷基金列表
-    const { results: funds } = await db
-        .prepare("SELECT DISTINCT code FROM user_assets WHERE type = 'fund'")
-        .all();
-
-    if (!funds?.length) return NextResponse.json({ ok: true, message: 'No funds found' });
-
-    // 5. 任务投递：写入 D1 sync_jobs 任务表
-    const t0 = Date.now();
-    try {
-        const stmts = funds.map(f =>
-            db.prepare(`
-                INSERT INTO sync_jobs (type, code, payload, status) 
-                VALUES (?, ?, ?, 'pending')
-            `).bind('fund_history', f.code.toLowerCase(), JSON.stringify({ force }))
-        );
-
-        await db.batch(stmts);
-
-        const elapsed = Date.now() - t0;
-        return NextResponse.json({
-            ok: true,
-            message: `已向任务中心投递 ${funds.length} 只基金的重刷请求`,
-            total: funds.length,
-            elapsed_ms: elapsed
-        });
-    } catch (e) {
-        console.error('[Admin:Refetch] Task injection failed:', e.message);
-        return NextResponse.json({ ok: false, error: '任务投递失败: ' + e.message }, { status: 500 });
-    }
-}
 </file>
 
 <file path="lib/cron/historySync.js">
