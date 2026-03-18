@@ -109,6 +109,9 @@ async function processSyncJobs(env) {
             }
         }));
 
+        // 3. 自动清理机制：每次处理后顺便清理超过 1 天的已完成或失败任务，防止表膨胀
+        await DB.prepare("DELETE FROM sync_jobs WHERE status IN ('completed', 'failed') AND updated_at < datetime('now', '-1 day')").run();
+
     } catch (e) {
         console.error('[Queue:Critical] Batch process failure:', e.message);
     }
