@@ -194,7 +194,7 @@ export default function DashboardClient() {
                                 </div>
                             </motion.div>
                         ) : (
-                            <div className="grid grid-cols-1 xl:grid-cols-2 gap-6" key="cards">
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6" key="cards">
                                 {filteredAssets.length > 0 ? (
                                     filteredAssets.map(asset => (
                                         <AssetCard
