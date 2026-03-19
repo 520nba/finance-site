@@ -21,15 +21,55 @@ export async function POST(request) {
 
         const cfCtx = await getCloudflareCtx();
         const env = cfCtx?.env || null;
+        const db = env?.DB;
         const items = [{ code, type }];
 
-        // 1. 同步名称 (禁用外部抓取，仅读 D1)
-        await syncNamesBulk(items, false);
+        // 1. 先读 D1，如果已有完整数据直接返回，避免重复投队列
+        const [nameMap, histResult] = await Promise.all([
+            syncNamesBulk(items, false),
+            syncHistoryBulk(items, 250, false, env),
+        ]);
 
-        // 2. 同步 250 天历史数据 (禁用外部抓取，仅读 D1)
-        await syncHistoryBulk(items, 250, false, env);
+        const histKey = `${type}:${code}`;
+        const hasName = nameMap[histKey] && nameMap[histKey] !== code;
+        const hasHistory = histResult[histKey]?.history?.length > 0;
 
-        return NextResponse.json({ success: true, code, type });
+        if (hasName && hasHistory) {
+            // D1 已有数据，直接返回，不投队列
+            return NextResponse.json({ success: true, code, type, source: 'cache' });
+        }
+
+        // 2. D1 缺数据时，向任务队列投递补数据任务
+        if (!db) {
+            return NextResponse.json({ success: false, error: 'Database unavailable' }, { status: 503 });
+        }
+
+        const jobType = type === 'fund' ? 'fund_history' : 'asset_history_sync';
+        const stmts = [];
+
+        if (!hasHistory) {
+            stmts.push(
+                db.prepare(`
+                    INSERT INTO sync_jobs (type, code, payload, status)
+                    VALUES (?, ?, ?, 'pending')
+                    ON CONFLICT(code, type) WHERE status = 'pending'
+                    DO UPDATE SET updated_at = CURRENT_TIMESTAMP
+                `).bind(jobType, code.toLowerCase(), JSON.stringify({ type, force: true }))
+            );
+        }
+
+        if (stmts.length > 0) {
+            await db.batch(stmts);
+        }
+
+        return NextResponse.json({
+            success: true,
+            code,
+            type,
+            source: 'queued',         // 告知前端任务已投队列
+            hasName,
+            hasHistory,
+        });
     } catch (e) {
         console.error(`[SyncAsset] Failed for ${userId}:`, e.message);
         return NextResponse.json({ success: false, error: e.message }, { status: 500 });

@@ -1,4 +1,4 @@
-import { NextResponse } from 'next/server';
+﻿import { NextResponse } from 'next/server';
 import { isAdminAuthorized } from '@/lib/auth/adminAuth';
 
 export const dynamic = 'force-dynamic';
@@ -15,7 +15,7 @@ export async function GET(request) {
     if (!db) return NextResponse.json({ error: 'DB unavailable' }, { status: 500 });
 
     try {
-        // 璇诲彇鏈€杩?300 鏉′换鍔＄姸鎬侊紝骞跺皾璇曞叧鑱旇祫浜у悕绉板簱
+        // fixed comment
         const items = await queryAll(`
             SELECT 
                 j.id, 

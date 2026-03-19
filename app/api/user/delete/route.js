@@ -1,4 +1,4 @@
-import { NextResponse } from 'next/server';
+﻿import { NextResponse } from 'next/server';
 import { deleteUser } from '@/lib/storage/userRepo';
 import { isAdminAuthorized } from '@/lib/auth/adminAuth';
 
@@ -6,7 +6,7 @@ export async function POST(request) {
     try {
         const { targetUserId } = await request.json();
 
-        // 缁熶竴鏉冮檺楠岃瘉
+        // fixed comment
         if (!(await isAdminAuthorized(request))) {
             return NextResponse.json({ error: 'Unauthorized' }, { status: 403 });
         }
@@ -15,7 +15,7 @@ export async function POST(request) {
             return NextResponse.json({ error: 'Invalid target user' }, { status: 400 });
         }
 
-        // 浠呭湪 D1 涓墿鐞嗗垹闄?(100% D1 鍖?
+        // fixed comment
         const d1Deleted = await deleteUser(targetUserId);
 
         if (d1Deleted) {

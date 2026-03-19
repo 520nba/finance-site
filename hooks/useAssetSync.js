@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+﻿import { useState, useEffect, useRef, useCallback } from 'react';
 import { fetchBulkStockQuotes } from '@/lib/api/client/quotesService';
 import { fetchBulkNames } from '@/lib/api/client/namesService';
 import { fetchBulkHistory } from '@/lib/api/client/historyService';
@@ -14,8 +14,8 @@ export function useAssetSync({ userId, isLogged }) {
         if (!list || list.length === 0) return;
         setIsSyncing(true);
 
-        // 1. 绔嬪埢娓叉煋楠ㄦ灦锛屾秷闄ら樆濉炴劅銆?
-        // [Optimized] 浼樺厛浠?localStorage 璇诲彇缂撳瓨鍚嶇О锛屽疄鐜扮寮€鏄剧ず
+        // fixed comment
+        // fixed comment
         let localNames = {};
         try {
             localNames = JSON.parse(localStorage.getItem(ASSET_NAMES_CACHE_KEY) || '{}');
@@ -36,7 +36,7 @@ export function useAssetSync({ userId, isLogged }) {
         });
         setAssets(skeletonAssets);
 
-        // 2. 浠呰幏鍙栧熀纭€鍚嶇О涓庤偂绁ㄥ疄鏃舵姤浠?
+        // fixed comment
         try {
             const stockItems = list.filter(a => a.type === 'stock');
             const [stockQuoteMap, nameMap] = await Promise.all([
@@ -58,7 +58,7 @@ export function useAssetSync({ userId, isLogged }) {
 
             setAssets(initialAssets);
 
-            // [Optimized] 鎸佷箙鍖栧悕绉板埌鏈湴锛屼緵涓嬫鍒锋柊绉掓樉
+            // fixed comment
             try {
                 const newLocalNames = { ...localNames };
                 Object.entries(nameMap).forEach(([key, val]) => {
@@ -69,8 +69,8 @@ export function useAssetSync({ userId, isLogged }) {
                 localStorage.setItem(ASSET_NAMES_CACHE_KEY, JSON.stringify(newLocalNames));
             } catch (e) { /* ignore */ }
 
-            // 3. 寮傛琛ュ厖鍘嗗彶鏁版嵁 (Orchestrator Layer 1.5 - Background Hydration)
-            // 杩欎竴姝ヤ笉闇€瑕侀樆濉烇紝瀹屾垚鍚庝細鑷姩瑙﹀彂 UI 鍥捐〃娓叉煋
+            // fixed comment
+            // fixed comment
             fetchBulkHistory(list, false, 250).then(histMap => {
                 setAssets(prev => prev.map(a => {
                     const key = `${a.type}:${a.code}`;
@@ -88,25 +88,25 @@ export function useAssetSync({ userId, isLogged }) {
         setIsSyncing(false);
     }, []);
 
-    // 鐧诲綍鍚庡姞杞芥湇鍔＄鏁版嵁
+    // fixed comment
     useEffect(() => {
         if (!userId) return;
 
-        // 闃茬珵鎬侊細姣忔 userId 鍙樺寲鍒涘缓鏂扮殑 AbortController
-        // 褰?userId 鍐嶆鍙樺寲锛堝揩閫熷垏鎹㈣处鍙凤級锛屾棫鐨勮姹備細琚?abort锛岄槻姝覆鎴?
+        // fixed comment
+        // fixed comment
         const controller = new AbortController();
 
         const load = async () => {
             setIsSyncing(true);
             setIsSessionReady(false);
-            // 鍒囨崲璐﹀彿鏃剁珛鍗虫竻绌鸿祫浜э紝閬垮厤鐭殏鏄剧ず鏃ц处鍙锋暟鎹?
+            // fixed comment
             setAssets([]);
             try {
                 const res = await fetch('/api/user/assets', {
                     signal: controller.signal
                 });
                 const json = await res.json();
-                // 鍚庣缁熶竴杩斿洖 { success, data: [] } envelope 鏍煎紡
+                // fixed comment
                 const list = json?.data ?? json;
                 if (Array.isArray(list) && list.length > 0) {
                     await refreshAssets(list);
@@ -114,12 +114,12 @@ export function useAssetSync({ userId, isLogged }) {
                     setAssets([]);
                 }
             } catch (e) {
-                // AbortError 鏄富鍔ㄥ彇娑堬紝涓嶆槸鐪熸鐨勯敊璇紝闈欓粯澶勭悊
+                // fixed comment
                 if (e?.name !== 'AbortError') {
                     console.error('Failed to load user assets:', e);
                 }
             }
-            // 鍙湪璇锋眰鏈鍙栨秷鏃舵洿鏂?Session 鐘舵€?
+            // fixed comment
             if (!controller.signal.aborted) {
                 setIsSessionReady(true);
                 setIsSyncing(false);
@@ -128,7 +128,7 @@ export function useAssetSync({ userId, isLogged }) {
 
         load();
 
-        // Cleanup锛氬綋 userId 鍙樺寲鎴栫粍浠跺嵏杞芥椂锛屽彇娑堟鍦ㄨ繘琛岀殑璇锋眰
+        // fixed comment
         return () => controller.abort();
     }, [userId, refreshAssets]);
 
@@ -141,7 +141,7 @@ export function useAssetSync({ userId, isLogged }) {
     const syncingItemsRef = useRef(new Set());
 
     // [Feature: Client-side Offloading] 
-    // 鍓嶇涓诲姩鎷ㄨ皟锛氬彂鐜版暟鎹┖娲烇紙缂哄け鍚嶇О鎴栧巻鍙诧級鏃讹紝鍒嗙墖鍚屾鑷?D1
+    // fixed comment
     useEffect(() => {
         if (!isSessionReady || isSyncing) return;
 
@@ -152,12 +152,12 @@ export function useAssetSync({ userId, isLogged }) {
 
         if (pending.length === 0) return;
 
-        // 璁剧疆骞跺彂闄愬埗锛岄伩鍏嶇灛闂村啿鍨?Worker 鎴栬Е鍙戦鐜囬檺鍒?
+        // fixed comment
         const CONCURRENCY = 2;
         const toSync = pending.slice(0, CONCURRENCY);
 
         const runSync = async () => {
-            // 閿佸畾姝ｅ湪澶勭悊鐨勯」鐩紝闃叉閲嶅叆瀵艰嚧鐨勬棤闄愬惊鐜?
+            // fixed comment
             toSync.forEach(item => syncingItemsRef.current.add(`${item.type}:${item.code}`));
 
             await Promise.all(toSync.map(async (item) => {
@@ -169,13 +169,15 @@ export function useAssetSync({ userId, isLogged }) {
                         body: JSON.stringify({ code: item.code, type: item.type })
                     });
                     if (res.ok) {
-                        // 鍚屾鎴愬姛鍚庯紝閲嶆柊灞€閮ㄥ埛鏂拌璧勪骇鐨勬暟鎹?
-                        await refreshAssets(assetsRef.current);
+                        const json = await res.json();
+                        if (json.source !== 'queued') {
+                            await refreshAssets(assetsRef.current);
+                        }
                     }
                 } catch (e) {
                     console.warn(`[ClientSync] Failed for ${item.code}:`, e.message);
                 } finally {
-                    // 瑙ｉ攣
+                    // fixed comment
                     syncingItemsRef.current.delete(itemKey);
                 }
             }));
@@ -188,10 +190,10 @@ export function useAssetSync({ userId, isLogged }) {
 
 
 
-    // 鏁版嵁鍙樺寲鍚庡悓姝ュ埌鏈嶅姟绔紙鏆撮湶缁欏閮ㄤ富鍔ㄨ皟鐢級
+    // fixed comment
     const syncAssetsToServer = useCallback(async (currentAssets) => {
         if (!isLogged || !isSessionReady) return;
-        // 浼樺厛浣跨敤浼犲叆鐨勫垪琛紝鍚﹀垯璇诲彇 Ref锛堥伩鍏嶆妸 assets 鍒楀叆 useCallback 渚濊禆锛岄槻姝㈠疄鏃舵姤浠锋洿鏂版椂閲嶅缓鍑芥暟寮曠敤锛?
+        // fixed comment
         const listToSync = Array.isArray(currentAssets) ? currentAssets : assetsRef.current;
         const skeleton = listToSync.map(a => ({ code: a.code, type: a.type }));
         try {

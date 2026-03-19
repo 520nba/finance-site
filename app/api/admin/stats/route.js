@@ -32,8 +32,8 @@ export async function GET(request) {
             const { syncCounterFromTable } = await import('@/lib/storage/statsRepo');
             await Promise.all([
                 syncCounterFromTable('users', 'users'),
-                syncCounterFromTable('asset_stocks', 'asset_names', 'type = "stock"'),
-                syncCounterFromTable('asset_funds', 'asset_names', 'type = "fund"'),
+                syncCounterFromTable('asset_stocks', 'asset_names', "type = 'stock'"),
+                syncCounterFromTable('asset_funds', 'asset_names', "type = 'fund'"),
                 syncCounterFromTable('quotes_count', 'asset_quotes')
             ]);
         }
