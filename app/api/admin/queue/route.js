@@ -15,8 +15,10 @@ export async function GET(request) {
     if (!db) return NextResponse.json({ error: 'DB unavailable' }, { status: 500 });
 
     try {
-        // 批量查询任务队列，关联资产名称
-        const items = await queryAll(`
+        const { searchParams } = new URL(request.url);
+        const filterType = searchParams.get('type');
+
+        let query = `
             SELECT 
                 j.id, 
                 j.code, 
@@ -27,9 +29,17 @@ export async function GET(request) {
                 n.name as asset_name
             FROM sync_jobs j
             LEFT JOIN asset_names n ON j.code = n.code
-            GROUP BY j.id -- 防止一个 code 对应多个 type 时产生重复行
-            ORDER BY j.updated_at DESC LIMIT 300
-        `);
+        `;
+        const params = [];
+
+        if (filterType && filterType !== 'all') {
+            query += ' WHERE j.type = ? ';
+            params.push(filterType);
+        }
+
+        query += ' GROUP BY j.id ORDER BY j.updated_at DESC LIMIT 600';
+
+        const items = await queryAll(query, params);
 
         return NextResponse.json({
             queue: items.map(i => ({

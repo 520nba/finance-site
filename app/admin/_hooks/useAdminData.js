@@ -74,13 +74,17 @@ export function useAdminData(secretKey, showToast, onAuthFailure) {
         }
     }, [secretKey, showToast, onAuthFailure]);
 
-    const fetchQueue = useCallback(async () => {
+    const fetchQueue = useCallback(async (type = 'all') => {
         const k = secretKey || sessionStorage.getItem('tracker_admin_secret');
         if (!k) return;
 
         setQueueLoading(true);
         try {
-            const res = await fetch('/api/admin/queue', {
+            const url = type && type !== 'all'
+                ? `/api/admin/queue?type=${type}`
+                : '/api/admin/queue';
+
+            const res = await fetch(url, {
                 headers: { 'x-admin-key': k },
             });
             if (res.ok) {
