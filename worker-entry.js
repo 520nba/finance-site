@@ -16,6 +16,17 @@ export default {
     },
 
     async scheduled(event, env, ctx) {
+        console.log(`[Scheduled] Triggered: ${event.cron}`);
+        // 记录到 D1 以便在生产环境验证触发情况
+        if (env.DB) {
+            try {
+                await env.DB.prepare('INSERT INTO system_logs (level, module, message, timestamp) VALUES (?, ?, ?, CURRENT_TIMESTAMP)')
+                    .bind('INFO', 'CronTrigger', `Triggered: ${event.cron}`).run();
+            } catch (e) {
+                console.error('[Scheduled] Failed to log trigger:', e.message);
+            }
+        }
+
         switch (event.cron) {
             case '15 14 * * 1-5': // Beijing 22:15
             case '0 19 * * 1-6':  // Beijing 03:00
