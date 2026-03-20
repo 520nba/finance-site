@@ -15,7 +15,7 @@ export async function GET(request) {
     if (!db) return NextResponse.json({ error: 'DB unavailable' }, { status: 500 });
 
     try {
-        // fixed comment
+        // 批量查询任务队列，关联资产名称
         const items = await queryAll(`
             SELECT 
                 j.id, 
@@ -27,7 +27,7 @@ export async function GET(request) {
                 n.name as asset_name
             FROM sync_jobs j
             LEFT JOIN asset_names n ON j.code = n.code
-            GROUP BY j.id -- 闃叉涓€涓?code 瀵瑰簲澶氫釜 type 鏃朵骇鐢熼噸澶嶈
+            GROUP BY j.id -- 防止一个 code 对应多个 type 时产生重复行
             ORDER BY j.updated_at DESC LIMIT 300
         `);
 
@@ -35,7 +35,7 @@ export async function GET(request) {
             queue: items.map(i => ({
                 id: i.id,
                 code: i.code,
-                name: i.asset_name || '鏈煡璧勪骇',
+                name: i.asset_name || '未知资产',
                 status: i.status,
                 type: i.type,
                 created_at: i.created_at,
@@ -50,7 +50,7 @@ export async function GET(request) {
 }
 
 /**
- * 鍏佽鎵嬪姩娓呯悊宸插畬鎴愭垨宸插け璐ョ殑浠诲姟
+ * 允许手动清理已完成或已失败的任务
  */
 export async function DELETE(request) {
     if (!(await isAdminAuthorized(request))) {

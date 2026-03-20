@@ -2,8 +2,15 @@ import { NextResponse } from 'next/server';
 import { validateProxyTarget } from '@/lib/proxy/validator';
 import { proxyFetch } from '@/lib/proxy/fetcher';
 import { normalizeProxyResponse } from '@/lib/proxy/normalizer';
+import { requireUser } from '@/lib/auth/requireUser';
 
 export async function GET(request) {
+    // 0. 认证守卫：防止未登录用户滥用代理消耗 Workers 配额
+    const userId = await requireUser(request);
+    if (!userId) {
+        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
     const rawUrl = new URL(request.url).searchParams.get('url');
 
     // 1. 安全校验
