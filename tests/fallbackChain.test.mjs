@@ -1,0 +1,144 @@
+/**
+ * tests/fallbackChain.test.mjs
+ *
+ * 兜底链路回归测试（离线，stub 掉 globalThis.fetch）
+ *   node --test tests/fallbackChain.test.mjs
+ *
+ * 覆盖：
+ *   - 股票历史：东财 → 腾讯 → 新浪，逐级回退，且记录每级失败原因
+ *   - 全源失败时 points=null 且 attempts 完整（供任务标记失败）
+ *   - 基金历史：pingzhongdata → lsjz 接口
+ */
+
+import test from 'node:test';
+import assert from 'node:assert/strict';
+
+import { fetchStockHistoryDetailed, fetchFundHistoryDetailed } from '../lib/services/historyFetcher.js';
+
+const OLD_DATE = '2024-01-02'; // 远早于今天 → 必定通过「已收盘数据」过滤
+
+function jsonResponse(obj, status = 200) {
+    return {
+        ok: status >= 200 && status < 300,
+        status,
+        json: async () => obj,
+        text: async () => JSON.stringify(obj)
+    };
+}
+
+function textResponse(text, status = 200) {
+    return {
+        ok: status >= 200 && status < 300,
+        status,
+        json: async () => JSON.parse(text),
+        text: async () => text
+    };
+}
+
+/**
+ * 安装一个按 URL 关键字分派的 fetch stub。
+ * routes: [{ match: 'push2his', response: fn|obj }]，未命中的一律返回 500。
+ */
+function stubFetch(routes) {
+    const calls = [];
+    globalThis.fetch = async (url) => {
+        const u = String(url);
+        calls.push(u);
+        for (const r of routes) {
+            if (u.includes(r.match)) {
+                if (r.throw) throw new Error(r.throw);
+                return typeof r.response === 'function' ? r.response(u) : r.response;
+            }
+        }
+        return { ok: false, status: 500, json: async () => ({}), text: async () => 'boom' };
+    };
+    return calls;
+}
+
+// ── 股票历史 ────────────────────────────────────────────────────────────────
+
+test('股票历史：东财失败 → 回退腾讯', async () => {
+    const calls = stubFetch([
+        { match: 'push2his', response: jsonResponse({ data: { klines: [] } }) }, // 空 → 视为失败
+        {
+            match: 'fqkline',
+            response: textResponse(`kline_dayqfq=${JSON.stringify({
+                code: 0,
+                data: { sh600519: { qfqday: [[OLD_DATE, '0', '1500.00']] } }
+            })};`)
+        }
+    ]);
+
+    const r = await fetchStockHistoryDetailed('sh600519', 5);
+    assert.equal(r.source, 'tencent');
+    assert.equal(r.points.length, 1);
+    assert.equal(r.points[0].date, OLD_DATE);
+    assert.equal(r.points[0].value, 1500);
+    assert.equal(r.attempts[0].source, 'eastmoney');
+    assert.ok(calls.some(u => u.includes('fqkline')));
+});
+
+test('股票历史：东财+腾讯失败 → 回退新浪', async () => {
+    stubFetch([
+        { match: 'push2his', throw: 'ECONNRESET' },
+        { match: 'fqkline', response: textResponse('kline_dayqfq={"code":1,"msg":"bad params"}') },
+        {
+            match: 'sina.com.cn',
+            response: jsonResponse([{ day: `${OLD_DATE} 15:00:00`, close: '9.99' }])
+        }
+    ]);
+
+    const r = await fetchStockHistoryDetailed('sh600519', 5);
+    assert.equal(r.source, 'sina');
+    assert.equal(r.points[0].value, 9.99);
+    assert.deepEqual(r.attempts.map(a => a.source), ['eastmoney', 'tencent']);
+    assert.ok(r.attempts[0].error.length > 0);
+});
+
+test('股票历史：三个源全挂 → points 为 null 且 attempts 完整', async () => {
+    stubFetch([
+        { match: 'push2his', response: { ok: false, status: 520, json: async () => ({}), text: async () => 'error code: 520' } },
+        { match: 'fqkline', response: { ok: false, status: 502, json: async () => ({}), text: async () => 'error code: 502' } },
+        { match: 'sina.com.cn', throw: 'fetch failed' }
+    ]);
+
+    const r = await fetchStockHistoryDetailed('sh600519', 5);
+    assert.equal(r.points, null);
+    assert.equal(r.source, null);
+    assert.deepEqual(r.attempts.map(a => a.source), ['eastmoney', 'tencent', 'sina']);
+    assert.match(r.attempts[0].error, /520/);
+    assert.match(r.attempts[2].error, /fetch failed/);
+});
+
+// ── 基金历史 ────────────────────────────────────────────────────────────────
+
+test('基金历史：pingzhongdata 失败 → 回退 lsjz', async () => {
+    stubFetch([
+        { match: 'pingzhongdata', response: { ok: false, status: 404, json: async () => ({}), text: async () => 'not found' } },
+        {
+            match: 'lsjz',
+            response: jsonResponse({ Data: [{ FSRQ: '2024-01-03', DWJZ: '1.2345' }, { FSRQ: OLD_DATE, DWJZ: '1.2000' }] })
+        }
+    ]);
+
+    const r = await fetchFundHistoryDetailed('001316', 5);
+    assert.equal(r.source, 'eastmoney-lsjz');
+    // lsjz 源是倒序 → 解析后应为升序
+    assert.deepEqual(r.points.map(p => p.date), [OLD_DATE, '2024-01-03']);
+    assert.equal(r.attempts[0].source, 'eastmoney-pingzhong');
+});
+
+test('基金历史：pingzhongdata 成功时不做回退', async () => {
+    stubFetch([
+        {
+            match: 'pingzhongdata',
+            response: textResponse(`var Data_ACWorthTrend = [[${Date.parse('2024-01-02T00:00:00+08:00')},1.5]];`)
+        }
+    ]);
+
+    const r = await fetchFundHistoryDetailed('001316', 5);
+    assert.equal(r.source, 'eastmoney-pingzhong');
+    assert.equal(r.points.length, 1);
+    assert.equal(r.points[0].value, 1.5);
+    assert.equal(r.attempts.length, 0);
+});

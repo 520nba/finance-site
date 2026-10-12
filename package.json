@@ -10,7 +10,9 @@
     "deploy": "opennextjs-cloudflare build && opennextjs-cloudflare deploy",
     "start": "next start",
     "pages:build": "npx @opennextjs/cloudflare@latest build",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test": "node --test tests/marketParsers.test.mjs tests/fallbackChain.test.mjs tests/intradayFetcher.test.mjs",
+    "test:live": "node --test tests/intradayFetcher.test.mjs"
   },
   "dependencies": {
     "@opennextjs/cloudflare": "^1.17.1",
