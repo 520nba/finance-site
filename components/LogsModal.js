@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X, Download, Clock, AlertTriangle, Info, ShieldAlert, Filter } from 'lucide-react';
+import { readAdminKey } from '@/lib/client/adminKey';
 
 export default function LogsModal({ isOpen, onClose }) {
     const [logs, setLogs] = useState([]);
@@ -14,10 +15,8 @@ export default function LogsModal({ isOpen, onClose }) {
         setLoading(true);
         try {
             // 该接口需要管理员密钥（isAdminAuthorized 只认 x-admin-session/x-admin-key 等），
-            // 之前不带任何密钥 → 恒 403 → 弹窗永远显示「无日志」。密钥与后台一致取自 sessionStorage。
-            const adminKey = typeof window !== 'undefined'
-                ? sessionStorage.getItem('tracker_admin_secret')
-                : null;
+            // 之前不带任何密钥 → 恒 403 → 弹窗永远显示「无日志」。密钥与后台统一从 adminKey 工具读取。
+            const adminKey = typeof window !== 'undefined' ? readAdminKey() : null;
 
             const res = await fetch(`/api/admin/logs?hours=${hours}`, {
                 headers: adminKey ? { 'x-admin-key': adminKey } : {},
@@ -137,7 +136,7 @@ export default function LogsModal({ isOpen, onClose }) {
                             <ShieldAlert size={48} className="mb-4 text-yellow-500" />
                             <p className="tracking-widest uppercase font-black">需要管理员密钥</p>
                             <p className="mt-2 text-[11px] opacity-60 normal-case tracking-normal">
-                                请先在管理面板完成鉴权（密钥保存在本标签页 sessionStorage）
+                                请先在管理面板完成鉴权（密钥保存在本机浏览器中）
                             </p>
                         </div>
                     ) : logs.length === 0 ? (

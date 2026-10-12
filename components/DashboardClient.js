@@ -8,6 +8,7 @@ import AssetCard from '@/components/AssetCard';
 import WatchlistSidebar from '@/components/WatchlistSidebar';
 import LogsModal from '@/components/LogsModal';
 import { useAuth, useUI, useAssetsStructure } from '@/providers/AssetProvider';
+import { readAdminKey, writeAdminKey } from '@/lib/client/adminKey';
 
 export default function DashboardClient() {
     const [showLogs, setShowLogs] = useState(false);
@@ -104,8 +105,11 @@ export default function DashboardClient() {
                         {isLogged && (
                             <button
                                 onClick={() => {
-                                    const key = sessionStorage.getItem('tracker_admin_secret');
-                                    window.open(`/admin${key ? `?key=${key}` : ''}`, '_blank');
+                                    // 不再把管理员密钥拼进 URL（会进浏览器历史与 Cloudflare 日志）；
+                                    // 新标签页通过 localStorage 桥接读取密钥
+                                    const key = readAdminKey();
+                                    if (key) writeAdminKey(key);
+                                    window.open('/admin', '_blank');
                                 }}
                                 className="p-2.5 rounded-full border border-white/10 opacity-20 hover:opacity-100 transition-all hover:bg-cyan-500/10 hover:border-cyan-500/30"
                                 title="管理员控制中心"

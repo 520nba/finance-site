@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useCallback } from 'react';
+import { readAdminKey } from '@/lib/client/adminKey';
 
 const EMPTY_STATS = {
     users: 0,
@@ -75,7 +76,7 @@ export function useAdminData(secretKey, showToast, onAuthFailure) {
     }, [secretKey, showToast, onAuthFailure]);
 
     const fetchQueue = useCallback(async (type = 'all') => {
-        const k = secretKey || sessionStorage.getItem('tracker_admin_secret');
+        const k = secretKey || readAdminKey();
         if (!k) return;
 
         setQueueLoading(true);
@@ -104,7 +105,7 @@ export function useAdminData(secretKey, showToast, onAuthFailure) {
 
     const fetchAssetStatus = useCallback(async () => {
         // 增加兜底检测：优先使用 state 里的 key，其次回退到 session 存储
-        const k = secretKey || sessionStorage.getItem('tracker_admin_secret');
+        const k = secretKey || readAdminKey();
         if (!k) {
             console.warn('[AdminData] Missing secretKey for fetchAssetStatus');
             showToast('操作被拦截：未检出管理权限密钥');

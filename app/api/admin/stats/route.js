@@ -25,20 +25,52 @@ export async function GET(request) {
     }
 
     try {
-        const { getD1Storage } = await import('@/lib/storage/d1Client');
+        const { getD1Storage, getCloudflareCtx } = await import('@/lib/storage/d1Client');
         const db = await getD1Storage();
 
+        const { syncCounterFromTable, getCounters } = await import('@/lib/storage/statsRepo');
+
+        // 全量重算清单。此前只重算 4 项，history_points / intraday_points
+        // 从未被任何代码维护过 → 管理端长期显示 7 个月前的数字、分时点位数恒为 0。
+        const FULL_COUNTER_SYNC = [
+            ['users', 'users'],
+            ['asset_stocks', 'asset_names', "type = 'stock'"],
+            ['asset_funds', 'asset_names', "type = 'fund'"],
+            ['quotes_count', 'asset_quotes'],
+            ['history_points', 'asset_history'],
+            ['intraday_points', 'asset_intraday']
+        ];
+
+        const recountAll = async () => {
+            for (const [key, table, where] of FULL_COUNTER_SYNC) {
+                await syncCounterFromTable(key, table, where || undefined);
+            }
+        };
+
         if (shouldSync) {
-            const { syncCounterFromTable } = await import('@/lib/storage/statsRepo');
-            await Promise.all([
-                syncCounterFromTable('users', 'users'),
-                syncCounterFromTable('asset_stocks', 'asset_names', "type = 'stock'"),
-                syncCounterFromTable('asset_funds', 'asset_names', "type = 'fund'"),
-                syncCounterFromTable('quotes_count', 'asset_quotes')
-            ]);
+            await recountAll();
+        } else {
+            // 自愈：计数器整体超过 6 小时未更新时，在后台补一次重算（每个 isolate 10 分钟最多一次，
+            // 避免管理端反复打开造成 COUNT(*) 放大）
+            const RECOUNT_KEY = 'admin_counters_recount_at';
+            const lastRecount = memoryCache.get(RECOUNT_KEY) || 0;
+            if (Date.now() - lastRecount > 10 * 60 * 1000) {
+                try {
+                    const row = await db.prepare('SELECT MIN(updated_at) AS oldest FROM system_stats').first();
+                    const oldestMs = row?.oldest ? new Date(`${row.oldest}Z`).getTime() : 0;
+                    if (!oldestMs || Date.now() - oldestMs > 6 * 3600 * 1000) {
+                        memoryCache.set(RECOUNT_KEY, Date.now());
+                        const cf = await getCloudflareCtx();
+                        const task = recountAll();
+                        if (cf?.ctx?.waitUntil) cf.ctx.waitUntil(task);
+                        else await task;
+                    }
+                } catch (e) {
+                    console.error('[AdminStats] counter self-heal skipped:', e.message);
+                }
+            }
         }
 
-        const { getCounters } = await import('@/lib/storage/statsRepo');
         const [counters, queueRow] = await Promise.all([
             getCounters([
                 'users', 'asset_stocks', 'asset_funds', 'history_points',

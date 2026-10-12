@@ -2,7 +2,6 @@
 
 import { useState, useEffect, useCallback, useRef, Suspense } from 'react';
 import { AnimatePresence } from 'framer-motion';
-import { useSearchParams } from 'next/navigation';
 
 import { useAdminAuth } from './_hooks/useAdminAuth';
 import { useAdminData } from './_hooks/useAdminData';
@@ -19,8 +18,6 @@ import { AssetStatusSection } from './_components/sections/assets';
 function AdminCommandCenter() {
     const [activeSection, setActiveSection] = useState('overview');
     const [toast, setToast] = useState(null);
-    const searchParams = useSearchParams();
-    const urlKey = searchParams.get('key') || searchParams.get('token');
 
     // 定时器放 ref：曾经把 handle 存在 state 里，导致每次 showToast 都产生新函数身份
     // （showToast → fetchAssetStatus → tab effect 依赖），进入「资产监控」后会无限循环打接口。
@@ -39,16 +36,13 @@ function AdminCommandCenter() {
     const auth = useAdminAuth();
     const data = useAdminData(auth.secretKey, showToast, auth.handleAuthFailure);
 
-    // 初始化：从 URL 或 sessionStorage 恢复密钥
+    // 初始化：只从本地存储恢复密钥（不再接受 URL ?key=，避免 PSK 进入日志/历史/Referer）
     useEffect(() => {
         const storedKey = auth.restoreFromStorage();
-        const finalKey = urlKey || storedKey;
-        if (!finalKey) return;
+        if (!storedKey) return;
 
-        auth.setSecretKey(finalKey);
-        if (urlKey) window.history.replaceState({}, '', window.location.pathname);
-
-        data.fetchAllData(finalKey).then(() => auth.authenticate(finalKey));
+        auth.setSecretKey(storedKey);
+        data.fetchAllData(storedKey).then(() => auth.authenticate(storedKey));
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
