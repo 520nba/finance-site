@@ -2,8 +2,8 @@
 
 import { useState, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { TrendingUp, PieChart, RefreshCw, X, Activity, ShieldCheck } from 'lucide-react';
-import SearchBar from '@/components/SearchBar';
+import { TrendingUp, PieChart, RefreshCw, X, Activity, ShieldCheck, Plus } from 'lucide-react';
+import AddAssetModal from '@/components/AddAssetModal';
 import AssetCard from '@/components/AssetCard';
 import WatchlistSidebar from '@/components/WatchlistSidebar';
 import LogsModal from '@/components/LogsModal';
@@ -12,6 +12,7 @@ import { readAdminKey, writeAdminKey } from '@/lib/client/adminKey';
 
 export default function DashboardClient() {
     const [showLogs, setShowLogs] = useState(false);
+    const [showAdd, setShowAdd] = useState(false);
 
     // 1. 认证状态 (低频)
     const {
@@ -92,9 +93,8 @@ export default function DashboardClient() {
                     </button>
                 </div>
 
-                <div className="flex-1 w-full lg:max-w-xl">
-                    <SearchBar onAdd={(code, opts) => addAsset(code, activeTab === 'watchlist' ? 'stock' : activeTab, opts)} />
-                </div>
+                {/* 添加表单已收进弹窗，这里只留弹性占位，顶栏不再被输入框占满一整行 */}
+                <div className="hidden lg:block flex-1" />
 
                 <div className="flex items-center justify-between w-full lg:w-auto gap-4 flex-shrink-0 pt-1">
                     <div className="flex items-center gap-4">
@@ -105,7 +105,7 @@ export default function DashboardClient() {
                         {isLogged && (
                             <button
                                 onClick={handleLogout}
-                                className="text-[10px] font-bold opacity-50 hover:opacity-100 hover:text-red-400 uppercase tracking-widest transition-all"
+                                className="text-[10px] font-bold opacity-50 hover:opacity-100 hover:text-red-400 uppercase tracking-widest transition-all flex-shrink-0 whitespace-nowrap"
                             >
                                 退出
                             </button>
@@ -113,6 +113,16 @@ export default function DashboardClient() {
                     </div>
 
                     <div className="flex items-center gap-2">
+                        {isLogged && (
+                            <button
+                                onClick={() => setShowAdd(true)}
+                                title="添加资产"
+                                className="flex items-center gap-2 px-4 py-2 rounded-full bg-blue-600 hover:bg-blue-500 text-white transition-all shadow-lg shadow-blue-600/20 flex-shrink-0 whitespace-nowrap"
+                            >
+                                <Plus size={16} />
+                                <span className="text-xs font-bold uppercase tracking-widest hidden sm:inline">添加资产</span>
+                            </button>
+                        )}
                         {isLogged && (
                             <button
                                 onClick={() => {
@@ -227,8 +237,14 @@ export default function DashboardClient() {
                                         className="col-span-full text-center py-24 glass-effect border-dashed border-white/5"
                                     >
                                         <p className="text-white/45 italic tracking-widest">
-                                            暂无相关数据，输入代码开启追踪
+                                            暂无相关数据，添加代码开启追踪
                                         </p>
+                                        <button
+                                            onClick={() => setShowAdd(true)}
+                                            className="mt-6 inline-flex items-center gap-2 px-5 py-2.5 rounded-full bg-blue-600/20 border border-blue-500/30 hover:bg-blue-600/40 transition-all font-bold"
+                                        >
+                                            <Plus size={16} /> 添加资产
+                                        </button>
                                     </motion.div>
                                 )}
                             </div>
@@ -236,6 +252,13 @@ export default function DashboardClient() {
                     </AnimatePresence>
                 </div>
             </div>
+
+            <AddAssetModal
+                isOpen={showAdd}
+                onClose={() => setShowAdd(false)}
+                onAdd={(code, opts) => addAsset(code, activeTab === 'watchlist' ? 'stock' : activeTab, opts)}
+                tabLabel={activeTab === 'fund' ? '基金' : '股票'}
+            />
 
             <LogsModal isOpen={showLogs} onClose={() => setShowLogs(false)} />
 

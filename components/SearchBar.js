@@ -13,7 +13,7 @@ function parseCodes(raw) {
     return { valid, invalid };
 }
 
-export default function SearchBar({ onAdd }) {
+export default function SearchBar({ onAdd, stacked = false }) {
     const [query, setQuery] = useState('');
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState('');
@@ -91,38 +91,41 @@ export default function SearchBar({ onAdd }) {
         <div className="w-full space-y-2">
             {/* 单个添加 */}
             <form onSubmit={handleSearch} className="relative">
-                <div className="flex gap-3">
-                    <div className="relative flex-1">
+                {/* stacked：弹窗内的布局——输入框独占一行，按钮等宽换行（主页不再使用本组件） */}
+                <div className={`flex gap-3 ${stacked ? 'flex-col' : ''}`}>
+                    <div className="relative flex-1 min-w-0">
                         <Search className="absolute left-4 top-1/2 -translate-y-1/2 opacity-40" size={20} />
                         <input
                             type="text"
                             value={query}
                             onChange={(e) => { setQuery(e.target.value); setError(''); }}
-                            placeholder="输入代码 (如 SZ000001、SH600028、110011)"
-                            className={`w-full glass-effect bg-white/5 pl-12 pr-4 py-3 outline-none transition-all
+                            placeholder="输入代码 (如 SH600036、110011)"
+                            className={`w-full glass-effect bg-white/5 pl-12 pr-4 py-3 outline-none transition-all placeholder:text-white/35
                                 ${error ? 'border-red-500/60 focus:border-red-500' : 'border-white/10 focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/50'}`}
                         />
                     </div>
-                    <button
-                        type="submit"
-                        disabled={isLoading}
-                        className="glass-effect bg-blue-600/20 border-blue-500/30 px-6 py-3 hover:bg-blue-600/40 transition-all flex items-center gap-2 font-bold disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                        {isLoading ? <Loader2 size={18} className="animate-spin" /> : <><Plus size={20} /> 添加</>}
-                    </button>
-                    {/* 批量切换按钮 */}
-                    <button
-                        type="button"
-                        onClick={() => { setShowBatch(v => !v); setBatchProgress(null); }}
-                        title="批量添加"
-                        className={`glass-effect px-4 py-3 transition-all flex items-center gap-1.5 font-bold text-sm
-                            ${showBatch
-                                ? 'bg-cyan-600/30 border-cyan-500/50 text-cyan-300'
-                                : 'bg-white/5 border-white/10 opacity-60 hover:opacity-100'}`}
-                    >
-                        {showBatch ? <ChevronUp size={18} /> : <ListPlus size={18} />}
-                        批量
-                    </button>
+                    <div className={`flex gap-3 ${stacked ? 'w-full' : ''}`}>
+                        <button
+                            type="submit"
+                            disabled={isLoading}
+                            className={`glass-effect bg-blue-600/20 border-blue-500/30 px-6 py-3 hover:bg-blue-600/40 transition-all flex items-center justify-center gap-2 font-bold disabled:opacity-50 disabled:cursor-not-allowed ${stacked ? 'flex-1' : ''}`}
+                        >
+                            {isLoading ? <Loader2 size={18} className="animate-spin" /> : <><Plus size={20} /> 添加</>}
+                        </button>
+                        {/* 批量切换按钮 */}
+                        <button
+                            type="button"
+                            onClick={() => { setShowBatch(v => !v); setBatchProgress(null); }}
+                            title="批量添加"
+                            className={`glass-effect px-4 py-3 transition-all flex items-center justify-center gap-1.5 font-bold text-sm ${stacked ? 'flex-1' : ''}
+                                ${showBatch
+                                    ? 'bg-cyan-600/30 border-cyan-500/50 text-cyan-300'
+                                    : 'bg-white/5 border-white/10 opacity-70 hover:opacity-100'}`}
+                        >
+                            {showBatch ? <ChevronUp size={18} /> : <ListPlus size={18} />}
+                            批量
+                        </button>
+                    </div>
                 </div>
                 {error && <p className="mt-2 ml-1 text-xs text-red-400">{error}</p>}
             </form>
