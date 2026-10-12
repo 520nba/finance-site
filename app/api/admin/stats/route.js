@@ -32,14 +32,17 @@ export async function GET(request) {
 
         // 全量重算清单。此前只重算 4 项，history_points / intraday_points
         // 从未被任何代码维护过 → 管理端长期显示 7 个月前的数字、分时点位数恒为 0。
+        // 另外股票/基金数原先统计 asset_names（名称缓存，会包含已无人跟踪的孤儿条目，
+        // 实测虚高 2 个），改为统计 user_assets 才是"正在跟踪的资产"。
         const FULL_COUNTER_SYNC = [
             ['users', 'users'],
-            ['asset_stocks', 'asset_names', "type = 'stock'"],
-            ['asset_funds', 'asset_names', "type = 'fund'"],
+            ['asset_stocks', 'user_assets', "type = 'stock'"],
+            ['asset_funds', 'user_assets', "type = 'fund'"],
             ['quotes_count', 'asset_quotes'],
             ['history_points', 'asset_history'],
             ['intraday_points', 'asset_intraday']
         ];
+        const MAINTAINED_KEYS = FULL_COUNTER_SYNC.map(([key]) => key);
 
         const recountAll = async () => {
             for (const [key, table, where] of FULL_COUNTER_SYNC) {
@@ -50,13 +53,18 @@ export async function GET(request) {
         if (shouldSync) {
             await recountAll();
         } else {
-            // 自愈：计数器整体超过 6 小时未更新时，在后台补一次重算（每个 isolate 10 分钟最多一次，
-            // 避免管理端反复打开造成 COUNT(*) 放大）
+            // 自愈：被维护的计数器整体超过 6 小时未更新时，在后台补一次重算
+            // （每个 isolate 10 分钟最多一次，避免管理端反复打开造成 COUNT(*) 放大）。
+            // 注意只统计 MAINTAINED_KEYS——queue_count 等遗留行的时间戳很旧，
+            // 若纳入 MIN() 会导致每次打开管理端都误判为"陈旧"而反复重算。
             const RECOUNT_KEY = 'admin_counters_recount_at';
             const lastRecount = memoryCache.get(RECOUNT_KEY) || 0;
             if (Date.now() - lastRecount > 10 * 60 * 1000) {
                 try {
-                    const row = await db.prepare('SELECT MIN(updated_at) AS oldest FROM system_stats').first();
+                    const placeholders = MAINTAINED_KEYS.map(() => '?').join(',');
+                    const row = await db.prepare(
+                        `SELECT MIN(updated_at) AS oldest FROM system_stats WHERE key IN (${placeholders})`
+                    ).bind(...MAINTAINED_KEYS).first();
                     const oldestMs = row?.oldest ? new Date(`${row.oldest}Z`).getTime() : 0;
                     if (!oldestMs || Date.now() - oldestMs > 6 * 3600 * 1000) {
                         memoryCache.set(RECOUNT_KEY, Date.now());
