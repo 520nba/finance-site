@@ -51,26 +51,40 @@ export default function SearchBar({ onAdd }) {
 
         setBatchProgress({ done: 0, total: valid.length, msg: '' });
 
-        let success = 0;
+        // onAdd 会返回 { ok } —— 之前忽略返回值、无条件 success++，
+        // 导致全部失败也提示"✓ 全部完成"（实测在基金 tab 贴股票代码即可复现）
+        const failed = [];
         for (let i = 0; i < valid.length; i++) {
             const normalizedCode = valid[i].toLowerCase();
             setBatchProgress({ done: i, total: valid.length, msg: `正在添加 ${normalizedCode}…` });
-            await onAdd(normalizedCode);
-            success++;
+            const res = await onAdd(normalizedCode, { silent: true });
+            if (!res?.ok) failed.push({ code: normalizedCode, error: res?.error || '添加失败' });
         }
 
+        const okCount = valid.length - failed.length;
         const skippedMsg = invalid.length > 0 ? `，${invalid.length} 个无效代码已跳过` : '';
-        setBatchProgress({
-            done: valid.length,
-            total: valid.length,
-            msg: `✓ 全部完成，共 ${success} 个${skippedMsg}`,
-            isDone: true,
-        });
-        setBatchInput('');
-        setTimeout(() => {
-            setBatchProgress(null);
-            setShowBatch(false);
-        }, 2500);
+
+        if (failed.length === 0) {
+            setBatchProgress({
+                done: valid.length,
+                total: valid.length,
+                msg: `✓ 全部完成，共 ${okCount} 个${skippedMsg}`,
+                isDone: true,
+            });
+            setBatchInput('');
+            setTimeout(() => {
+                setBatchProgress(null);
+                setShowBatch(false);
+            }, 2500);
+        } else {
+            setBatchProgress({
+                done: valid.length,
+                total: valid.length,
+                msg: `成功 ${okCount} 个，失败 ${failed.length} 个：${failed.map(f => f.code).join('、')}${skippedMsg}`,
+                isError: true,
+                isDone: true,
+            });
+        }
     };
 
     return (

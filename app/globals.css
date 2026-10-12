@@ -10,6 +10,30 @@
   --accent-green: #10b981;
   --accent-red: #ef4444;
   --glass-blur: 12px;
+
+  /* 告诉浏览器本页是深色主题：原生控件、滚动条、自动填充弹层、
+     以及 <select> 的下拉列表都会按深色渲染，而不是默认的亮色 */
+  color-scheme: dark;
+}
+
+/* Chrome/Safari 自动填充会强制给输入框铺上浅色背景（实测在纯黑页面上变成白框）。
+   用 inset box-shadow 覆盖 + 超长 transition 抑制背景色动画，保持深色玻璃质感。 */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus,
+textarea:-webkit-autofill {
+  -webkit-text-fill-color: #ffffff;
+  -webkit-box-shadow: 0 0 0 1000px rgba(255, 255, 255, 0.06) inset;
+  box-shadow: 0 0 0 1000px rgba(255, 255, 255, 0.06) inset;
+  caret-color: #ffffff;
+  transition: background-color 5000s ease-in-out 0s;
+}
+
+/* 键盘导航可见性：仅在键盘聚焦时显示焦点环（鼠标点击不显示） */
+:focus-visible {
+  outline: 2px solid rgba(59, 130, 246, 0.75);
+  outline-offset: 2px;
+  border-radius: 8px;
 }
 
 html,

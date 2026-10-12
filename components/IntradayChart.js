@@ -122,7 +122,7 @@ export default function IntradayChart({ data, prevClose, height = 300 }) {
                 data: FULL_TIME_AXIS,
                 axisLine: { lineStyle: { color: 'rgba(255, 255, 255, 0.1)' } },
                 axisLabel: {
-                    color: 'rgba(255, 255, 255, 0.3)',
+                    color: 'rgba(255, 255, 255, 0.55)',
                     fontSize: 10,
                     interval: (index, value) => {
                         return ['09:30', '10:30', '11:30', '13:00', '14:00', '15:00'].includes(value);

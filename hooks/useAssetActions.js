@@ -33,41 +33,51 @@ export function useAssetActions({ activeTabRef, setAssets, setIsSyncing, showToa
     /**
      * 添加资产到自选列表
      * 包含格式校验 -> 数据预加载 -> 去重写入
+     * @returns {Promise<{ok: boolean, added?: boolean, error?: string}>}
+     *          返回结果供调用方判断真实成败（批量添加的计数依赖它）
      */
-    const addAsset = useCallback(async (rawCode, typeHint) => {
+    const addAsset = useCallback(async (rawCode, typeHint, { silent = false } = {}) => {
         setIsSyncing(true);
         const code = rawCode.trim().toLowerCase();
         const currentTab = activeTabRef.current;
 
-        // 格式校验
-        if (typeHint === 'stock' || currentTab === 'watchlist') {
-            if (!/^[a-zA-Z]{2}\d{6}$/i.test(code)) {
-                showToast('股票代码必须包含市场前缀 (如 sh600036)');
-                setIsSyncing(false);
-                return;
+        try {
+            // 格式校验
+            if (typeHint === 'stock' || currentTab === 'watchlist') {
+                if (!/^[a-zA-Z]{2}\d{6}$/i.test(code)) {
+                    const error = '股票代码必须包含市场前缀 (如 sh600036)';
+                    if (!silent) showToast(error);
+                    return { ok: false, error };
+                }
+            } else if (typeHint === 'fund') {
+                if (!/^\d{6}$/.test(code)) {
+                    const error = '基金代码必须为 6 位数字';
+                    if (!silent) showToast(error);
+                    return { ok: false, error };
+                }
             }
-        } else if (typeHint === 'fund') {
-            if (!/^\d{6}$/.test(code)) {
-                showToast('基金代码必须为 6 位数字');
-                setIsSyncing(false);
-                return;
-            }
-        }
 
-        const asset = await getAssetDetails(code, typeHint);
-        if (asset) {
-            const list = Array.isArray(assetsRef.current) ? assetsRef.current : [];
-            // 去重：已存在则不重复添加
-            if (!list.find(a => a.code === code)) {
-                const newList = [...list, asset];
-                setAssets(newList);
-                // 立即触发强制同步，避免依赖 useEffect 引发新旧状态竞态
-                syncAssetsToServer(newList);
+            const asset = await getAssetDetails(code, typeHint);
+            if (!asset) {
+                const error = '加载失败，可能代码无效';
+                if (!silent) showToast(error);
+                return { ok: false, error };
             }
-        } else {
-            showToast('加载失败，可能代码无效');
+
+            const list = Array.isArray(assetsRef.current) ? assetsRef.current : [];
+            // 去重：已存在则视为成功（幂等），不重复添加
+            if (list.find(a => a.code === code)) {
+                return { ok: true, added: false };
+            }
+
+            const newList = [...list, asset];
+            setAssets(newList);
+            // 立即触发强制同步，避免依赖 useEffect 引发新旧状态竞态
+            syncAssetsToServer(newList);
+            return { ok: true, added: true };
+        } finally {
+            setIsSyncing(false);
         }
-        setIsSyncing(false);
     }, [activeTabRef, getAssetDetails, setIsSyncing, setAssets, showToast, assetsRef, syncAssetsToServer]);
 
     /**

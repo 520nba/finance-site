@@ -34,7 +34,7 @@ export default function VolatilityChart({ data, title, color = '#3b82f6', height
                     const parts = val.split('-');
                     return `${parts[1]}-${parts[2]}`;
                 },
-                color: 'rgba(255, 255, 255, 0.2)',
+                color: 'rgba(255, 255, 255, 0.45)',
                 fontSize: 9
             },
             axisTick: { show: false }

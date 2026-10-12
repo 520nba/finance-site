@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { TrendingUp, PieChart, RefreshCw, X, Activity, ShieldCheck } from 'lucide-react';
 import SearchBar from '@/components/SearchBar';
@@ -35,6 +35,15 @@ export default function DashboardClient() {
 
     // ✅ DashboardClient 不调用 useQuotes()，彻底解除对高频行情 Context 的订阅
 
+    // 登录/注册共用一个提交入口：useAuth 的 handleLogin/handleRegister 会返回
+    // { ok, error }，此前 onClick 直接把它丢掉 → 密码错误/用户名占用/网络异常时界面毫无反馈。
+    const submitCredentials = useCallback(async () => {
+        const res = isRegistering ? await handleRegister() : await handleLogin();
+        if (res && res.ok === false) {
+            showToast(res.error || (isRegistering ? '注册失败，请重试' : '登录失败，请检查用户名与密码'));
+        }
+    }, [isRegistering, handleRegister, handleLogin, showToast]);
+
 
     const filteredAssets = assets.filter(a => activeTab === 'watchlist' ? a.type === 'stock' : a.type === activeTab);
 
@@ -59,7 +68,9 @@ export default function DashboardClient() {
                 )}
             </AnimatePresence>
 
-            <div className="flex flex-col lg:flex-row items-center lg:items-start justify-between mb-8 lg:mb-12 gap-6 lg:gap-8">
+            {/* 未登录时整套操作栏不渲染：此前访客也能看到 tabs/搜索/添加/批量/日志/同步，
+                点了要么弹错、要么静默 401 */}
+            <div className={`${isLogged ? 'flex' : 'hidden'} flex-col lg:flex-row items-center lg:items-start justify-between mb-8 lg:mb-12 gap-6 lg:gap-8`}>
                 <div className="flex w-full lg:w-auto glass-effect p-1 bg-white/5 border-white/5 flex-shrink-0">
                     <button
                         onClick={() => setActiveTab('stock')}
@@ -82,19 +93,19 @@ export default function DashboardClient() {
                 </div>
 
                 <div className="flex-1 w-full lg:max-w-xl">
-                    <SearchBar onAdd={(code) => addAsset(code, activeTab === 'watchlist' ? 'stock' : activeTab)} />
+                    <SearchBar onAdd={(code, opts) => addAsset(code, activeTab === 'watchlist' ? 'stock' : activeTab, opts)} />
                 </div>
 
                 <div className="flex items-center justify-between w-full lg:w-auto gap-4 flex-shrink-0 pt-1">
                     <div className="flex items-center gap-4">
                         <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-white/5 border border-white/5">
                             <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
-                            <span className="text-[10px] font-mono opacity-40 uppercase tracking-widest">{userId}</span>
+                            <span className="text-[10px] font-mono opacity-70 uppercase tracking-widest">{userId}</span>
                         </div>
                         {isLogged && (
                             <button
                                 onClick={handleLogout}
-                                className="text-[10px] font-bold opacity-20 hover:opacity-100 hover:text-red-400 uppercase tracking-widest transition-all"
+                                className="text-[10px] font-bold opacity-50 hover:opacity-100 hover:text-red-400 uppercase tracking-widest transition-all"
                             >
                                 退出
                             </button>
@@ -111,7 +122,7 @@ export default function DashboardClient() {
                                     if (key) writeAdminKey(key);
                                     window.open('/admin', '_blank');
                                 }}
-                                className="p-2.5 rounded-full border border-white/10 opacity-20 hover:opacity-100 transition-all hover:bg-cyan-500/10 hover:border-cyan-500/30"
+                                className="p-2.5 rounded-full border border-white/10 opacity-40 hover:opacity-100 transition-all hover:bg-cyan-500/10 hover:border-cyan-500/30"
                                 title="管理员控制中心"
                             >
                                 <ShieldCheck size={14} className="text-cyan-400" />
@@ -119,7 +130,7 @@ export default function DashboardClient() {
                         )}
                         <button
                             onClick={() => setShowLogs(true)}
-                            className="flex items-center gap-2 px-4 py-2 rounded-full border border-white/10 opacity-40 hover:opacity-100 transition-all font-bold"
+                            className="flex items-center gap-2 px-4 py-2 rounded-full border border-white/10 opacity-70 hover:opacity-100 transition-all font-bold"
                         >
                             <Activity size={14} />
                             <span className="text-xs font-bold uppercase tracking-widest hidden sm:inline">日志</span>
@@ -127,7 +138,7 @@ export default function DashboardClient() {
                         <button
                             onClick={() => refreshAssets()}
                             disabled={isSyncing}
-                            className={`flex items-center gap-2 px-4 py-2 rounded-full border border-white/10 opacity-40 hover:opacity-100 transition-all disabled:cursor-not-allowed ${isSyncing ? 'animate-pulse' : ''}`}
+                            className={`flex items-center gap-2 px-4 py-2 rounded-full border border-white/10 opacity-70 hover:opacity-100 transition-all disabled:cursor-not-allowed ${isSyncing ? 'animate-pulse' : ''}`}
                         >
                             <RefreshCw size={14} className={isSyncing ? 'animate-spin' : ''} />
                             <span className="text-xs font-bold uppercase tracking-widest hidden sm:inline">同步</span>
@@ -157,7 +168,7 @@ export default function DashboardClient() {
                                 className="max-w-md mx-auto py-24 text-center"
                             >
                                 <h2 className="text-2xl font-black italic mb-2 tracking-tighter">账户登录</h2>
-                                <p className="text-white/30 text-sm mb-8">
+                                <p className="text-white/50 text-sm mb-8">
                                     {isRegistering ? '创建一个新账户以开启同步' : '输入您的凭据以访问自选列表'}
                                 </p>
                                 <div className="space-y-4 max-w-sm mx-auto">
@@ -176,11 +187,11 @@ export default function DashboardClient() {
                                         value={passwordInput}
                                         onChange={(e) => setPasswordInput(e.target.value)}
                                         className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 outline-none focus:border-blue-500/50 transition-all text-sm font-mono text-white"
-                                        onKeyDown={(e) => e.key === 'Enter' && !isPending && (isRegistering ? handleRegister() : handleLogin())}
+                                        onKeyDown={(e) => e.key === 'Enter' && !isPending && submitCredentials()}
                                     />
                                     <div className="flex flex-col gap-3 pt-2">
                                         <button
-                                            onClick={isRegistering ? handleRegister : handleLogin}
+                                            onClick={submitCredentials}
                                             disabled={isPending}
                                             className={`w-full ${isPending ? 'bg-blue-600/50 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-500 text-white'} py-3 rounded-xl font-black uppercase tracking-widest text-sm transition-all shadow-lg shadow-blue-600/20 flex items-center justify-center gap-2`}
                                         >
@@ -190,7 +201,7 @@ export default function DashboardClient() {
                                         <button
                                             onClick={() => setIsRegistering(!isRegistering)}
                                             disabled={isPending}
-                                            className="text-xs font-bold text-white/20 hover:text-white/60 transition-colors uppercase tracking-widest disabled:opacity-50"
+                                            className="text-xs font-bold text-white/45 hover:text-white/80 transition-colors uppercase tracking-widest disabled:opacity-50"
                                         >
                                             {isRegistering ? '已有账号？返回登录' : '没有账号？创建新身份'}
                                         </button>
@@ -215,7 +226,7 @@ export default function DashboardClient() {
                                         animate={{ opacity: 1 }}
                                         className="col-span-full text-center py-24 glass-effect border-dashed border-white/5"
                                     >
-                                        <p className="text-white/20 italic tracking-widest">
+                                        <p className="text-white/45 italic tracking-widest">
                                             暂无相关数据，输入代码开启追踪
                                         </p>
                                     </motion.div>
@@ -228,7 +239,7 @@ export default function DashboardClient() {
 
             <LogsModal isOpen={showLogs} onClose={() => setShowLogs(false)} />
 
-            <footer className="mt-24 pt-12 border-t border-white/5 text-center text-white/20 text-sm">
+            <footer className="mt-24 pt-12 border-t border-white/5 text-center text-white/40 text-sm">
                 <p>&copy; 2026 Antigravity 金融实验室。数据源由 腾讯 &amp; 天天基金 提供。</p>
             </footer>
         </main>
