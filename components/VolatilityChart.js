@@ -26,6 +26,10 @@ export default function VolatilityChart({ data, title, color = '#3b82f6', height
         xAxis: {
             type: 'category',
             data: data.map(d => d.date),
+            // 关键：关掉类目轴两端默认的半格留白。
+            // 否则首尾点各内缩「半格」——5 日只有 6 个点，内缩约 1/12 图宽；
+            // 250 日有 251 个点几乎贴边。三张图（5/22/250 日）的起止位置就会错开。
+            boundaryGap: false,
             axisLine: { lineStyle: { color: 'rgba(255, 255, 255, 0.1)' } },
             axisLabel: {
                 show: true,
