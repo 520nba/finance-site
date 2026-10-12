@@ -1,4 +1,4 @@
-﻿import { NextResponse } from 'next/server';
+import { NextResponse } from 'next/server';
 import { isAdminAuthorized } from '@/lib/auth/adminAuth';
 
 export const dynamic = 'force-dynamic';
@@ -26,9 +26,8 @@ export async function GET(request) {
                 j.type, 
                 j.created_at, 
                 j.updated_at,
-                n.name as asset_name
+                (SELECT n.name FROM asset_names n WHERE n.code = j.code LIMIT 1) as asset_name
             FROM sync_jobs j
-            LEFT JOIN asset_names n ON j.code = n.code
         `;
         const params = [];
 
@@ -37,7 +36,11 @@ export async function GET(request) {
             params.push(filterType);
         }
 
-        query += ' GROUP BY j.id ORDER BY j.updated_at DESC LIMIT 600';
+        // 取最近 600 条：ORDER BY id DESC 命中 INTEGER PRIMARY KEY 反向扫描，取满即停。
+        // 原实现是 `GROUP BY j.id ORDER BY j.updated_at DESC`，EXPLAIN 实测为
+        // `SCAN j` + `USE TEMP B-TREE FOR ORDER BY`（全表 3k 行扫描并排序）；
+        // 同时把 LEFT JOIN 换成按主键的标量子查询，避免同 code 多 type 时的行放大。
+        query += ' ORDER BY j.id DESC LIMIT 600';
 
         const items = await queryAll(query, params);
 
