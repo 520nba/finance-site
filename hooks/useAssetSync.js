@@ -1,4 +1,4 @@
-﻿import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { fetchBulkStockQuotes } from '@/lib/api/client/quotesService';
 import { fetchBulkNames } from '@/lib/api/client/namesService';
 import { fetchBulkHistory } from '@/lib/api/client/historyService';
@@ -11,81 +11,87 @@ export function useAssetSync({ userId, isLogged }) {
     const [isSessionReady, setIsSessionReady] = useState(false);
 
     const refreshAssets = useCallback(async (list) => {
-        if (!list || list.length === 0) return;
+        // 只接受数组：调用方可能把 React 事件对象直接传进来（历史 bug），
+        // 这里兜底避免 list.map 抛错；真正的修复在调用侧（AssetProvider/DashboardClient）。
+        const items = Array.isArray(list) ? list : [];
+        if (items.length === 0) return;
+
         setIsSyncing(true);
-
-        // 1. 立刻渲染骨架，消除阻塞感
-        // 优先从 localStorage 读取缓存名称，实现秒开显示
-        let localNames = {};
         try {
-            localNames = JSON.parse(localStorage.getItem(ASSET_NAMES_CACHE_KEY) || '{}');
-        } catch (e) { /* ignore */ }
-
-        const skeletonAssets = list.map(({ code, type }) => {
-            const cacheKey = `${type}:${code}`;
-            const cachedName = localNames[cacheKey];
-            return {
-                name: cachedName || '加载中...',
-                price: 0,
-                code,
-                type,
-                history: [],
-                summary: null,
-                changePercent: 0
-            };
-        });
-        setAssets(skeletonAssets);
-
-        // 2. 仅获取基础名称与股票实时报价
-        try {
-            const stockItems = list.filter(a => a.type === 'stock');
-            const [stockQuoteMap, nameMap] = await Promise.all([
-                fetchBulkStockQuotes(stockItems, true),
-                fetchBulkNames(list.map(a => ({ code: a.code, type: a.type })), true),
-            ]);
-
-            const initialAssets = list.map(({ code, type }) => {
-                const histKey = `${type}:${code}`;
-                const name = nameMap[histKey];
-                if (type === 'stock') {
-                    const q = stockQuoteMap[code.toLowerCase()] || stockQuoteMap[code];
-                    const resolvedName = q?.name || (name && name !== code ? name : `股票 ${code}`);
-                    return { ...q, name: resolvedName, code, type };
-                } else {
-                    return { name: (name && name !== code ? name : `基金 ${code}`), price: 0, code, type };
-                }
-            });
-
-            setAssets(initialAssets);
-
-            // 持久化名称到本地，供下次刷新秒显
+            // 1. 立刻渲染骨架，消除阻塞感
+            // 优先从 localStorage 读取缓存名称，实现秒开显示
+            let localNames = {};
             try {
-                const newLocalNames = { ...localNames };
-                Object.entries(nameMap).forEach(([key, val]) => {
-                    if (val && val !== key.split(':')[1]) {
-                        newLocalNames[key] = val;
-                    }
-                });
-                localStorage.setItem(ASSET_NAMES_CACHE_KEY, JSON.stringify(newLocalNames));
+                localNames = JSON.parse(localStorage.getItem(ASSET_NAMES_CACHE_KEY) || '{}');
             } catch (e) { /* ignore */ }
 
-            // 3. 异步补充历史数据 (Background Hydration)
-            // 这一步不需要阻塞，完成后会自动触发 UI 图表渲染
-            fetchBulkHistory(list, false, 250).then(histMap => {
-                setAssets(prev => prev.map(a => {
-                    const key = `${a.type}:${a.code}`;
-                    if (histMap[key]) {
-                        return { ...a, ...histMap[key] };
+            const skeletonAssets = items.map(({ code, type }) => {
+                const cacheKey = `${type}:${code}`;
+                const cachedName = localNames[cacheKey];
+                return {
+                    name: cachedName || '加载中...',
+                    price: 0,
+                    code,
+                    type,
+                    history: [],
+                    summary: null,
+                    changePercent: 0
+                };
+            });
+            setAssets(skeletonAssets);
+
+            // 2. 仅获取基础名称与股票实时报价
+            try {
+                const stockItems = items.filter(a => a.type === 'stock');
+                const [stockQuoteMap, nameMap] = await Promise.all([
+                    fetchBulkStockQuotes(stockItems, true),
+                    fetchBulkNames(items.map(a => ({ code: a.code, type: a.type })), true),
+                ]);
+
+                const initialAssets = items.map(({ code, type }) => {
+                    const histKey = `${type}:${code}`;
+                    const name = nameMap[histKey];
+                    if (type === 'stock') {
+                        const q = stockQuoteMap[code.toLowerCase()] || stockQuoteMap[code];
+                        const resolvedName = q?.name || (name && name !== code ? name : `股票 ${code}`);
+                        return { ...q, name: resolvedName, code, type };
+                    } else {
+                        return { name: (name && name !== code ? name : `基金 ${code}`), price: 0, code, type };
                     }
-                    return a;
-                }));
-            }).catch(e => console.warn('[Frontend:History] Background fetch failed:', e));
+                });
 
-        } catch (e) {
-            console.error('[Frontend] Refresh failed:', e);
+                setAssets(initialAssets);
+
+                // 持久化名称到本地，供下次刷新秒显
+                try {
+                    const newLocalNames = { ...localNames };
+                    Object.entries(nameMap).forEach(([key, val]) => {
+                        if (val && val !== key.split(':')[1]) {
+                            newLocalNames[key] = val;
+                        }
+                    });
+                    localStorage.setItem(ASSET_NAMES_CACHE_KEY, JSON.stringify(newLocalNames));
+                } catch (e) { /* ignore */ }
+
+                // 3. 异步补充历史数据 (Background Hydration)
+                // 这一步不需要阻塞，完成后会自动触发 UI 图表渲染
+                fetchBulkHistory(items, false, 250).then(histMap => {
+                    setAssets(prev => prev.map(a => {
+                        const key = `${a.type}:${a.code}`;
+                        if (histMap[key]) {
+                            return { ...a, ...histMap[key] };
+                        }
+                        return a;
+                    }));
+                }).catch(e => console.warn('[Frontend:History] Background fetch failed:', e));
+
+            } catch (e) {
+                console.error('[Frontend] Refresh failed:', e);
+            }
+        } finally {
+            // 必须复位：否则一旦中途抛错，同步按钮会永久 disabled、补数据 effect 也会被永久拦住
+            setIsSyncing(false);
         }
-
-        setIsSyncing(false);
     }, []);
 
     // 登录后加载服务端数据

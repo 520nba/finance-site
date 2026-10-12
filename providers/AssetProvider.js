@@ -79,7 +79,11 @@ function AssetsStructureProvider({ children }) {
     const value = useMemo(() => ({
         assets, setAssets, isSyncing, setIsSyncing, assetsRef,
         addAsset, removeAsset,
-        refreshAssets: (list) => refreshAssets(list ?? assets.map(a => ({ code: a.code, type: a.type }))),
+        // 归一化入参：refreshAssets 既被内部以「资产数组」调用，也可能被 UI 当 onClick 直接调用
+        // （此时收到的是 React 事件对象）。非数组一律回退为当前资产列表，避免 list.map 崩掉。
+        refreshAssets: (list) => refreshAssets(
+            Array.isArray(list) ? list : assets.map(a => ({ code: a.code, type: a.type }))
+        ),
         syncAssetsToServer
     }), [assets, isSyncing, addAsset, removeAsset, refreshAssets, syncAssetsToServer]); // ✅ 补充 refreshAssets 依赖，消除隐性闭包风险
 

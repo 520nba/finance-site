@@ -1,21 +1,23 @@
 /**
  * app/api/quotes/bulk/route.js
- * 
- * 手动获取批量行情的路由入口。完全精简逻辑，交由业务 Service 处理。
+ *
+ * 批量获取实时行情。
+ *
+ * 安全：需要登录 + items 上限（此前匿名即可触发外部抓取，旁路了 /api/proxy 的鉴权设计）。
  */
 
 import { NextResponse } from 'next/server';
 import { syncQuotesBulk } from '@/lib/services/quoteSyncService';
+import { guardBulkRequest } from '@/lib/api/guards';
 
-/**
- * 获取批量实时行情
- */
 export async function POST(request) {
-    try {
-        const { items, allowExternal = false } = await request.json();
+    const guard = await guardBulkRequest(request);
+    if (!guard.ok) return guard.response;
 
-        // 调用业务逻辑服务
-        const result = await syncQuotesBulk(items, allowExternal);
+    const { items, allowExternal = false } = guard.body;
+
+    try {
+        const result = await syncQuotesBulk(items, allowExternal === true);
 
         return NextResponse.json({
             success: true,

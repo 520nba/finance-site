@@ -1,4 +1,4 @@
-﻿/**
+/**
  * src/app/api/admin/refetch-fund-history/route.js
  * 
  * 专用基金重刷接口：投递任务到 D1 任务中心。
@@ -40,6 +40,8 @@ export async function GET(request) {
             db.prepare(`
                 INSERT INTO sync_jobs (type, code, payload, status) 
                 VALUES (?, ?, ?, 'pending')
+                ON CONFLICT(code, type) WHERE status = 'pending'
+                DO UPDATE SET payload = excluded.payload, updated_at = CURRENT_TIMESTAMP
             `).bind('fund_history', f.code.toLowerCase(), JSON.stringify({ force }))
         );
 

@@ -8,17 +8,34 @@ export default function LogsModal({ isOpen, onClose }) {
     const [logs, setLogs] = useState([]);
     const [loading, setLoading] = useState(false);
     const [hours, setHours] = useState(48);
+    const [authError, setAuthError] = useState(false);
 
     const fetchLogs = async () => {
         setLoading(true);
         try {
-            const res = await fetch(`/api/admin/logs?hours=${hours}`);
+            // 该接口需要管理员密钥（isAdminAuthorized 只认 x-admin-session/x-admin-key 等），
+            // 之前不带任何密钥 → 恒 403 → 弹窗永远显示「无日志」。密钥与后台一致取自 sessionStorage。
+            const adminKey = typeof window !== 'undefined'
+                ? sessionStorage.getItem('tracker_admin_secret')
+                : null;
+
+            const res = await fetch(`/api/admin/logs?hours=${hours}`, {
+                headers: adminKey ? { 'x-admin-key': adminKey } : {},
+            });
+
             if (res.ok) {
                 const data = await res.json();
-                setLogs(data);
+                // 后端契约是 { success, logs }，之前把整个信封塞进 state，
+                // 会让 logs.length===0 判断失效并在渲染期 logs.map 崩掉
+                setLogs(Array.isArray(data?.logs) ? data.logs : []);
+                setAuthError(false);
+            } else {
+                setLogs([]);
+                setAuthError(res.status === 401 || res.status === 403);
             }
         } catch (e) {
             console.error('Failed to fetch logs:', e);
+            setLogs([]);
         }
         setLoading(false);
     };
@@ -31,7 +48,22 @@ export default function LogsModal({ isOpen, onClose }) {
     }, [isOpen, hours]);
 
     const handleDownload = () => {
-        window.open(`/api/admin/logs?hours=${hours}&format=csv`, '_blank');
+        if (logs.length === 0) return;
+        // 后端没有 CSV 分支（`format=csv` 仍返回 JSON），改为前端生成 Blob 下载
+        const esc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+        const header = ['id', 'timestamp(UTC)', 'level', 'module', 'message'].join(',');
+        const rows = logs.map(l => [
+            l.id, l.timestamp, l.level, l.module, l.message
+        ].map(esc).join(','));
+        const blob = new Blob(['\uFEFF' + [header, ...rows].join('\r\n')], {
+            type: 'text/csv;charset=utf-8'
+        });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `system-logs-${hours}h.csv`;
+        a.click();
+        URL.revokeObjectURL(url);
     };
 
     if (!isOpen) return null;
@@ -81,7 +113,8 @@ export default function LogsModal({ isOpen, onClose }) {
 
                         <button
                             onClick={handleDownload}
-                            className="flex items-center gap-2 px-4 py-2 bg-white/5 hover:bg-white/10 rounded-xl text-xs font-bold transition-all border border-white/5"
+                            disabled={logs.length === 0}
+                            className="flex items-center gap-2 px-4 py-2 bg-white/5 hover:bg-white/10 disabled:opacity-30 disabled:cursor-not-allowed rounded-xl text-xs font-bold transition-all border border-white/5"
                         >
                             <Download size={14} />
                             <span className="hidden sm:inline">导出 CSV 报表</span>
@@ -99,6 +132,14 @@ export default function LogsModal({ isOpen, onClose }) {
                         <div className="flex items-center justify-center h-full opacity-20 animate-pulse">
                             <p className="tracking-widest uppercase font-black">正在扫描数据库日志记录...</p>
                         </div>
+                    ) : authError ? (
+                        <div className="flex flex-col items-center justify-center h-full opacity-40">
+                            <ShieldAlert size={48} className="mb-4 text-yellow-500" />
+                            <p className="tracking-widest uppercase font-black">需要管理员密钥</p>
+                            <p className="mt-2 text-[11px] opacity-60 normal-case tracking-normal">
+                                请先在管理面板完成鉴权（密钥保存在本标签页 sessionStorage）
+                            </p>
+                        </div>
                     ) : logs.length === 0 ? (
                         <div className="flex flex-col items-center justify-center h-full opacity-20">
                             <Info size={48} className="mb-4" />
@@ -109,7 +150,10 @@ export default function LogsModal({ isOpen, onClose }) {
                             {logs.map((log) => (
                                 <div key={log.id} className="group flex gap-4 p-2 rounded-lg hover:bg-white/2 transition-colors">
                                     <span className="text-white/20 whitespace-nowrap hidden md:inline">
-                                        [{new Date(log.timestamp).toLocaleTimeString()}]
+                                        [{new Date(`${log.timestamp}Z`).toLocaleTimeString('zh-CN', {
+                                            timeZone: 'Asia/Shanghai',
+                                            hour12: false
+                                        })}]
                                     </span>
                                     <span className={`font-black whitespace-nowrap min-w-[60px] ${log.level === 'ERROR' ? 'text-red-500' :
                                         log.level === 'WARN' ? 'text-yellow-500' : 'text-blue-500'

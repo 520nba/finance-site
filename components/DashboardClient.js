@@ -121,7 +121,7 @@ export default function DashboardClient() {
                             <span className="text-xs font-bold uppercase tracking-widest hidden sm:inline">日志</span>
                         </button>
                         <button
-                            onClick={refreshAssets}
+                            onClick={() => refreshAssets()}
                             disabled={isSyncing}
                             className={`flex items-center gap-2 px-4 py-2 rounded-full border border-white/10 opacity-40 hover:opacity-100 transition-all disabled:cursor-not-allowed ${isSyncing ? 'animate-pulse' : ''}`}
                         >

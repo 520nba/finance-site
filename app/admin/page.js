@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, Suspense } from 'react';
+import { useState, useEffect, useCallback, useRef, Suspense } from 'react';
 import { AnimatePresence } from 'framer-motion';
 import { useSearchParams } from 'next/navigation';
 
@@ -22,18 +22,19 @@ function AdminCommandCenter() {
     const searchParams = useSearchParams();
     const urlKey = searchParams.get('key') || searchParams.get('token');
 
-    const [toastTimer, setToastTimer] = useState(null);
+    // 定时器放 ref：曾经把 handle 存在 state 里，导致每次 showToast 都产生新函数身份
+    // （showToast → fetchAssetStatus → tab effect 依赖），进入「资产监控」后会无限循环打接口。
+    const toastTimerRef = useRef(null);
 
     const showToast = useCallback((msg, type = 'error', duration = 3000) => {
-        if (toastTimer) clearTimeout(toastTimer);
+        if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
         setToast({ msg, type });
-        if (duration > 0) {
-            const timer = setTimeout(() => setToast(null), duration);
-            setToastTimer(timer);
-        } else {
-            setToastTimer(null);
-        }
-    }, [toastTimer]);
+        toastTimerRef.current = duration > 0 ? setTimeout(() => setToast(null), duration) : null;
+    }, []);
+
+    useEffect(() => () => {
+        if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    }, []);
 
     const auth = useAdminAuth();
     const data = useAdminData(auth.secretKey, showToast, auth.handleAuthFailure);
@@ -51,11 +52,16 @@ function AdminCommandCenter() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
-    // 切换到队列 tab 时自动拉取队列数据
+    // 切换到队列/资产 tab 时拉取数据。
+    // 只依赖 activeSection：数据层回调身份会随 showToast/secretKey 变化，
+    // 放进依赖会导致「进入 tab → 拉数据 → 弹 toast → 回调换身份 → effect 重跑」的自激循环。
+    const fetchersRef = useRef({ fetchQueue: data.fetchQueue, fetchAssetStatus: data.fetchAssetStatus });
+    fetchersRef.current = { fetchQueue: data.fetchQueue, fetchAssetStatus: data.fetchAssetStatus };
+
     useEffect(() => {
-        if (activeSection === 'queue') data.fetchQueue();
-        if (activeSection === 'assets') data.fetchAssetStatus();
-    }, [activeSection, data.fetchQueue, data.fetchAssetStatus]);
+        if (activeSection === 'queue') fetchersRef.current.fetchQueue();
+        if (activeSection === 'assets') fetchersRef.current.fetchAssetStatus();
+    }, [activeSection]);
 
     if (!auth.isAuthenticated) {
         return (

@@ -2,6 +2,10 @@ import { NextResponse } from 'next/server';
 import { requireUser } from '@/lib/auth/requireUser';
 import { syncNamesBulk, syncHistoryBulk } from '@/lib/services/assetSyncService';
 import { getCloudflareCtx } from '@/lib/storage/d1Client';
+import { getUserAssets } from '@/lib/storage/userRepo';
+
+const STOCK_CODE_RE = /^(sh|sz)\d{6}$/;
+const FUND_CODE_RE = /^\d{6}$/;
 
 /**
  * 前端分片同步接口：同步单只资产的名称与历史数据
@@ -14,14 +18,38 @@ export async function POST(request) {
     }
 
     try {
-        const { code, type } = await request.json();
-        if (!code || !type) {
+        const { code: rawCode, type } = await request.json();
+        if (!rawCode || !type) {
             return NextResponse.json({ success: false, error: 'Invalid parameters' }, { status: 400 });
+        }
+
+        // 1. 类型 + 代码格式白名单（此前完全缺失：任意字符串都会进任务队列）
+        const code = String(rawCode).trim().toLowerCase();
+        const validFormat = (type === 'stock' && STOCK_CODE_RE.test(code))
+            || (type === 'fund' && FUND_CODE_RE.test(code));
+        if (!validFormat) {
+            return NextResponse.json({
+                success: false,
+                error: `Invalid code "${rawCode}" for type "${type}"`,
+                code: 'INVALID_CODE'
+            }, { status: 400 });
         }
 
         const cfCtx = await getCloudflareCtx();
         const env = cfCtx?.env || null;
         const db = env?.DB;
+
+        // 2. 归属校验：只能同步「自己的自选列表」里的资产。
+        //    此前只校验登录态，任何用户都能给任意 code 投递任务并触发外呼。
+        const owned = await getUserAssets(userId, env);
+        if (!owned.some(a => a.code === code && a.type === type)) {
+            return NextResponse.json({
+                success: false,
+                error: 'Asset not in your watchlist',
+                code: 'NOT_IN_WATCHLIST'
+            }, { status: 403 });
+        }
+
         const items = [{ code, type }];
 
         // 1. 先读 D1，如果已有完整数据直接返回，避免重复投队列
