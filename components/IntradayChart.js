@@ -56,6 +56,14 @@ export default function IntradayChart({ data, prevClose, height = 300 }) {
             return val !== undefined ? val : null;
         });
 
+        // 补齐「孤立单点空洞」（如东财序列天然缺少 13:00），否则 connectNulls:false
+        // 会在下午开盘处把曲线断开。午休那种长空洞（连续多点缺失）不受影响。
+        for (let i = 1; i < prices.length - 1; i++) {
+            if (prices[i] === null && prices[i - 1] !== null && prices[i + 1] !== null) {
+                prices[i] = prices[i + 1];
+            }
+        }
+
         // 计算百分比数据 - 确保是数字而非字符串 (Mid Prio Fix)
         const percentData = prices.map(price => {
             if (price === null) return null;
