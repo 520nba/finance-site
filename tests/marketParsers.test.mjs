@@ -63,7 +63,24 @@ test('parseTencentStockName 取名称字段', () => {
     assert.equal(parseTencentStockName(''), null);
 });
 
-test('parseFundLsjz 解析并反转为升序', () => {
+test('parseFundLsjz 解析真实结构 Data.LSJZList 并反转为升序', () => {
+    const json = {
+        Data: {
+            LSJZList: [
+                { FSRQ: '2026-10-09', DWJZ: '1.8301' },
+                { FSRQ: '2026-10-08', DWJZ: '1.8291' }
+            ],
+            FundType: '002'
+        },
+        ErrCode: 0,
+        TotalCount: 2770
+    };
+    const r = parseFundLsjz(json);
+    assert.deepEqual(r.map(p => p.date), ['2026-10-08', '2026-10-09']);
+    assert.equal(r[1].value, 1.8301);
+});
+
+test('parseFundLsjz 兼容 Data 直接是数组的情况', () => {
     const json = {
         Data: [
             { FSRQ: '2026-10-09', DWJZ: '1.8301' },
