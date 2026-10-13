@@ -13,10 +13,11 @@ database_name = "stock-tracker-db"
 database_id = "8451af7d-ba5b-47b3-915f-8aee5fa82723"
 migrations_dir = "migrations"
 
-[[kv_namespaces]]
-binding = "STOCK_DATA"
-id = "f7845bb8f6c048f0b658ac01797ced0b"
- 
+# 原有 [[kv_namespaces]] STOCK_DATA 绑定已移除：
+# 实测该命名空间为空、代码里也再无引用（原 lib/storage/kvClient.js 已删除）。
+# 注意顺序：必须先部署掉这个绑定，再去控制台/API 删除命名空间，
+# 否则「绑定还在、命名空间没了」会让下一次 wrangler 部署直接失败。
+
 [observability]
 enabled = true
  
