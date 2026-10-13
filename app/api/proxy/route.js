@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { validateProxyTarget } from '@/lib/proxy/validator';
 import { proxyFetch } from '@/lib/proxy/fetcher';
 import { normalizeProxyResponse } from '@/lib/proxy/normalizer';
+import { decodeUrlParam } from '@/lib/proxy/urlParam';
 import { requireUser } from '@/lib/auth/requireUser';
 
 export async function GET(request) {
@@ -11,7 +12,17 @@ export async function GET(request) {
         return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const rawUrl = new URL(request.url).searchParams.get('url');
+    const params = new URL(request.url).searchParams;
+
+    // 优先用 url64（base64url）：base64url 不含 % & = + /，
+    // 因此不会被「运行时多解码一层」打断。`url=` 仅在后备使用，
+    // 且只适用于不含 `&` 的简单 URL（含 & 时会在第一个 & 处被截断）。
+    const encoded = params.get('url64');
+    const rawUrl = encoded ? decodeUrlParam(encoded) : params.get('url');
+
+    if (encoded && !rawUrl) {
+        return NextResponse.json({ error: 'Invalid url64 encoding' }, { status: 400 });
+    }
 
     // 1. 安全校验
     const validation = validateProxyTarget(rawUrl);
