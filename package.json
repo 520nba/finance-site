@@ -11,7 +11,7 @@
     "start": "next start",
     "pages:build": "npx @opennextjs/cloudflare@latest build",
     "lint": "eslint",
-    "test": "node --test tests/marketParsers.test.mjs tests/fallbackChain.test.mjs tests/intradayFetcher.test.mjs tests/proxyUrlParam.test.mjs",
+    "test": "node --test tests/marketParsers.test.mjs tests/fallbackChain.test.mjs tests/intradayFetcher.test.mjs tests/proxyUrlParam.test.mjs tests/cronDispatch.test.mjs",
     "test:live": "node --test tests/intradayFetcher.test.mjs"
   },
   "dependencies": {
