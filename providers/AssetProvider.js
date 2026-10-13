@@ -141,14 +141,4 @@ export const useQuotes = () => useContext(QuotesContext);
  * ⚠️ 注意：为了性能，此聚合 Hook 不再包含高频更新的 QuotesContext (quotesMap/intradayMap)
  * 依赖行情更新的组件请显式使用 useQuotes() 原子 Hook。
  */
-export function useAsset() {
-    const auth = useAuth();
-    const ui = useUI();
-    const struct = useAssetsStructure();
 
-    return {
-        ...auth,
-        ...ui,
-        ...struct
-    };
-}

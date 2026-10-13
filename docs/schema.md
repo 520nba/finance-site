@@ -50,8 +50,13 @@
 - `record_date`: `TEXT` (PK) - 日期。
 - `data`: `TEXT` - 压缩的 JSON 字符串。
 
-### `asset_intraday_points`
-盘中实时采集的分时点位，用于增量预热。
+### ~~`asset_intraday_points`~~（已废弃，代码零引用）
+> ⚠️ 旧版「逐分钟点位」存储，已被 `asset_intraday`（整段 JSON）取代。
+> 代码里已无任何引用；`migrations/0001_init.sql` 保留其 DDL 只为与线上 `sqlite_master` 对齐。
+> 线上仍残留 1,213 行历史数据，下次清理时会先导出再 DROP。
+>
+> 同类的废弃表还有 **`sync_queue`**（0 行，旧队列，已被 `sync_jobs` 取代）。
+
 - `code`: `TEXT` (PK) - 资产代码。
 - `time`: `INTEGER` (PK) - 时间 (`HHMM`)。
 - `price`: `REAL` - 即时价。
