@@ -19,7 +19,7 @@ export async function GET(request) {
         return NextResponse.json({ success: true, data: userAssets });
     } catch (e) {
         console.error(`[Assets] GET failed for ${userId}: `, e.message);
-        return NextResponse.json({ success: false, error: e.message, code: 'D1_ERROR' }, { status: 503 });
+        return NextResponse.json({ success: false, error: 'internal_error', code: 'D1_ERROR' }, { status: 503 });
     }
 }
 
@@ -68,7 +68,13 @@ export async function POST(request) {
             // 4. 背景清理 (保留轻量级清理任务)
             const cloudflare = await getCloudflareCtx();
             const cleanupTask = Promise.all(
-                removedAssets.map(r => cleanupSingleAssetIfNotUsed(r.type, r.code).catch(() => { }))
+                removedAssets.map(r =>
+                    cleanupSingleAssetIfNotUsed(r.type, r.code).catch((err) => {
+                        // 原先这里是 .catch(() => {})：清理失败完全无痕。
+                        // 后台任务不影响主流程，但必须留下可排查的痕迹。
+                        console.error(`[UserAssets] cleanup failed for ${r.type}:${r.code}:`, err?.message || err);
+                    })
+                )
             );
             if (cloudflare?.ctx?.waitUntil) {
                 cloudflare.ctx.waitUntil(cleanupTask);
@@ -86,7 +92,7 @@ export async function POST(request) {
         console.error(`[Assets] POST critical failure for ${userId}: `, e.message);
         return NextResponse.json({
             success: false,
-            error: e.message,
+            error: 'internal_error',
             code: 'INTERNAL_ERROR'
         }, { status: 500 });
     }

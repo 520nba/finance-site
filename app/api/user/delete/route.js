@@ -27,6 +27,6 @@ export async function POST(request) {
 
     } catch (e) {
         console.error(`[Admin] User deletion failed:`, e.message);
-        return NextResponse.json({ error: e.message }, { status: 500 });
+        return NextResponse.json({ error: 'internal_error' }, { status: 500 });
     }
 }

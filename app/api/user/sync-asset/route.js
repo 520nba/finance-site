@@ -100,6 +100,6 @@ export async function POST(request) {
         });
     } catch (e) {
         console.error(`[SyncAsset] Failed for ${userId}:`, e.message);
-        return NextResponse.json({ success: false, error: e.message }, { status: 500 });
+        return NextResponse.json({ success: false, error: 'internal_error' }, { status: 500 });
     }
 }

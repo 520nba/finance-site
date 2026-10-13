@@ -15,6 +15,7 @@ export async function POST(request) {
             return NextResponse.json(result, { status: 500 });
         }
     } catch (e) {
-        return NextResponse.json({ error: e.message }, { status: 500 });
+        console.error('[app/api/admin/cleanup/route.js]', e?.stack || e?.message || e);
+        return NextResponse.json({ error: 'internal_error' }, { status: 500 });
     }
 }

@@ -27,7 +27,7 @@ export async function POST(request) {
         console.error(`[API:QuotesBulk] Post failed:`, e.message);
         return NextResponse.json({
             success: false,
-            error: e.message,
+            error: 'internal_error',
             code: 'INTERNAL_ERROR'
         }, { status: 500 });
     }

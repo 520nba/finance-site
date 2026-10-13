@@ -14,6 +14,7 @@ export async function GET(request) {
         const logs = await getSystemLogs(hours);
         return NextResponse.json({ success: true, logs });
     } catch (e) {
-        return NextResponse.json({ success: false, error: e.message }, { status: 500 });
+        console.error('[app/api/admin/logs/route.js]', e?.stack || e?.message || e);
+        return NextResponse.json({ success: false, error: 'internal_error' }, { status: 500 });
     }
 }

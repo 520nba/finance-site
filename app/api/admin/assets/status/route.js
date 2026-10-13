@@ -17,6 +17,7 @@ export async function GET(request) {
         const assets = await getAssetSyncStatus({ env: { DB: db } });
         return NextResponse.json({ assets });
     } catch (e) {
-        return NextResponse.json({ error: e.message }, { status: 500 });
+        console.error('[app/api/admin/assets/status/route.js]', e?.stack || e?.message || e);
+        return NextResponse.json({ error: 'internal_error' }, { status: 500 });
     }
 }

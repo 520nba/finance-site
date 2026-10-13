@@ -15,6 +15,7 @@ export async function POST(request) {
         const result = await syncIntradayBulk(items, allowExternal === true);
         return NextResponse.json({ success: true, data: result });
     } catch (e) {
-        return NextResponse.json({ success: false, error: e.message, code: 'INTERNAL_ERROR' }, { status: 500 });
+        console.error('[app/api/intraday/bulk/route.js]', e?.stack || e?.message || e);
+        return NextResponse.json({ success: false, error: 'internal_error', code: 'INTERNAL_ERROR' }, { status: 500 });
     }
 }

@@ -58,7 +58,8 @@ export async function GET(request) {
             status: items.some(i => i.status === 'processing') ? 'running' : (items.some(i => i.status === 'pending') ? 'pending' : 'idle')
         });
     } catch (e) {
-        return NextResponse.json({ error: e.message, status: 'error' }, { status: 500 });
+        console.error('[app/api/admin/queue/route.js]', e?.stack || e?.message || e);
+        return NextResponse.json({ error: 'internal_error', status: 'error' }, { status: 500 });
     }
 }
 
