@@ -1,4 +1,4 @@
-﻿import { useEffect, useRef } from 'react';
+import { useEffect, useRef } from 'react';
 import { fetchBulkStockQuotes } from '@/lib/api/client/quotesService';
 import { fetchBulkIntradayData } from '@/lib/api/client/intradayService';
 
@@ -64,6 +64,22 @@ export function useRealtimeQuotes({
             if (stockItems.length === 0) return;
 
             try {
+                // 两段式：先用 D1 里已有的快照立即渲染（约 0.2s），
+                // 再允许外抓刷新（27 只约 2~3s，此前一次到位要等近 9s）。
+                // 这样进「实时」tab 是秒开，曲线随后自动补齐/更新。
+                const cached = await fetchBulkIntradayData(stockItems, false);
+                if (Object.keys(cached).length > 0) {
+                    setIntradayMap(prev => {
+                        const next = { ...prev, ...cached };
+                        intradayMapRef.current = next;
+                        return next;
+                    });
+                }
+            } catch (e) {
+                console.warn('[IntradayQuotes] Cached phase failed:', e.message);
+            }
+
+            try {
                 const result = await fetchBulkIntradayData(stockItems, true);
                 if (Object.keys(result).length > 0) {
                     // 统一分时数据批量轮询（替代此前各卡片独立 SWR，大幅节省 Fetch 配额）
@@ -78,17 +94,21 @@ export function useRealtimeQuotes({
             }
         };
 
-        // 首次加载后检查缺失的资产，30秒后重试一次
-        // 解决网络缓慢时首批请求未取到的问题
+        // 首次加载后检查缺失的资产，30 秒后重试一次
+        // 解决网络缓慢时首批请求未取到的问题（句柄要保存，卸载时清掉）
+        let retryTimer = null;
         tickIntraday().then(() => {
             const missing = assetsRef.current.filter(a => a.type === 'stock' && !intradayMapRef.current[a.code]);
             if (missing.length > 0) {
-                setTimeout(tickIntraday, 30000);
+                retryTimer = setTimeout(tickIntraday, 30000);
             }
         });
 
         const intradayTimer = setInterval(tickIntraday, 120000);
 
-        return () => clearInterval(intradayTimer);
+        return () => {
+            clearInterval(intradayTimer);
+            if (retryTimer) clearTimeout(retryTimer);
+        };
     }, [activeTab, isLogged, assetsRef, setIntradayMap]);
 }

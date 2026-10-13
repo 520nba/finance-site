@@ -108,7 +108,12 @@ test('股票历史：优先选「最新交易日」更靠后的源（陈旧非�
     assert.ok(r.attempts.some(a => a.source === 'tencent' && /stale/.test(a.error)));
 });
 
-test('股票历史：主源已是当日数据时提前结束，不再打后续源', async () => {
+test('股票历史：主源已是当日数据时提前结束，不再打后续源', async (t) => {
+    // 把时钟固定在北京时间收盘后（16:00）。
+    // trimBySession 在「未收盘」时会刻意丢弃当日未完成 K 线（正确的业务逻辑），
+    // 若不固定时钟，本用例在盘前/盘中运行必然失败（曾因此出现"白天红、晚上绿"）。
+    t.mock.timers.enable({ apis: ['Date'], now: Date.UTC(2026, 9, 12, 8, 0, 0) }); // 2026-10-12 16:00 +08
+
     const today = beijingTodayStr();
     const calls = stubFetch([
         { match: 'push2his', response: jsonResponse({ data: { klines: [`${today},100.00`] } }) },
@@ -172,7 +177,10 @@ test('基金历史：pingzhongdata 失败 → 回退 lsjz', async () => {
     assert.equal(r.attempts[0].source, 'eastmoney-pingzhong');
 });
 
-test('基金历史：pingzhongdata 已是当日净值时提前结束', async () => {
+test('基金历史：pingzhongdata 已是当日净值时提前结束', async (t) => {
+    // 同上：固定在北京时间收盘后，否则当日净值会被 trimBySession 丢弃
+    t.mock.timers.enable({ apis: ['Date'], now: Date.UTC(2026, 9, 12, 8, 0, 0) }); // 2026-10-12 16:00 +08
+
     const today = beijingTodayStr();
     const ts = Date.parse(`${today}T12:00:00+08:00`);
     const calls = stubFetch([
