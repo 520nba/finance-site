@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { fetchWithTimeout } from '@/lib/client/fetchTimeout';
 
 export function useAuthSession() {
     const [userId, setUserId] = useState('');
@@ -15,7 +16,7 @@ export function useAuthSession() {
     useEffect(() => {
         const checkSession = async () => {
             try {
-                const res = await fetch('/api/auth/me');
+                const res = await fetchWithTimeout('/api/auth/me');
                 if (res.ok) {
                     const data = await res.json();
                     if (data?.userId) {
@@ -33,7 +34,7 @@ export function useAuthSession() {
     const handleLogin = async () => {
         setIsPending(true);
         try {
-            const res = await fetch('/api/auth/login', {
+            const res = await fetchWithTimeout('/api/auth/login', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ username: loginInput.trim(), password: passwordInput }),
@@ -56,7 +57,7 @@ export function useAuthSession() {
     const handleRegister = async () => {
         setIsPending(true);
         try {
-            const res = await fetch('/api/auth/register', {
+            const res = await fetchWithTimeout('/api/auth/register', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ username: loginInput.trim(), password: passwordInput }),
@@ -78,7 +79,7 @@ export function useAuthSession() {
 
     const handleLogout = async () => {
         try {
-            await fetch('/api/auth/logout', { method: 'POST' });
+            await fetchWithTimeout('/api/auth/logout', { method: 'POST' });
         } finally {
             // 无条件清理前端状态或强刷页面
             setUserId('');

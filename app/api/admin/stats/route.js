@@ -5,9 +5,10 @@ export const revalidate = 0;
 import { isAdminAuthorized } from '@/lib/auth/adminAuth';
 import { getAllApiHealth } from '@/lib/storage/healthRepo';
 import { memoryCache } from '@/lib/storage/memoryCache';
+import { TTL } from '@/lib/constants/timeouts';
 
 const STATS_CACHE_KEY = 'admin_stats_full';
-const CACHE_TTL = 10000; // 10s 缂撳瓨
+const CACHE_TTL = TTL.ADMIN_STATS_MS; // 10s 缂撳瓨
 
 export async function GET(request) {
     if (!(await isAdminAuthorized(request))) {

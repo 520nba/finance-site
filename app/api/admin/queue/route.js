@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { isAdminAuthorized } from '@/lib/auth/adminAuth';
+import { requireAdmin } from '@/lib/auth/requireAdmin';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -7,9 +8,8 @@ export const revalidate = 0;
 import { queryAll, getD1Storage } from '@/lib/storage/d1Client';
 
 export async function GET(request) {
-    if (!(await isAdminAuthorized(request))) {
-        return NextResponse.json({ error: 'Unauthorized' }, { status: 403 });
-    }
+        const denied = await requireAdmin(request);
+    if (denied) return denied;
 
     const db = await getD1Storage();
     if (!db) return NextResponse.json({ error: 'DB unavailable' }, { status: 500 });

@@ -1,11 +1,11 @@
 import { NextResponse } from 'next/server';
 import { getSystemLogs } from '@/lib/storage/logRepo';
 import { isAdminAuthorized } from '@/lib/auth/adminAuth';
+import { requireAdmin } from '@/lib/auth/requireAdmin';
 
 export async function GET(request) {
-    if (!(await isAdminAuthorized(request))) {
-        return NextResponse.json({ error: 'Unauthorized' }, { status: 403 });
-    }
+        const denied = await requireAdmin(request);
+    if (denied) return denied;
 
     const { searchParams } = new URL(request.url);
     const hours = parseInt(searchParams.get('hours') || '72');

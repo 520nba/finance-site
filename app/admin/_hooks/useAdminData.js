@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useCallback } from 'react';
+import { fetchWithTimeout } from '@/lib/client/fetchTimeout';
 import { readAdminKey } from '@/lib/client/adminKey';
 
 const EMPTY_STATS = {
@@ -85,7 +86,7 @@ export function useAdminData(secretKey, showToast, onAuthFailure) {
                 ? `/api/admin/queue?type=${type}`
                 : '/api/admin/queue';
 
-            const res = await fetch(url, {
+            const res = await fetchWithTimeout(url, {
                 headers: { 'x-admin-key': k },
             });
             if (res.ok) {
@@ -114,7 +115,7 @@ export function useAdminData(secretKey, showToast, onAuthFailure) {
 
         setAssetStatusLoading(true);
         try {
-            const res = await fetch('/api/admin/assets/status', {
+            const res = await fetchWithTimeout('/api/admin/assets/status', {
                 headers: { 'x-admin-key': k },
             });
             if (res.ok) {
@@ -141,7 +142,7 @@ export function useAdminData(secretKey, showToast, onAuthFailure) {
             onConfirm: async () => {
                 setLoading(true);
                 try {
-                    const res = await fetch('/api/user/delete', {
+                    const res = await fetchWithTimeout('/api/user/delete', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json', 'x-admin-key': secretKey },
                         body: JSON.stringify({ targetUserId }),
@@ -174,7 +175,7 @@ export function useAdminData(secretKey, showToast, onAuthFailure) {
                     const headers = { 'x-admin-key': secretKey };
                     if (type === 'fund') {
                         // ── 基金：调用异步队列接口 ──────────────────────
-                        const res = await fetch(`/api/admin/refetch-fund-history?force=1`, { headers });
+                        const res = await fetchWithTimeout(`/api/admin/refetch-fund-history?force=1`, { headers });
                         const data = await res.json();
 
                         if (res.ok && data.ok) {
@@ -186,7 +187,7 @@ export function useAdminData(secretKey, showToast, onAuthFailure) {
                     } else {
                         // ── 股票：改用 Header 传参，移除 URL 中的密钥 ──────────────
                         const url = `/api/cron/sync?task=history&force=1`;
-                        const res = await fetch(url, { headers });
+                        const res = await fetchWithTimeout(url, { headers });
                         const data = await res.json();
                         if (res.ok && data.success) {
                             showToast(`[成功] 股票刷新任务已启动`, 'success');
@@ -212,7 +213,7 @@ export function useAdminData(secretKey, showToast, onAuthFailure) {
             onConfirm: async () => {
                 setLoading(true);
                 try {
-                    const res = await fetch('/api/admin/cleanup', {
+                    const res = await fetchWithTimeout('/api/admin/cleanup', {
                         method: 'POST',
                         headers: { 'x-admin-key': secretKey },
                     });
@@ -239,7 +240,7 @@ export function useAdminData(secretKey, showToast, onAuthFailure) {
             onConfirm: async () => {
                 setLoading(true);
                 try {
-                    const res = await fetch('/api/cron/sync?task=history', {
+                    const res = await fetchWithTimeout('/api/cron/sync?task=history', {
                         headers: { 'x-admin-key': secretKey },
                     });
                     const data = await res.json();

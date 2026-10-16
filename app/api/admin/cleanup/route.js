@@ -1,11 +1,11 @@
 import { NextResponse } from 'next/server';
 import { purgeZombieAssets } from '@/lib/storage/maintenanceRepo';
 import { isAdminAuthorized } from '@/lib/auth/adminAuth';
+import { requireAdmin } from '@/lib/auth/requireAdmin';
 
 export async function POST(request) {
-    if (!(await isAdminAuthorized(request))) {
-        return NextResponse.json({ error: 'Unauthorized' }, { status: 403 });
-    }
+        const denied = await requireAdmin(request);
+    if (denied) return denied;
 
     try {
         const result = await purgeZombieAssets();

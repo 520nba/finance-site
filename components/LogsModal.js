@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { fetchWithTimeout } from '@/lib/client/fetchTimeout';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X, Download, Clock, AlertTriangle, Info, ShieldAlert, Filter } from 'lucide-react';
 import { readAdminKey } from '@/lib/client/adminKey';
@@ -18,7 +19,7 @@ export default function LogsModal({ isOpen, onClose }) {
             // 之前不带任何密钥 → 恒 403 → 弹窗永远显示「无日志」。密钥与后台统一从 adminKey 工具读取。
             const adminKey = typeof window !== 'undefined' ? readAdminKey() : null;
 
-            const res = await fetch(`/api/admin/logs?hours=${hours}`, {
+            const res = await fetchWithTimeout(`/api/admin/logs?hours=${hours}`, {
                 headers: adminKey ? { 'x-admin-key': adminKey } : {},
             });
 

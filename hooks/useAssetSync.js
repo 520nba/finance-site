@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { fetchWithTimeout } from '@/lib/client/fetchTimeout';
 import { fetchBulkStockQuotes } from '@/lib/api/client/quotesService';
 import { fetchBulkNames } from '@/lib/api/client/namesService';
 import { fetchBulkHistory } from '@/lib/api/client/historyService';
@@ -108,7 +109,7 @@ export function useAssetSync({ userId, isLogged }) {
             // 切换账号时立即清空资产，避免短暂显示旧账号数据
             setAssets([]);
             try {
-                const res = await fetch('/api/user/assets', {
+                const res = await fetchWithTimeout('/api/user/assets', {
                     signal: controller.signal
                 });
                 const json = await res.json();
@@ -169,7 +170,7 @@ export function useAssetSync({ userId, isLogged }) {
             await Promise.all(toSync.map(async (item) => {
                 const itemKey = `${item.type}:${item.code}`;
                 try {
-                    const res = await fetch('/api/user/sync-asset', {
+                    const res = await fetchWithTimeout('/api/user/sync-asset', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ code: item.code, type: item.type })
@@ -203,7 +204,7 @@ export function useAssetSync({ userId, isLogged }) {
         const listToSync = Array.isArray(currentAssets) ? currentAssets : assetsRef.current;
         const skeleton = listToSync.map(a => ({ code: a.code, type: a.type }));
         try {
-            await fetch('/api/user/assets', {
+            await fetchWithTimeout('/api/user/assets', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ assets: skeleton }),
